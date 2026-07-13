@@ -1,0 +1,40 @@
+extends: default
+
+# Drone / aerial footage preset.  Override only what's different from default.
+#
+# NOTE: the legacy v4 script's `cv_track_demo.py` --drone path actually ends up
+# using the MOG2 background-subtraction detector because of how bare weight
+# names get reset to "yolov8s.pt" after the path resolution step.  We preserve
+# that behaviour here so the regression numbers (798 IDs / mean-length 23.2 on
+# pexels_aerial_2034115) remain reproducible.  To switch to YOLO, pass an
+# absolute --weights path or set detector.backend: yolo in your config.
+detector:
+  backend: mog2
+  imgsz: 480
+  conf: 0.12
+  classes: [0, 1, 2, 3, 4, 5, 7, 8]
+  min_box_area: 60
+
+tracker:
+  high_conf: 0.22
+  new_track_conf: 0.07
+  iou_thresh: 0.20
+  lost_relink_frames: 45
+  max_age: 15
+  n_init: 3
+
+# ReID is opt-in even in the drone preset.  Pass --reid --reid-weights <path>
+# to enable it; without weights it falls back to a random-init OSNet which
+# is fast but the embeddings are not meaningful.
+appearance:
+  enabled: false
+  weights: osnet_x0_25_msmt17.pt   # tiny ReID for aerial / drone footage
+  model: osnet_x0_25
+
+viz:
+  save_trail: true
+
+output:
+  write_smoothed_csv: true
+  write_trails_json: true
+  write_reid_json: false  # opt-in; set true when --reid is on

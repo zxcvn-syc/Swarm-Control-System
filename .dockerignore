@@ -1,0 +1,43 @@
+# cvtrack .dockerignore
+# Anything below is excluded from the docker build context.
+
+# Bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenvs
+.venv/
+venv/
+
+# Output artefacts and test data
+output_*/
+out/
+*.mp4
+*.mov
+*.avi
+*.gif
+*.png
+*.jpg
+*.json.gz
+
+# Test directory (the eval harness is shipped under /app via COPY, see Dockerfile)
+tests/
+
+# CI / git metadata (only useful inside the image if pre-baked)
+.github/
+.git/
+.gitignore
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Heavy sources that aren't needed to *import* the package
+docs/
+README.md

@@ -1,0 +1,10 @@
+track_id,label,start_frame,end_frame,length_pts,path_length_px,avg_speed_px_per_frame
+1,person,3,378,376,654.32,1.745
+2,person,2,378,377,1568.01,4.17
+3,person,2,378,377,596.4,1.586
+4,person,3,218,216,916.34,4.262
+6,person,16,378,363,1351.91,3.735
+7,person,61,378,318,512.81,1.618
+10,person,235,310,76,118.25,1.577
+13,person,256,378,123,438.51,3.594
+21,person,376,378,3,0.0,0.0

@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cvtrack"
+version = "0.5.0"
+description = "YOLOv8 + BoT-SORT tracking demo with optional ReID (OSNet)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "cv_tracking_demo maintainers"},
+]
+keywords = ["computer-vision", "tracking", "yolov8", "botsort", "reid", "osnet"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "scipy>=1.10",
+    "PyYAML",
+    "ultralytics",
+    "torch",
+    "torchvision",
+    "matplotlib",
+    "pandas",
+    "motmetrics",
+    # torchreid is optional -- install via the README's "ReID backends" section.
+]
+
+[project.optional-dependencies]
+reid = [
+    # NOTE: the upstream repo only has tags up to v1.0.6; the v1.4.0 reference
+    # in the original pyproject was a typo.  v1.0.6 is the latest stable release.
+    "torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@v1.0.6",
+    "tensorboard>=2.14,<3",
+    "gdown>=4,<7",
+    "Cython>=3,<4",
+]
+dev = [
+    "pytest>=7,<9",
+    "pytest-cov>=4,<6",
+    "ruff>=0.5,<1",
+    "mypy>=1.10,<2",
+    "pyright>=1.1.300,<2",
+    "types-PyYAML>=6",
+]
+
+[project.scripts]
+cvtrack = "cvtrack.pipeline:main"
+
+[project.urls]
+"Source" = "https://example.invalid/cv_tracking_demo"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"cvtrack" = ["configs/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["output_*", "post", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501", "B008", "RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "SIM117"]
+"eval/*" = ["E402"]
+"scripts/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+strict_optional = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+no_implicit_optional = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["cvtrack.appearance.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["torch.*", "torchvision.*", "ultralytics.*", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "reid: marks tests that require the torchreid/weights",
+]

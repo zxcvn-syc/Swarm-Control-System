@@ -1,0 +1,48 @@
+detector:
+  weights: yolov8s.pt
+  imgsz: 320
+  conf: 0.15
+  classes: [0, 2, 5, 7, 16]
+  min_box_area: 100
+  min_conf: 0.0
+  nms_iou: 0.50
+
+tracker:
+  kind: botsort
+  cmc: true
+  cmc_method: sparse_of  # one of: sparse_of, ecc
+  high_conf: 0.35
+  new_track_conf: 0.20
+  iou_thresh: 0.30
+  lost_relink_frames: 30
+  max_age: 15
+  n_init: 3
+  stationary_prune: true
+
+appearance:
+  enabled: false
+  backend: osnet
+  model: osnet_x1_0
+  weights: osnet_x1_0_msmt17.pt
+  gallery_size: 50
+  ema_alpha: 0.05
+  match_weight: 0.7   # weight of ReID cost in second-stage fusion (0..1)
+  min_box_side: 8     # px; below this, no embedding is computed
+
+viz:
+  save_trail: false
+  fps_overlay: true
+
+output:
+  write_video: true
+  write_csv: true
+  write_smoothed_csv: false
+  write_reid_json: false
+  write_trails_json: false
+
+pipeline:
+  max_frames: 0       # 0 = full video
+  max_seconds: 0.0
+  start_frame: 0
+  include_tentative: false
+  id_explosion_warn: 0.5

@@ -1,0 +1,162 @@
+[
+  {
+    "video": "coverr_city_walk",
+    "detector": "yolo_coco",
+    "elapsed_s": 50.9,
+    "n_tracks": 47,
+    "mean_track_length": 41.2,
+    "total_dets": 1937,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_city_walk",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 47.7,
+    "n_tracks": 27,
+    "mean_track_length": 22.5,
+    "total_dets": 607,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_highway_overpass",
+    "detector": "yolo_coco",
+    "elapsed_s": 50.3,
+    "n_tracks": 277,
+    "mean_track_length": 10.7,
+    "total_dets": 2962,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_highway_overpass",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 48.9,
+    "n_tracks": 128,
+    "mean_track_length": 19.9,
+    "total_dets": 2553,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_road_traffic",
+    "detector": "yolo_coco",
+    "elapsed_s": 52.0,
+    "n_tracks": 773,
+    "mean_track_length": 11.2,
+    "total_dets": 8681,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_road_traffic",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 61.2,
+    "n_tracks": 3872,
+    "mean_track_length": 7.4,
+    "total_dets": 28826,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_tram_city",
+    "detector": "yolo_coco",
+    "elapsed_s": 44.4,
+    "n_tracks": 331,
+    "mean_track_length": 6.5,
+    "total_dets": 2149,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "coverr_tram_city",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 45.5,
+    "n_tracks": 243,
+    "mean_track_length": 21.4,
+    "total_dets": 5198,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "pexels_aerial_2034115",
+    "detector": "yolo_coco",
+    "elapsed_s": 48.4,
+    "n_tracks": 481,
+    "mean_track_length": 6.4,
+    "total_dets": 3070,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "pexels_aerial_2034115",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 47.0,
+    "n_tracks": 154,
+    "mean_track_length": 19.4,
+    "total_dets": 2985,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "pexels_aerial_2257013",
+    "detector": "yolo_coco",
+    "elapsed_s": 46.3,
+    "n_tracks": 49,
+    "mean_track_length": 5.6,
+    "total_dets": 274,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "pexels_aerial_2257013",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 46.5,
+    "n_tracks": 1,
+    "mean_track_length": 79.0,
+    "total_dets": 79,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "pexels_pedestrian_crossing",
+    "detector": "yolo_coco",
+    "elapsed_s": 46.3,
+    "n_tracks": 37,
+    "mean_track_length": 26.5,
+    "total_dets": 981,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "pexels_pedestrian_crossing",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 48.4,
+    "n_tracks": 13,
+    "mean_track_length": 48.5,
+    "total_dets": 631,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "sintel_trailer",
+    "detector": "yolo_coco",
+    "elapsed_s": 48.6,
+    "n_tracks": 12,
+    "mean_track_length": 27.8,
+    "total_dets": 333,
+    "last_frame": 199,
+    "rc": 0
+  },
+  {
+    "video": "sintel_trailer",
+    "detector": "yolo_visdrone",
+    "elapsed_s": 48.5,
+    "n_tracks": 43,
+    "mean_track_length": 23.5,
+    "total_dets": 1009,
+    "last_frame": 199,
+    "rc": 0
+  }
+]

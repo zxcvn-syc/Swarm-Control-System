@@ -1,0 +1,35 @@
+# Bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
+# Output directories created by the pipeline
+output_*/
+out/
+
+# Test data (large downloads) and outputs
+*.mp4
+*.mov
+*.avi
+*.gif
+results/
+trajectories.png
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# User-local lib for restricted-env installs
+.local_lib/

@@ -1,0 +1,42 @@
+[
+  {
+    "label": "MOG2 (v4 fallback)",
+    "stats": {
+      "ids": 180,
+      "mean_len": 21.8,
+      "total_rows": 3924,
+      "median_dets_per_frame": 20,
+      "max_frame": 199
+    }
+  },
+  {
+    "label": "COCO yolov8s (no ReID)",
+    "stats": {
+      "ids": 417,
+      "mean_len": 7.580335731414868,
+      "total_rows": 3161,
+      "median_dets_per_frame": 16,
+      "max_frame": 199
+    }
+  },
+  {
+    "label": "VisDrone yolov8s (no ReID)",
+    "stats": {
+      "ids": 218,
+      "mean_len": 21.10091743119266,
+      "total_rows": 4600,
+      "median_dets_per_frame": 24,
+      "max_frame": 199
+    }
+  },
+  {
+    "label": "VisDrone yolov8s + ReID(OSNet MSMT17)",
+    "stats": {
+      "ids": 218,
+      "mean_len": 21.10091743119266,
+      "total_rows": 4600,
+      "median_dets_per_frame": 24,
+      "max_frame": 199
+    }
+  }
+]
