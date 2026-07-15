@@ -1,8 +1,8 @@
-"""Renderer: bounding boxes, info panels, trails, overlays."""
+"""Renderer: bounding boxes, info panels, trails, overlays, future projection."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
 import cv2
 import numpy as np
@@ -89,4 +89,86 @@ def add_overlay(frame: np.ndarray, fps: float, n_tracks: int, model_name: str) -
     cv2.putText(
         frame, text, (12, 8 + th),
         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA,
+    )
+
+
+def draw_predicted_future_trail(
+    frame: np.ndarray,
+    track: "Track",
+    n: int = 15,
+    cov_steps: Optional[List[np.ndarray]] = None,
+    sigma_scale: float = 3.0,
+) -> None:
+    """Draw the next KF positions as a dashed trail with uncertainty ellipses.
+
+    When ``cov_steps`` is supplied (a list of ``(2, 2)`` covariance blocks
+    for each future step, the position-position slice of the KF state
+    covariance), each future position is annotated with a ``sigma_scale``
+    (default 3-sigma) error ellipse whose transparency fades with the
+    step index -- a visual cue for "the further we project, the less
+    certain we are".
+    """
+    future = list(getattr(track, "future_trail", []))[:max(0, int(n))]
+    if not future:
+        return
+
+    points = [track.pos, *future]
+    base_colour = (255, 210, 40)
+
+    # Optional: draw uncertainty ellipses for each future step.
+    if cov_steps is not None:
+        for i, cov in enumerate(cov_steps[:len(future)], start=1):
+            try:
+                # Eigen-decompose the 2x2 position covariance.
+                eigvals, eigvecs = np.linalg.eigh(np.asarray(cov, dtype=np.float64))
+                if eigvals is None or np.any(eigvals <= 0.0):
+                    continue
+                step_alpha = max(0.05, 0.55 - 0.04 * i)
+                radii = sigma_scale * np.sqrt(eigvals)
+                angle_deg = float(np.degrees(np.arctan2(eigvecs[1, 1], eigvecs[0, 1])))
+                cx_f, cy_f = future[i - 1]
+                overlay = frame.copy()
+                cv2.ellipse(
+                    overlay,
+                    (int(round(cx_f)), int(round(cy_f))),
+                    (int(round(radii[1])), int(round(radii[0]))),
+                    angle_deg,
+                    0.0, 360.0,
+                    base_colour,
+                    1,
+                    cv2.LINE_AA,
+                )
+                cv2.addWeighted(overlay, step_alpha, frame, 1.0 - step_alpha, 0, frame)
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+
+    # Dashed future trail.
+    for i in range(len(points) - 1):
+        start = np.asarray(points[i], dtype=np.float64)
+        end = np.asarray(points[i + 1], dtype=np.float64)
+        distance = float(np.linalg.norm(end - start))
+        dashes = max(1, int(distance // 5.0) + 1)
+        for dash in range(dashes):
+            if dash % 2:
+                continue
+            a_t = dash / dashes
+            b_t = min((dash + 1) / dashes, 1.0)
+            a = start + (end - start) * a_t
+            b = start + (end - start) * b_t
+            cv2.line(
+                frame,
+                (int(round(a[0])), int(round(a[1]))),
+                (int(round(b[0])), int(round(b[1]))),
+                base_colour,
+                2,
+                cv2.LINE_AA,
+            )
+    end_x, end_y = future[-1]
+    cv2.circle(
+        frame,
+        (int(round(end_x)), int(round(end_y))),
+        3,
+        base_colour,
+        1,
+        cv2.LINE_AA,
     )

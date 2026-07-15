@@ -33,13 +33,22 @@ import numpy as np
 from cvtrack.appearance.gallery import Gallery
 from cvtrack.config import Config, load_config, merge_cli
 from cvtrack.detector.factory import make_detector
-from cvtrack.io import TrackCsvWriter, VideoReader, VideoWriter
+from cvtrack.io import FutureTrailCsvWriter, TrackCsvWriter, VideoReader, VideoWriter
 from cvtrack.tracker.botsort import BoTSortTracker
 from cvtrack.tracker.cmc import make_cmc
-from cvtrack.tracker.deepsort import DeepSortLite
+from cvtrack.tracker.deepsort import DeepSortCascade, DeepSortLite
+from cvtrack.tracker.kalman import (
+    predict_n_steps,
+    predict_n_steps_with_covariance,
+)
 from cvtrack.tracker.smoother import rts_smooth_2d
 from cvtrack.types import Box, Track
-from cvtrack.viz.renderer import add_overlay, draw_box, draw_trail
+from cvtrack.viz.renderer import (
+    add_overlay,
+    draw_box,
+    draw_predicted_future_trail,
+    draw_trail,
+)
 
 
 log = logging.getLogger(__name__)
@@ -96,7 +105,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--n-init", type=int, default=None)
     ap.add_argument("--no-stationary-prune", action="store_true")
     ap.add_argument("--start-frame", type=int, default=0)
-    ap.add_argument("--tracker", choices=["deepsort", "botsort"], default=None)
+    ap.add_argument("--tracker", choices=["deepsort", "deepsort_cascade", "botsort"], default=None,
+                    help="tracker kind (v6 adds deepsort_cascade with appearance cascade + IoU fallback)")
+    ap.add_argument("--predict-horizon", type=int, default=15,
+                    help="number of frames to project each track's KF into the future")
+    ap.add_argument("--write-future-csv", action="store_true",
+                    help="enable per-step future projection CSV with sigma_x/sigma_y columns")
     ap.add_argument("--no-cmc", action="store_true")
     ap.add_argument("--high-conf", type=float, default=None)
     ap.add_argument("--new-track-conf", type=float, default=None)
@@ -198,7 +212,9 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         out["tracker"] = tracker
 
     appearance: Dict[str, Any] = {}
-    if args.reid:
+    if args.reid or (args.tracker == "deepsort_cascade"):
+        # The cascade matcher benefits from any appearance signal; auto-enable
+        # when the user asked for cascade even if they didn't pass --reid.
         appearance["enabled"] = True
     if args.reid_weights:
         appearance["weights"] = args.reid_weights
@@ -412,6 +428,24 @@ def run(args: argparse.Namespace) -> int:
                  "on" if use_cmc else "off",
                  tracker.high_conf, tracker.new_track_conf,
                  tracker.iou_thresh, tracker.lost_relink_frames)
+    elif kind == "deepsort_cascade":
+        # The v6 true DeepSORT matcher.  Falls back to IoU-only if no
+        # appearance extractor is available (the gallery remains empty
+        # but the cascade still runs on Mahalanobis + IoU).
+        use_appearance = bool(reid_enabled and reid_extractor)
+        tracker = DeepSortCascade(
+            dt=dt,
+            max_age=int(tr_cfg.get("max_age", 30)),
+            n_init=int(tr_cfg.get("n_init", 3)),
+            stationary_prune=bool(tr_cfg.get("stationary_prune", True)),
+            use_appearance=use_appearance,
+            appearance_thresh=float(tr_cfg.get("appearance_thresh", 0.5)),
+            iou_thresh=float(tr_cfg.get("iou_thresh", 0.30)),
+        )
+        log.info(
+            "tracker=DeepSortCascade use_appearance=%s appearance_thresh=%.2f iou>=%.2f",
+            use_appearance, tracker.appearance_thresh, tracker.iou_thresh,
+        )
     else:
         tracker = DeepSortLite(
             dt=dt,
@@ -430,6 +464,10 @@ def run(args: argparse.Namespace) -> int:
     out_cfg = merged.get("output", {})
     csv_path = os.path.join(args.out_dir, "tracks.csv")
     csv_w = TrackCsvWriter(csv_path)
+    future_csv_path = os.path.join(args.out_dir, "tracks_future.csv")
+    write_future_csv = bool(args.write_future_csv or out_cfg.get("write_future_csv", False))
+    future_csv_w = FutureTrailCsvWriter(future_csv_path) if write_future_csv else None
+    future_steps = max(0, int(getattr(args, "predict_horizon", 15) or 0))
 
     writer: Optional[VideoWriter] = None
     if out_cfg.get("write_video", True) and not args.no_video:
@@ -466,6 +504,15 @@ def run(args: argparse.Namespace) -> int:
 
             if isinstance(tracker, BoTSortTracker):
                 tracks = tracker.step(frame, detections, det_embeddings=det_embeddings)
+            elif isinstance(tracker, DeepSortCascade):
+                # Cascade accepts embeddings + galleries and uses both for the
+                # matching cascade; the per-track embedding_mean on each
+                # returned Track is updated in-place when an embedding matches.
+                tracks = tracker.step(
+                    detections,
+                    det_embeddings=det_embeddings,
+                    galleries=reid_galleries,
+                )
             else:
                 tracks = tracker.step(detections)
 
@@ -510,6 +557,34 @@ def run(args: argparse.Namespace) -> int:
                     track_birth[t.track_id] = frame_idx
                 if t.confirmed:
                     seen_track_ids.add(t.track_id)
+
+                # Future projection (with covariance when --write-future-csv).
+                if write_future_csv:
+                    steps = predict_n_steps_with_covariance(
+                        tracker.kf, t.mean, t.cov, future_steps
+                    )
+                    cov_blocks = [step_cov[:2, :2] for _, step_cov in steps]
+                    t.future_trail = [(float(m[0]), float(m[1])) for m, _ in steps]
+                    csv_points = []
+                    for (m, _), cov in zip(steps, cov_blocks):
+                        sx = float(np.sqrt(max(cov[0, 0], 0.0)))
+                        sy = float(np.sqrt(max(cov[1, 1], 0.0)))
+                        csv_points.append((float(m[0]), float(m[1]), sx, sy))
+                    if future_csv_w is not None:
+                        future_csv_w.write_trail_with_cov(
+                            frame_idx, t.track_id, csv_points
+                        )
+                    draw_predicted_future_trail(
+                        frame, t, n=future_steps, cov_steps=cov_blocks,
+                    )
+                else:
+                    t.future_trail = predict_n_steps(tracker.kf, t, future_steps)
+                    if future_csv_w is not None:
+                        future_csv_w.write_trail(
+                            frame_idx, t.track_id, t.future_trail
+                        )
+                    draw_predicted_future_trail(frame, t, n=future_steps)
+
                 draw_box(frame, t)
                 if out_cfg.get("save_trail", False) or args.save_trail:
                     draw_trail(frame, t)
@@ -531,12 +606,15 @@ def run(args: argparse.Namespace) -> int:
     finally:
         reader.close()
         csv_w.close()
+        if future_csv_w is not None:
+            future_csv_w.close()
         if writer is not None:
             writer.close()
 
     log.info("wrote %s (%d frames, avg fps %.1f)", os.path.join(args.out_dir, "tracked.mp4"),
              frame_idx, fps_avg)
     log.info("tracks -> %s", csv_path)
+    log.info("future tracks -> %s", future_csv_path)
 
     # -------- warning / optional exports ------------------------------
     n_ids = len(seen_track_ids)

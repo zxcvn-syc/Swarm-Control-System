@@ -38,6 +38,7 @@ ALLOWED_TOP_LEVEL = {
     "output",
     "pipeline",
     "extends",
+    "sensors",  # multi-sensor preset placeholder; unused by the v6 pipeline
 }
 
 
@@ -152,11 +153,20 @@ def _validate(data: Dict[str, Any]) -> None:
     if "classes" in det and det["classes"] is not None and not isinstance(det["classes"], list):
         raise ValueError("detector.classes must be a list of ints")
     tr = data.get("tracker", {})
-    if "kind" in tr and tr["kind"] not in {"botsort", "deepsort"}:
-        raise ValueError(f"tracker.kind must be 'botsort' or 'deepsort', got {tr['kind']!r}")
+    if "kind" in tr and tr["kind"] not in {"botsort", "deepsort", "deepsort_cascade"}:
+        raise ValueError(
+            f"tracker.kind must be 'botsort', 'deepsort' or 'deepsort_cascade', "
+            f"got {tr['kind']!r}"
+        )
     ap = data.get("appearance", {})
-    if ap.get("enabled") and not ap.get("weights"):
-        raise ValueError("appearance.weights is required when appearance.enabled = true")
+    if ap.get("enabled"):
+        weights = ap.get("weights")
+        # ``enabled=True`` without usable weights is allowed: the pipeline
+        # auto-tries OSNet (via torch.hub) and gracefully disables ReID
+        # when the network stack is unavailable.  The tracker continues
+        # with pure geometric matching.
+        if weights is not None and not isinstance(weights, str):
+            raise ValueError("appearance.weights must be a string path")
     if "min_box_side" in ap and not isinstance(ap["min_box_side"], (int, float)):
         raise ValueError("appearance.min_box_side must be a number")
 

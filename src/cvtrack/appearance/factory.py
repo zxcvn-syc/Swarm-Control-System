@@ -1,7 +1,13 @@
 """Factory + protocol for appearance extractors.
 
-Currently only ``OsNetExtractor`` is shipped; the factory exists so users can
-register alternative backends without modifying the pipeline.
+Only ships one backend:
+
+* ``osnet`` -- OSNet via torch.hub (pytorch/vision) with optional torchreid path
+  for custom ReID checkpoints.  Returns ``None`` if the network stack is
+  unavailable so the pipeline degrades to pure geometric tracking.
+
+The ``HistogramExtractor`` fallback has been removed per user requirement:
+all ReID runs must use a real pretrained model.
 """
 
 from __future__ import annotations
@@ -23,12 +29,21 @@ def make_extractor(
     model_name: str = "osnet_x1_0",
     device: str = "cpu",
 ) -> Optional[AppearanceExtractor]:
-    """Create an appearance extractor.  Returns None if the backend is unavailable."""
+    """Create an appearance extractor.
+
+    Returns ``None`` if the backend cannot be loaded (no torch, no network,
+    no weights).  The caller should handle this gracefully by disabling ReID.
+    """
     backend = backend.lower()
     if backend == "osnet":
         ext = OsNetExtractor(model_name=model_name, weights=weights, device=device)
-        if not ext.is_available:
-            log.warning("OSNet extractor unavailable; ReID disabled")
-            return None
-        return ext
+        if ext.is_available:
+            log.info(
+                "OSNet extractor ready (loaded_pretrained=%s, embedding_dim=%d)",
+                ext.loaded_pretrained,
+                ext.embedding_dim,
+            )
+            return ext
+        log.warning("OSNet unavailable; ReID is disabled for this run")
+        return None
     raise ValueError(f"unknown appearance backend: {backend!r}")

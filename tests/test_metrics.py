@@ -1,13 +1,15 @@
-"""Tests for IoU, Mahalanobis gating, and cost matrix utilities."""
+"""Tests for IoU, Mahalanobis gating, cost matrix utilities, and IDF1."""
 
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from cvtrack.tracker.metrics import (
     CHI2_INV_95_2DOF,
     CHI2_INV_95_4DOF,
     gate_mahalanobis,
+    idf1,
     iou_matrix,
 )
 from cvtrack.types import Box
@@ -76,3 +78,57 @@ def test_gate_mahalanobis_low_level_distance():
     # Just verify the gate constant agrees with typical chi^2 95% values.
     assert CHI2_INV_95_2DOF > 0
     assert gate_mahalanobis  # the symbol is exported
+
+
+# ---------------------------------------------------------------------------
+# IDF1 tests
+# ---------------------------------------------------------------------------
+
+
+def test_idf1_empty_inputs():
+    """An empty observation list should return zeros (no division by zero)."""
+    out = idf1([], [], [], [])
+    assert out["idf1"] == 0.0
+    assert out["idp"] == 0.0
+    assert out["idr"] == 0.0
+    assert out["mapping"] == {}
+
+
+def test_idf1_perfect_match_is_one():
+    """When pred ids == gt ids and boxes overlap perfectly, IDF1 = 1."""
+    boxes = [_b(0.0, 0.0, 10.0, 10.0), _b(0.0, 0.0, 10.0, 10.0)]
+    out = idf1([1, 1], [1, 1], boxes, boxes)
+    assert out["idf1"] == pytest.approx(1.0)
+    assert out["idp"] == pytest.approx(1.0)
+    assert out["idr"] == pytest.approx(1.0)
+
+
+def test_idf1_complete_swap_is_zero():
+    """When no pred id overlaps any gt id's box, IDF1 collapses to 0.
+
+    Construct a scenario with two well-separated gt boxes and a third
+    pair of pred boxes that don't overlap anything in the gt set.
+    """
+    boxes_a = [_b(0.0, 0.0, 10.0, 10.0), _b(100.0, 100.0, 110.0, 110.0)]
+    # pred ids map to disjoint box sets (no IoU >= 0.5 with any gt box).
+    boxes_c = [_b(200.0, 200.0, 210.0, 210.0), _b(300.0, 300.0, 310.0, 310.0)]
+    out = idf1([1, 2], [3, 4], boxes_a, boxes_c)
+    assert out["idf1"] == pytest.approx(0.0, abs=1e-6)
+    assert out["tp"] == 0
+
+
+def test_idf1_handles_mismatched_lengths():
+    """Defensive: mismatched input lengths must not crash."""
+    out = idf1([1], [1, 1], [_b(0, 0, 1, 1)], [_b(0, 0, 1, 1), _b(0, 0, 1, 1)])
+    assert out["idf1"] == 0.0
+
+
+def test_idf1_partial_overlap_yields_value_between_0_and_1():
+    """Mixed scenario: 3 obs, gt={1,1,2}, pred={1,2,2}; one true, one split."""
+    a = _b(0.0, 0.0, 10.0, 10.0)
+    b = _b(100.0, 100.0, 110.0, 110.0)
+    out = idf1([1, 1, 2], [1, 2, 2], [a, a, b], [a, b, b])
+    assert 0.0 <= out["idf1"] <= 1.0
+    # The greedy mapping should pick (1->1) and (2->2) so all three
+    # observations are true positives.
+    assert out["idf1"] == pytest.approx(1.0)

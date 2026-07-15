@@ -12,6 +12,7 @@ from cvtrack.tracker.kalman import (
     BOTSORT_NEW_TRACK_CONF,
     KalmanBoT,
     KalmanCV2D,
+    predict_n_steps_with_covariance,
 )
 
 
@@ -83,3 +84,43 @@ def test_botsort_constants_sane():
     assert BOTSORT_HIGH_CONF == pytest.approx(0.35)
     assert BOTSORT_NEW_TRACK_CONF == pytest.approx(0.20)
     assert 10 <= BOTSORT_LOST_RELINK_FRAMES <= 60
+
+
+# ---------------------------------------------------------------------------
+# N-step trajectory projection with covariance (v6)
+# ---------------------------------------------------------------------------
+
+
+def test_predict_n_steps_with_covariance_returns_n_steps():
+    kf = KalmanCV2D(dt=0.5)
+    mean = np.array([10.0, 20.0, 4.0, -2.0], dtype=np.float64)
+    cov = np.eye(4, dtype=np.float64)
+    out = predict_n_steps_with_covariance(kf, mean, cov, 3)
+    assert len(out) == 3
+    # Each step is (mean, cov); cov must be 4x4 symmetric PSD.
+    for m, c in out:
+        assert m.shape == (4,)
+        assert c.shape == (4, 4)
+        # PSD: eigenvalues >= 0.
+        eigvals = np.linalg.eigvalsh(c)
+        assert eigvals.min() >= -1e-9
+
+
+def test_predict_n_steps_with_covariance_grows_uncertainty():
+    """The further we project, the bigger the position covariance gets."""
+    kf = KalmanCV2D(dt=0.5)
+    mean = np.array([0.0, 0.0, 5.0, 5.0], dtype=np.float64)
+    cov = np.eye(4, dtype=np.float64)
+    out = predict_n_steps_with_covariance(kf, mean, cov, 5)
+    pos_vars = [float(c[:2, :2].trace()) for _, c in out]
+    # Strictly non-decreasing along the horizon.
+    for a, b in zip(pos_vars, pos_vars[1:]):
+        assert b >= a - 1e-9
+
+
+def test_predict_n_steps_with_covariance_zero_steps_returns_empty():
+    kf = KalmanCV2D(dt=0.5)
+    mean = np.array([1.0, 2.0, 0.0, 0.0], dtype=np.float64)
+    cov = np.eye(4, dtype=np.float64)
+    out = predict_n_steps_with_covariance(kf, mean, cov, 0)
+    assert out == []

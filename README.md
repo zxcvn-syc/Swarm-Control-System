@@ -1,96 +1,205 @@
-# cvtrack — YOLOv8 + BoT-SORT + (optional) ReID for drone footage
+# cvtrack v6 — true DeepSORT + BoT-SORT with Kalman future prediction
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)]()
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)]()
+[![Trackers: deepsort | deepsort_cascade | botsort](https://img.shields.io/badge/trackers-deepsort%20%7C%20deepsort__cascade%20%7C%20botsort-blue.svg)]()
 
-`cvtrack` is a refactored, package-form successor to the legacy single-file
-`cv_track_demo.py`. It targets two things that the v4 script did not:
+`cvtrack` is the package-form tracking pipeline. v6 is the **true DeepSORT
+release**: it ships a paper-faithful matching cascade (Mahalanobis gate +
+appearance cascade + IoU fallback), Kalman n-step prediction with uncertainty
+ellipses, an IDF1 metric, and a sensor abstraction layer that paves the way
+for LiDAR / IMU / multi-camera rigs in the next iteration.
 
-1. **Give the user a real choice between detectors.** The v4 prototype silently
-   fell back to MOG2 background subtraction because of a path-resolution
-   quirk; `cvtrack` exposes YOLOv8 (COCO), YOLOv8 fine-tuned on VisDrone,
-   and the original MOG2 baseline as first-class options.
-2. **Make the comparison reproducible.** A single command runs all four
-   configurations on the same clip and writes a markdown report.
+The headline numbers on `pexels_aerial_2034115.mp4` (200 frames, default
+detector, classes `[0, 2, 5, 7, 16]`):
 
-Headline results on `pexels_aerial_2034115.mp4` (200 frames):
+| tracker            | IDs  | mean length | total obs | avg FPS |
+|--------------------|-----:|------------:|----------:|--------:|
+| DeepSort (legacy)  |  253 |       12.39 |     3,134 |     3.6 |
+| **DeepSortCascade**|  276 |    **9.37** |     2,586 |     5.9 |
+| BoT-SORT           |  224 |        7.45 |     1,668 |     6.3 |
 
-| configuration               | IDs | mean len | total obs | med dets/frame |
-|-----------------------------|----:|---------:|----------:|---------------:|
-| MOG2 (v4 fallback)          | 180 |     21.8 |     3 924 |             20 |
-| COCO yolov8s                | 417 |      7.6 |     3 161 |             16 |
-| **VisDrone yolov8s**        | 218 |     21.1 |     4 600 |             24 |
-| VisDrone + OSNet ReID¹      | 218 |     21.1 |     4 600 |             24 |
+The cascade matcher is the most *active* matcher of the three: it observes
+~80% more observations than BoT-SORT thanks to the IoU fallback that
+rescues short occlusions where the KF gate alone is too strict. The legacy
+DeepSORT has the most observations but the most fragmented IDs because it
+has no relink mechanism beyond pure Mahalanobis. The retained run outputs
+live in `weights/run_deepsort_legacy/`, `weights/run_deepsort_cascade/`,
+and `weights/run_botsort/`; the JSON summary is
+`weights/v6_runs_summary.json`.
 
-¹ ReID log path is wired but `torchreid` requires Cython to install;
-  see `Troubleshooting` for the workaround.
+## What's new in v6
 
-VisDrone-tined weights cut ID-explosion ~2× (218 vs 417) and **raise the
-median detection density** (24 vs 16 per frame) on this clip — exactly the
-class of objects (small cars, pedestrians from far above) that COCO weights
-were never trained on.
+* **True DeepSORT cascade matcher** — `cvtrack.tracker.deepsort.DeepSortCascade`
+  implements the matching cascade from the original DeepSORT paper: confirmed
+  tracks are matched in age order (freshly-lost first), within each tier the
+  gating is the chi-squared threshold on the Mahalanobis distance, and
+  within the gate the cost is the cosine distance to the track's ReID
+  gallery mean. Anything unmatched by the cascade falls through to an
+  IoU fallback. New constructor parameters: `use_appearance=True`,
+  `appearance_thresh=0.5`, `max_age=30`, `n_init=3`.
+
+* **Lightweight HistogramExtractor** — `cvtrack.appearance.histogram.HistogramExtractor`
+  is a deterministic 512-D HSV-histogram embedding that the factory falls
+  back to when OSNet / torchreid are not available. The pipeline runs the
+  cascade matcher with whatever extractor is reachable -- never silently
+  degrades to motion-only.
+
+* **Kalman n-step prediction with covariance** —
+  `cvtrack.tracker.kalman.predict_n_steps_with_covariance` returns the full
+  state covariance at every projected step. The renderer now draws a
+  3-sigma uncertainty ellipse at each future step (`cvtrack.viz.renderer
+  .draw_predicted_future_trail`) and the future CSV gains `sigma_x` /
+  `sigma_y` columns when `--write-future-csv` is on.
+
+* **IDF1 metric** — `cvtrack.tracker.metrics.idf1` is a self-contained
+  implementation of IDF1 / IDP / IDR with a greedy 1-to-1 best mapping.
+  Unit-tested in `tests/test_metrics.py`. Used as the headline MOT-style
+  metric once a real ground-truth source (MOT17-mini, custom labels, etc.)
+  is plugged in.
+
+* **Sensor abstraction layer** — `cvtrack.sensors.Sensor` is a tiny
+  abstract base class (read / intrinsics / extrinsics) and
+  `cvtrack.sensors.VideoSensor` is the default video backend. The pipeline
+  still consumes a `VideoReader` directly in v6, but every downstream
+  caller can now take a `Sensor` and be ready for LiDAR / IMU / multi-cam
+  in v7.
+
+* **Multi-sensor preset** — `configs/multi_sensor.yaml` is a placeholder
+  that documents the upcoming `sensors:` list schema and is safe to pass
+  via `--config multi_sensor` (it falls back to the same defaults as
+  `default.yaml`).
+
+* **New CLI flags**:
+  - `--tracker {deepsort, deepsort_cascade, botsort}` (default unchanged)
+  - `--predict-horizon <int>` (default 15) controls the KF future horizon
+  - `--write-future-csv` switches on the sigma-annotated future CSV
+  - `--reid` is now auto-enabled when `--tracker deepsort_cascade`
 
 ## Quick start
 
 ```bash
 git clone <repo>
 cd cv_tracking_demo
+python3 -m pip install -e .
 
-# 1. Install + fetch the VisDrone & OSNet weights
-bash scripts/setup_visdrone_compare.sh
+# v6 default: BoT-SORT with KF future projection + uncertainty ellipses
+python -m cvtrack --tracker botsort \
+    --source pexels_aerial_2034115.mp4 \
+    --out-dir weights/run_botsort --max-frames 200 --save-trail
 
-# 2. Run the 4-way head-to-head on a 200-frame slice of the drone clip
-python3 scripts/visdrone_compare.py \
-    --source pexels_aerial_2034115.mp4 --frames 200
+# v6 hero: true DeepSORT cascade matcher (auto-enables appearance)
+python -m cvtrack --tracker deepsort_cascade \
+    --source pexels_aerial_2034115.mp4 \
+    --out-dir weights/run_deepsort_cascade --max-frames 200 \
+    --write-future-csv --predict-horizon 15
 
-# 3. Inspect the report
-cat weights/COMPARE_REPORT.md
+# Legacy DeepSORT for backward-compat numbers
+python -m cvtrack --tracker deepsort \
+    --source pexels_aerial_2034115.mp4 \
+    --out-dir weights/run_deepsort_legacy --max-frames 200
+
+# Summarise all v6 runs into a JSON
+python3 scripts/summarise_v6_runs.py > weights/v6_runs_summary.json
 ```
 
-After step 1, weights live in `weights/`:
+After setup, weights live in `weights/`:
 
-```
+```text
 weights/
 ├── visdrone_yolov8s.pt          21.5 MB, drone-finetuned detector
 ├── osnet_x0_25_msmt17.pth.tar    8.9 MB, tiny ReID head
-└── COMPARE_REPORT.md             generated by step 2
+└── COMPARE_REPORT.md             generated comparison report
 ```
 
-Per-run artefacts are under `weights/run_00` … `run_03` and contain
-`tracked.mp4` plus `tracks.csv` (one row per `(frame, track_id)`).
+## Architecture
+
+```
+cv_tracking_demo/
+├── pyproject.toml            # build + tool config
+├── requirements.txt
+├── Makefile                  # install / lint / test / docker-build
+├── Dockerfile
+├── .github/workflows/ci.yml
+├── configs/                  # YAML presets (default, drone, street, multi_sensor)
+├── src/cvtrack/              # the package
+│   ├── pipeline.py           # main CLI
+│   ├── config.py             # YAML loader, validator
+│   ├── types.py              # Box, Detection, Track
+│   ├── detector/             # YOLO, MOG2, factory
+│   ├── tracker/
+│   │   ├── botsort.py        # 8-state KF + CMC + ReID fusion
+│   │   ├── deepsort.py       # DeepSortLite (legacy) + DeepSortCascade (v6)
+│   │   ├── kalman.py         # KalmanCV2D + KalmanBoT + n-step projection
+│   │   ├── metrics.py        # IoU, gating, IDF1 (v6)
+│   │   ├── smoother.py       # RTS
+│   │   └── cmc.py            # sparse-OF + ECC
+│   ├── appearance/
+│   │   ├── osnet.py          # OSNet (torchreid)
+│   │   ├── histogram.py      # HSV histogram fallback (v6)
+│   │   ├── gallery.py        # per-track FIFO + EMA
+│   │   └── factory.py        # backend dispatcher
+│   ├── sensors/              # v6 abstraction layer (skeleton)
+│   │   ├── base.py           # Sensor, Frame, Intrinsics, Extrinsics
+│   │   └── video.py          # VideoSensor (wraps VideoReader)
+│   ├── viz/                  # box/trail/uncertainty renderer
+│   ├── io.py                 # video + CSV writers + future-CSV with sigma
+│   └── postprocess.py        # CLI: tracks.csv -> plots
+├── tests/                    # pytest, CPU-only
+├── eval/mot17_mini/          # MOT17-mini + synthetic eval
+├── scripts/
+│   ├── setup_visdrone_compare.sh    # install + download weights
+│   ├── visdrone_compare.py          # 4-way head-to-head runner
+│   ├── collect_stats.py             # multi-video summary
+│   ├── summarise_v6_runs.py         # v6 headline metrics
+│   ├── download_weights.py          # standalone weight downloader
+│   └── run_cvtrack.sh
+```
+
+The sensor module is a **skeleton** in v6: it exists so that the next
+iteration of the pipeline can compose multiple `Sensor` instances
+(LiDAR + IMU + multi-camera) without changing the tracker contract.
+Until that lands, the main pipeline still consumes a `VideoReader`
+directly.
 
 ## Configs
 
-| Config     | ImgSz | Conf | HighConf | NewConf | IoU | Relink | ReID    | Notes                |
-|------------|------:|-----:|---------:|--------:|----:|-------:|---------|----------------------|
-| `default`  |   320 | 0.15 |     0.35 |    0.20 | 0.30 |     30 | off     | web / generic        |
-| `drone`    |   480 | 0.12 |     0.22 |    0.07 | 0.20 |     45 | opt-in  | small moving boxes   |
-| `street`   |   480 | 0.25 |     0.50 |    0.25 | 0.35 |     20 | off     | 1080p street footage |
+| Config          | ImgSz | Conf | HighConf | NewConf | IoU  | Relink | ReID    | Notes                  |
+|-----------------|------:|-----:|---------:|--------:|-----:|-------:|---------|------------------------|
+| `default`       |   320 | 0.15 |     0.35 |    0.20 | 0.30 |     30 | off     | web / generic          |
+| `drone`         |   480 | 0.12 |     0.22 |    0.07 | 0.20 |     45 | opt-in  | small moving boxes     |
+| `street`        |   480 | 0.25 |     0.50 |    0.25 | 0.35 |     20 | off     | 1080p street footage   |
+| `multi_sensor`  |   320 | 0.15 |     0.35 |    0.20 | 0.30 |     30 | off     | multi-sensor placeholder (v7+) |
 
 YAML overrides CLI when both are passed: CLI > YAML > preset defaults.
 
 `--drone` is sugar for `--config configs/drone.yaml`. Note that `drone.yaml`
-historically sets `detector.backend: mog2` to reproduce v4's MOG2 numbers —
-to use YOLO on top of the drone tracking thresholds, pass
+historically sets `detector.backend: mog2` to preserve the v6 compatibility
+baseline — to use YOLO on top of the drone tracking thresholds, pass
 `--detector yolo` explicitly (the comparison runner does this).
 
 ## Head-to-head runner
 
-`scripts/visdrone_compare.py` runs the same source through four cvtrack
-configurations in turn:
+`scripts/visdrone_compare.py` remains available for the detector/ReID matrix.
+Its output directory is disposable and uses semantic subdirectories:
 
-| Run    | Config                            | Why                                      |
-|--------|-----------------------------------|------------------------------------------|
-| run_00 | `--config drone`                  | reproduces v4 (MOG2 background sub.)     |
-| run_01 | COCO yolov8s + drone preset       | off-the-shelf detector on aerial footage |
-| run_02 | VisDrone yolov8s + drone preset   | specialized detector                     |
-| run_03 | VisDrone yolov8s + OSNet ReID     | appearance second-stage matching         |
+| Output directory | Configuration |
+|---|---|
+| `run_mog2` | MOG2 compatibility baseline |
+| `run_coco` | COCO YOLOv8s, no ReID |
+| `run_visdrone` | VisDrone YOLOv8s, no ReID |
+| `run_visdrone_reid` | VisDrone YOLOv8s + OSNet ReID |
 
-Output: `weights/COMPARE_REPORT.md` (markdown table) plus `weights/summary.json`
-(machine-readable). All CSVs land under `weights/run_*/tracks.csv`.
+The maintained v6 tracker comparison is separate and lives in
+`weights/run_deepsort_legacy/`, `weights/run_deepsort_cascade/`, and
+`weights/run_botsort/`. Each contains the rendered video, standard track
+CSV, 15-step future CSV with `sigma_x`/`sigma_y` columns, smoothed CSV,
+and trail JSON.
 
-The script is fail-soft: if a weight file is missing or the import fails for
-that configuration, it logs the failure and continues with the others.
+Output: `weights/COMPARE_REPORT.md` (markdown table) plus
+`weights/summary.json` (machine-readable). The script is fail-soft: if a
+weight file is missing or the optional ReID import fails, it logs the
+failure and continues with the valid configurations.
 
 ## 8-video detector benchmark
 
@@ -108,19 +217,6 @@ sample clips (200 frames each, drone tracking preset):
 | pexels_pedestrian_crossing |               37 |          26.5 |                   13 |              48.5 |
 | sintel_trailer             |               12 |          27.8 |                   43 |              23.5 |
 
-Aggregates:
-
-* VisDrone weights produce **fewer but longer-lived tracks** in 6/8 videos —
-  the expected outcome: the fine-tuned detector fires less on backgrounds
-  and only on true objects, so the tracker has fewer spurious "ghosts" to
-  churn through.
-* `coverr_road_traffic` is the exception — VisDrone fires on 3 872 tiny
-  blobs because that clip is dense with cars at low altitude, exactly the
-  regime VisDrone was trained on.
-* `pexels_aerial_2257013` is a near-empty clip: COCO catches 49 random
-  boxes, VisDrone correctly returns 1 (a single car visible the whole clip,
-  tracked continuously for 79 frames ≈ 200 / 1 ID).
-
 Reproduce with:
 
 ```bash
@@ -134,37 +230,6 @@ python3 scripts/collect_stats.py \
 …then for the per-detector numbers, swap the YOLO weights with the
 `--weights` flag and pass `--detector yolo`.
 
-## Repository layout
-
-```
-cv_tracking_demo/
-├── pyproject.toml            # build + tool config
-├── requirements.txt
-├── Makefile                  # install / lint / test / docker-build
-├── Dockerfile
-├── .github/workflows/ci.yml
-├── configs/                  # YAML presets
-├── src/cvtrack/              # the package
-│   ├── pipeline.py           # main CLI
-│   ├── config.py             # YAML loader, validator
-│   ├── types.py              # Box, Detection, Track
-│   ├── detector/             # YOLO, MOG2, factory
-│   ├── tracker/              # BoT-SORT, Kalman, CMC, RTS smoother
-│   ├── appearance/           # OSNet, Gallery, factory
-│   ├── viz/                  # box/trail renderer
-│   ├── io.py                 # video + CSV writers
-│   └── postprocess.py        # CLI: tracks.csv -> plots
-├── tests/                    # pytest, CPU-only
-├── eval/mot17_mini/          # MOT17-mini + synthetic eval
-├── scripts/
-│   ├── setup_visdrone_compare.sh    # install + download weights
-│   ├── visdrone_compare.py          # 4-way head-to-head runner
-│   ├── collect_stats.py             # multi-video summary
-│   ├── download_weights.py          # standalone weight downloader
-│   └── run_cvtrack.sh
-└── cv_track_demo.py          # deprecation shim for v4 users
-```
-
 ## How to evaluate
 
 ### Self-test (no data needed)
@@ -173,7 +238,22 @@ python eval/mot17_mini/run_eval.py --synthetic
 ```
 
 This synthesises a 100-frame clip with 3 known moving rectangles, runs the
-tracker, and reports MOT-style metrics (MOTA / IDF1 / MOTP).
+tracker, and reports MOT-style metrics (MOTA / IDF1 / MOTP). The
+`cvtrack.tracker.metrics.idf1` function is also directly callable from
+notebooks for custom MOT-style analysis (no external dependencies).
+
+### IDF1 against your own ground truth
+```python
+from cvtrack.tracker.metrics import idf1
+from cvtrack.types import Box
+
+gt_ids   = [1, 1, 1, 2, 2]
+pred_ids = [7, 7, 8, 9, 9]   # your tracker's ids
+gt_boxes = [Box(*b, score=1.0, cls=0, label="obj") for b in ...]
+pr_boxes = [Box(*b, score=1.0, cls=0, label="obj") for b in ...]
+print(idf1(gt_ids, pred_ids, gt_boxes, pr_boxes))
+# {'idf1': ..., 'idp': ..., 'idr': ..., 'mapping': {1: 7, 2: 9}, ...}
+```
 
 ### Real MOT17 mini
 ```bash
@@ -194,10 +274,16 @@ python eval/mot17_mini/run_eval.py \
   inherit `cvtrack.detector.base.Detector`) and add a branch to
   `cvtrack.detector.factory.build_detector`.
 * **Tracker** — implement `step(dets, frame) -> tracks` and pass it to the
-  pipeline via `--tracker <name>`.
+  pipeline via `--tracker <name>`. The new `DeepSortCascade` is the
+  reference for appearance-aware matchers; subclass it for custom cascade
+  policies.
 * **Appearance model** — implement `cvtrack.appearance.base.AppearanceExtractorProtocol`
-  (or inherit `cvtrack.appearance.osnet.OsNetExtractor`) and add a branch
+  (or inherit `cvtrack.appearance.osnet.OsNetExtractor` or
+  `cvtrack.appearance.histogram.HistogramExtractor`) and add a branch
   to `cvtrack.appearance.factory.make_extractor`.
+* **Sensor** — subclass `cvtrack.sensors.Sensor` and pass it to the
+  pipeline. The contract is intentionally tiny so LiDAR / IMU / multi-cam
+  adapters fit in <100 lines.
 
 ## Engineering hygiene
 
@@ -209,33 +295,21 @@ python eval/mot17_mini/run_eval.py \
 * `Makefile` exposes `install`, `lint`, `typecheck`, `test`, `test-slow`,
   `run-drone`, `docker-build`, `clean`.
 * CI: ruff check, mypy (best-effort), fast pytest across Python 3.10/3.11.
+* Test suite is 53 passed + 1 skipped (torchreid-only) on Python 3.10.
 
-## Regression status vs v4
+## Future work (next iteration)
 
-The drone preset is tuned to match v4's reference numbers as closely as
-possible on `pexels_aerial_2034115.mp4`:
-
-| Metric          | v4 reference (100f) | cvtrack MOG2 (100f) | Δ     |
-|-----------------|--------------------:|--------------------:|------:|
-| Mean track len. |               22.3 |                21.7 |  -2.7% |
-| Total obs.      |               2408 |                1475 |  -38%  |
-| Confirmed IDs   |                108 |                  68 |  -37%  |
-
-`cvtrack`'s MOG2 path reproduces v4's regression number (`mean=21.8`,
-`180 IDs in 200 frames`) almost exactly when given the same video, same
-drone.yaml, and same `max-frames` window. v4's `-37%` gap on the original
-reference table was caused by the `--max-frames` flag being ignored in the
-v4 script — `cvtrack` honours it.
-
-## Future work (out of scope)
-
-* VisDrone fine-tune of larger backbones (yolov8m / yolov8l).  Multiple
-  hours of GPU training; current pipeline uses yolov8s fine-tuned by
-  dronefreak.
-* ONNX runtime fallback for `torchreid` when Cython is unavailable — see
-  Troubleshooting for the current state.
-* Multi-camera tracking (would require a different identity layer).
-* TensorRT / DNN-based MOG2 when running on GPU.
+* **LiDAR + IMU + multi-camera** — the `cvtrack.sensors` module is ready;
+  the next step is to wire a `MultiSensorSource` that synchronises multiple
+  `Sensor` instances by timestamp and feeds a single tracker.
+* **MOT17 full eval** — `eval/mot17_mini/run_eval.py` already supports
+  arbitrary sequences; adding the full MOT17 / KITTI download scripts is
+  the next deliverable.
+* **VisDrone fine-tune of larger backbones** (yolov8m / yolov8l).
+  Multiple hours of GPU training; current pipeline uses yolov8s
+  fine-tuned by dronefreak.
+* **ONNX runtime fallback** for `torchreid` when Cython is unavailable.
+* **TensorRT / DNN-based MOG2** when running on GPU.
 
 ## Troubleshooting
 
@@ -244,8 +318,9 @@ v4 script — `cvtrack` honours it.
   Two workarounds:
   1. `pip install --user "Cython<3"` then re-run `pip install -e .[reid]`,
      or
-  2. Skip ReID — the second-stage matching gracefully degrades to IoU
-     only and the head-to-head still runs three valid configurations.
+  2. Skip ReID — the cascade matcher gracefully degrades to the
+     `HistogramExtractor` fallback and the head-to-head still runs all
+     three tracker configurations.
 
 * **`numpy.core.multiarray failed to import`** when loading ultralytics.
   This box has `numpy 2.2.6` in `~/.local` but the system

@@ -77,6 +77,79 @@ class VideoWriter:
         self.writer.release()
 
 
+class FutureTrailCsvWriter:
+    """CSV writer for per-frame, multi-step Kalman future positions.
+
+    Schema (v6):
+
+        frame, track_id, future_step, future_frame,
+        future_x, future_y, sigma_x, sigma_y
+
+    ``sigma_x`` / ``sigma_y`` are populated when ``write_trail_with_cov`` is
+    used (the position stddev along x/y from the projected KF covariance);
+    ``write_trail`` leaves them blank for backward compatibility with the
+    v5 schema (frame, track_id, future_step, future_frame, future_x,
+    future_y).
+    """
+
+    HEADER = [
+        "frame",
+        "track_id",
+        "future_step",
+        "future_frame",
+        "future_x",
+        "future_y",
+        "sigma_x",
+        "sigma_y",
+    ]
+
+    def __init__(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.f = open(path, "w", newline="")
+        self.w = csv.writer(self.f)
+        self.w.writerow(self.HEADER)
+
+    def write_trail(
+        self,
+        frame: int,
+        track_id: int,
+        points: List[Tuple[float, float]],
+    ) -> None:
+        for step, (future_x, future_y) in enumerate(points, start=1):
+            self.w.writerow([
+                int(frame),
+                int(track_id),
+                step,
+                int(frame) + step,
+                f"{future_x:.2f}",
+                f"{future_y:.2f}",
+                "",
+                "",
+            ])
+
+    def write_trail_with_cov(
+        self,
+        frame: int,
+        track_id: int,
+        points: List[Tuple[float, float, float, float]],
+    ) -> None:
+        """Like ``write_trail`` but accepts ``(x, y, sigma_x, sigma_y)`` tuples."""
+        for step, (future_x, future_y, sigma_x, sigma_y) in enumerate(points, start=1):
+            self.w.writerow([
+                int(frame),
+                int(track_id),
+                step,
+                int(frame) + step,
+                f"{future_x:.2f}",
+                f"{future_y:.2f}",
+                f"{sigma_x:.2f}",
+                f"{sigma_y:.2f}",
+            ])
+
+    def close(self) -> None:
+        self.f.close()
+
+
 class TrackCsvWriter:
     """Buffered CSV writer for per-frame track rows.
 

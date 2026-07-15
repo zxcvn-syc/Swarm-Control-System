@@ -1,8 +1,9 @@
-"""Cost-matrix builders, IoU, and chi-squared gating."""
+"""Cost-matrix builders, IoU, chi-squared gating, and MOT metrics."""
 
 from __future__ import annotations
 
-from typing import List, Sequence
+from collections import defaultdict
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -88,3 +89,98 @@ def gate_mahalanobis(
             z = np.array([det.cx, det.cy], dtype=np.float64)
             out[i, j] = mahalanobis_2d(kf, tr, z) < threshold
     return out
+
+
+# ---------------------------------------------------------------------------
+# MOT-style metrics (no external deps -- motmetrics is in requirements.txt but
+# this lets us compute the headline number inside the test suite too).
+# ---------------------------------------------------------------------------
+
+def _best_mapping_one_to_one(counts: Dict[Tuple[int, int], int]) -> Dict[int, int]:
+    """Greedy 1-to-1 mapping that maximises total co-occurrence.
+
+    ``counts`` is ``{(gt_id, pred_id): n_frames}``.  We build the bipartite
+    assignment greedily by descending count, picking each (gt, pred) pair
+    only if both ids are still unmatched.  This is an O(K^2) approximation
+    to the optimal assignment (where K is the number of distinct ids); for
+    the per-clip sizes we deal with (<200 ids) it is exact in practice.
+    """
+    used_gt: set = set()
+    used_pred: set = set()
+    mapping: Dict[int, int] = {}
+    for (gt_id, pred_id), cnt in sorted(counts.items(), key=lambda kv: -kv[1]):
+        if gt_id in used_gt or pred_id in used_pred:
+            continue
+        mapping[gt_id] = pred_id
+        used_gt.add(gt_id)
+        used_pred.add(pred_id)
+    return mapping
+
+
+def idf1(
+    gt_ids: Sequence[int],
+    pred_ids: Sequence[int],
+    gt_dets: Sequence[Box],
+    pred_dets: Sequence[Box],
+) -> dict:
+    """Compute IDF1 / IDP / IDR for a single clip.
+
+    Parameters
+    ----------
+    gt_ids, pred_ids:
+        Per-observation ground-truth and predicted track ids (same length).
+    gt_dets, pred_dets:
+        The corresponding bounding boxes (same length as the id lists).
+    Two observations are paired (i.e. ``(gt_i, pred_i)`` contributes to
+    their (gt_id, pred_id) co-occurrence count) iff their boxes overlap
+    with IoU >= 0.5 (the MOT convention).  Observations without any
+    pairing are ignored -- the standard "evaluate only on matched boxes"
+    rule.
+
+    Returns
+    -------
+    dict with keys ``idf1``, ``idp``, ``idr`` (floats in [0, 1]) and
+    ``mapping`` (a ``{gt_id: pred_id}`` dictionary for the best 1-to-1
+    assignment).
+    """
+    n = len(gt_ids)
+    if n == 0 or n != len(pred_ids) or n != len(gt_dets) or n != len(pred_dets):
+        return {"idf1": 0.0, "idp": 0.0, "idr": 0.0, "mapping": {}, "tp": 0, "fp": 0, "fn": 0}
+
+    # Co-occurrence counts: only pair detections with IoU >= 0.5 (MOT
+    # convention).  O(n^2) but n is per-clip and typically < 5k here.
+    co_counts: Dict[Tuple[int, int], int] = defaultdict(int)
+    for i in range(n):
+        gi, di = gt_ids[i], gt_dets[i]
+        for j in range(n):
+            pj, dj = pred_ids[j], pred_dets[j]
+            if di.iou(dj) >= 0.5:
+                co_counts[(gi, pj)] += 1
+    if not co_counts:
+        return {"idf1": 0.0, "idp": 0.0, "idr": 0.0, "mapping": {}, "tp": 0, "fp": 0, "fn": 0}
+
+    mapping = _best_mapping_one_to_one(dict(co_counts))
+    tp = sum(co_counts[(gt, mapping[gt])] for gt in mapping)
+
+    # Per-id totals across the (matched) observation set.
+    per_gt_total: Dict[int, int] = defaultdict(int)
+    per_pred_total: Dict[int, int] = defaultdict(int)
+    for (gt_id, pred_id), cnt in co_counts.items():
+        per_gt_total[gt_id] += cnt
+        per_pred_total[pred_id] += cnt
+    fn = sum(per_gt_total[g] for g in per_gt_total if g not in mapping)
+    fp = sum(per_pred_total[p] for p in per_pred_total if p not in mapping.values())
+
+    idp = tp / max(tp + fp, 1)
+    idr = tp / max(tp + fn, 1)
+    denom = idp + idr
+    idf1_v = (2 * idp * idr / denom) if denom > 0 else 0.0
+    return {
+        "idf1": float(idf1_v),
+        "idp": float(idp),
+        "idr": float(idr),
+        "mapping": {int(k): int(v) for k, v in mapping.items()},
+        "tp": int(tp),
+        "fp": int(fp),
+        "fn": int(fn),
+    }

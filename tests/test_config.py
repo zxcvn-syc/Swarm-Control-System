@@ -47,15 +47,36 @@ def test_validate_rejects_bad_tracker_kind():
         _validate({"tracker": {"kind": "magic"}})
 
 
-def test_validate_requires_reid_weights_when_enabled():
+def test_validate_accepts_deepsort_cascade_kind():
+    """v6 introduces the cascade matcher; the validator must accept it."""
+    _validate({"tracker": {"kind": "deepsort_cascade"}})
+
+
+def test_validate_accepts_sensors_top_level():
+    """v6 multi-sensor YAML uses the `sensors` key; the validator allows it."""
+    _validate({"sensors": []})
+
+
+def test_validate_reid_enabled_no_weights_is_ok():
+    """v6: enabling ReID without weights is allowed; OSNet hub weights are used."""
+    # The pipeline auto-tries OSNet (torch.hub), disabling ReID gracefully
+    # if the network stack is unavailable.  We don't require weights at
+    # validation time.
+    _validate({"appearance": {"enabled": True}})
+    _validate({"appearance": {"enabled": True, "weights": ""}})
+    _validate({"appearance": {"enabled": True, "weights": "some/path.pt"}})
+
+
+def test_validate_rejects_non_string_weights():
+    """Defensive: weights must be a string path when provided."""
     with pytest.raises(ValueError):
-        _validate({"appearance": {"enabled": True, "weights": ""}})
+        _validate({"appearance": {"enabled": True, "weights": 123}})
 
 
 def test_bundled_presets_load_clean():
     """Smoke test: the configs bundled with the repo load without raising."""
     from cvtrack.config import _configs_dir
 
-    for name in ("default", "drone", "street"):
+    for name in ("default", "drone", "street", "multi_sensor"):
         cfg = load_config(name, configs_dir=_configs_dir())
         assert cfg.raw.get("tracker"), f"{name} must define a tracker section"

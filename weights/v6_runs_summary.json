@@ -1,0 +1,26 @@
+[
+  {
+    "run_dir": "weights/run_deepsort_legacy",
+    "n_obs": 3134,
+    "n_tracks": 253,
+    "mean_track_length": 12.387351778656127,
+    "median_track_length": 4.0,
+    "n_frames": 200
+  },
+  {
+    "run_dir": "weights/run_deepsort_cascade",
+    "n_obs": 2586,
+    "n_tracks": 276,
+    "mean_track_length": 9.369565217391305,
+    "median_track_length": 3.0,
+    "n_frames": 200
+  },
+  {
+    "run_dir": "weights/run_botsort",
+    "n_obs": 1668,
+    "n_tracks": 224,
+    "mean_track_length": 7.446428571428571,
+    "median_track_length": 3.0,
+    "n_frames": 200
+  }
+]

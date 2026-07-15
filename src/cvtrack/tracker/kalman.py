@@ -9,16 +9,31 @@ Two implementations live here:
 Both filters are intentionally *behaviour-preserving* with respect to the v4
 script: every magic number in Q / R and the BoT-SORT sigma constants is
 identical to the original.
+
+The module also exposes two trajectory-projection helpers used by the
+renderer:
+
+* ``predict_n_steps`` -- returns the predicted ``(x, y)`` centres only.
+* ``predict_n_steps_with_covariance`` -- returns ``(mean, cov)`` at every
+  step so callers can render uncertainty ellipses.
 """
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import TYPE_CHECKING, Any, List, Tuple
 
 import numpy as np
 
 
+if TYPE_CHECKING:  # pragma: no cover
+    from cvtrack.types import Track
+
+
 CHI2_THRESHOLD = 5.991  # p=0.95, 2 dof (legacy DeepSORT gate)
+# DeepSORT paper uses chi2_95 with 4 dof as the gating threshold (it
+# parameterises the state with cx, cy, a, h so 4-D).  The 4-state KF here
+# is only 2-D in the position space, so we expose both constants.
+CHI2_INV_95_4DOF = 9.4877
 
 # BoT-SORT noise factors (paper sec. 3.1, tuned for ~30 FPS).
 _BOTSORT_SIGMA_P = 0.05
@@ -183,6 +198,52 @@ class KalmanBoT:
         T = np.zeros(8, dtype=np.float64)
         T[0:2] = t
         return block @ mean + T, block @ cov @ block.T
+
+
+# ----------------------------------------------------------------------------
+# Trajectory projection helpers (used by the renderer for future trails).
+# ----------------------------------------------------------------------------
+def predict_n_steps(kf: Any, track: "Track", n: int) -> List[Tuple[float, float]]:
+    """Project a track forward without mutating its live Kalman state.
+
+    Walks the KF forward ``n`` times and returns the predicted ``(x, y)``
+    centres.  Pure function over the supplied state.
+    """
+    steps = max(0, int(n))
+    mean = np.array(track.mean, dtype=np.float64, copy=True)
+    cov = np.array(track.cov, dtype=np.float64, copy=True)
+    points: List[Tuple[float, float]] = []
+    for _ in range(steps):
+        mean, cov = kf.predict(mean, cov)
+        points.append((float(mean[0]), float(mean[1])))
+    return points
+
+
+def predict_n_steps_with_covariance(
+    kf: Any,
+    track_mean: np.ndarray,
+    track_cov: np.ndarray,
+    n: int,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Like :func:`predict_n_steps` but also returns the full state covariance.
+
+    Each element of the returned list is ``(mean_step, cov_step)``; the
+    position sub-block is ``mean_step[:2]`` and the position-position
+    sub-block is ``cov_step[:2, :2]`` (true for both the 4-state KF and
+    the 8-state BoT-SORT KF -- the first two state entries are always
+    ``cx, cy``).
+
+    The ``kf`` object only needs to expose ``predict(mean, cov) ->
+    (mean, cov)``; no mutation of any track state is performed.
+    """
+    steps = max(0, int(n))
+    mean = np.array(track_mean, dtype=np.float64, copy=True)
+    cov = np.array(track_cov, dtype=np.float64, copy=True)
+    out: List[Tuple[np.ndarray, np.ndarray]] = []
+    for _ in range(steps):
+        mean, cov = kf.predict(mean, cov)
+        out.append((mean.copy(), cov.copy()))
+    return out
 
 
 # ----------------------------------------------------------------------------
