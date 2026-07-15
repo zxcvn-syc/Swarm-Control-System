@@ -1,4 +1,4 @@
-# cvtrack v6 — true DeepSORT + BoT-SORT with Kalman future prediction
+# cvtrack v6 — true DeepSORT cascade + BoT-SORT with Kalman future prediction
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)]()
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)]()
@@ -10,23 +10,19 @@ appearance cascade + IoU fallback), Kalman n-step prediction with uncertainty
 ellipses, an IDF1 metric, and a sensor abstraction layer that paves the way
 for LiDAR / IMU / multi-camera rigs in the next iteration.
 
-The headline numbers on `pexels_aerial_2034115.mp4` (200 frames, default
-detector, classes `[0, 2, 5, 7, 16]`):
+The headline numbers on `pexels_aerial_2034115.mp4` (200 frames, YOLO real detection, classes `[0, 2, 5, 7, 16]`):
 
-| tracker            | IDs  | mean length | total obs | avg FPS |
-|--------------------|-----:|------------:|----------:|--------:|
-| DeepSort (legacy)  |  253 |       12.39 |     3,134 |     3.6 |
-| **DeepSortCascade**|  276 |    **9.37** |     2,586 |     5.9 |
-| BoT-SORT           |  224 |        7.45 |     1,668 |     6.3 |
+| tracker              | IDs  | mean length | total obs | avg FPS |
+|---------------------|-----:|------------:|----------:|--------:|
+| DeepSortCascade     |  269 |        9.75 |     2,622 |     0.4 |
+| BoT-SORT            |  224 |        7.45 |     1,668 |    16.1 |
 
-The cascade matcher is the most *active* matcher of the three: it observes
-~80% more observations than BoT-SORT thanks to the IoU fallback that
-rescues short occlusions where the KF gate alone is too strict. The legacy
-DeepSORT has the most observations but the most fragmented IDs because it
-has no relink mechanism beyond pure Mahalanobis. The retained run outputs
-live in `weights/run_deepsort_legacy/`, `weights/run_deepsort_cascade/`,
-and `weights/run_botsort/`; the JSON summary is
-`weights/v6_runs_summary.json`.
+DeepSortCascade observes ~57% more detections than BoT-SORT thanks to the IoU
+fallback that rescues short occlusions. BoT-SORT is faster because it skips the
+ReID cascade. The cascade matcher uses OSNet 512-D embeddings via torchreid
+(loaded_pretrained=False on this run; pass `--reid-weights weights/osnet_x0_25_msmt17.pth.tar`
+for domain-fine-tuned ReID). The retained run outputs live in
+`weights/run_deepsort_cascade_v6/` and `weights/run_botsort_v6/`.
 
 ## What's new in v6
 
@@ -39,11 +35,12 @@ and `weights/run_botsort/`; the JSON summary is
   IoU fallback. New constructor parameters: `use_appearance=True`,
   `appearance_thresh=0.5`, `max_age=30`, `n_init=3`.
 
-* **Lightweight HistogramExtractor** — `cvtrack.appearance.histogram.HistogramExtractor`
-  is a deterministic 512-D HSV-histogram embedding that the factory falls
-  back to when OSNet / torchreid are not available. The pipeline runs the
-  cascade matcher with whatever extractor is reachable -- never silently
-  degrades to motion-only.
+* **OSNet via torchreid** — `cvtrack.appearance.osnet.OsNetExtractor` is the
+  only appearance backend in v6. It loads `osnet_x0_25` via torchreid (or
+  its inline OSNet reference implementation) with the MSMT17
+  fine-tuned checkpoint. If neither network stack can be imported the
+  factory returns `None` and the pipeline degrades to motion-only tracking
+  with a clear warning rather than a silent colour-histogram stub.
 
 * **Kalman n-step prediction with covariance** —
   `cvtrack.tracker.kalman.predict_n_steps_with_covariance` returns the full
@@ -277,10 +274,9 @@ python eval/mot17_mini/run_eval.py \
   pipeline via `--tracker <name>`. The new `DeepSortCascade` is the
   reference for appearance-aware matchers; subclass it for custom cascade
   policies.
-* **Appearance model** — implement `cvtrack.appearance.base.AppearanceExtractorProtocol`
-  (or inherit `cvtrack.appearance.osnet.OsNetExtractor` or
-  `cvtrack.appearance.histogram.HistogramExtractor`) and add a branch
-  to `cvtrack.appearance.factory.make_extractor`.
+* **Appearance model** — inherit `cvtrack.appearance.osnet.OsNetExtractor` and
+  add a branch to `cvtrack.appearance.factory.make_extractor`.  All appearance
+  models must be real pretrained networks (no histogram/synthetic fallbacks).
 * **Sensor** — subclass `cvtrack.sensors.Sensor` and pass it to the
   pipeline. The contract is intentionally tiny so LiDAR / IMU / multi-cam
   adapters fit in <100 lines.

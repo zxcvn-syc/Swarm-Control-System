@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -35,17 +35,16 @@ dependencies = [
     "matplotlib",
     "pandas",
     "motmetrics",
-    # torchreid is optional -- install via the README's "ReID backends" section.
+    "torchreid>=0.2.5,<0.3",
 ]
 
 [project.optional-dependencies]
 reid = [
-    # NOTE: the upstream repo only has tags up to v1.0.6; the v1.4.0 reference
-    # in the original pyproject was a typo.  v1.0.6 is the latest stable release.
-    "torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git@v1.0.6",
+    # NOTE: torchreid is now included in main dependencies (v0.2.5+).
+    # This section is kept for backward compatibility.
+    "torchreid>=0.2.5,<0.3",
     "tensorboard>=2.14,<3",
     "gdown>=4,<7",
-    "Cython>=3,<4",
 ]
 dev = [
     "pytest>=7,<9",

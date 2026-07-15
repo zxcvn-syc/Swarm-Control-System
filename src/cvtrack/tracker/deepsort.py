@@ -24,7 +24,7 @@ Two implementations live here:
 
 This module deliberately does not depend on torchreid: the appearance
 embedding is whatever the caller passes in (could be OSNet, could be the
-``HistogramExtractor`` (removed)).  ``det_embeddings`` and per-track
+``HistogramExtractor`` fallback was removed in v6.  ``det_embeddings`` and per-track
 ``gallery`` are supplied by the pipeline; the cascade is computed here.
 """
 
@@ -37,9 +37,12 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from cvtrack.appearance.gallery import Gallery
-from cvtrack.tracker.kalman import CHI2_THRESHOLD, KalmanCV2D
+from cvtrack.tracker.kalman import CHI2_INV_95_4DOF, CHI2_THRESHOLD, KalmanCV2D
 from cvtrack.tracker.metrics import iou_matrix
 from cvtrack.types import Box, Track
+
+DEEPSORT_MAHALANOBIS_GATE = CHI2_THRESHOLD
+DEEPSORT_CASCADE_MAHALANOBIS_GATE = CHI2_INV_95_4DOF
 
 
 log = logging.getLogger(__name__)
@@ -222,7 +225,7 @@ class DeepSortCascade:
         use_appearance: bool = True,
         appearance_thresh: float = DEEPSORT_APPEARANCE_GATE,
         iou_thresh: float = 0.30,
-        maha_gate: float = DEEPSORT_MAHALANOBIS_GATE,
+        maha_gate: float = DEEPSORT_CASCADE_MAHALANOBIS_GATE,
     ) -> None:
         self.kf = KalmanCV2D(dt=dt)
         self.dt = dt
