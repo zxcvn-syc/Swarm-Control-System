@@ -10,19 +10,25 @@ appearance cascade + IoU fallback), Kalman n-step prediction with uncertainty
 ellipses, an IDF1 metric, and a sensor abstraction layer that paves the way
 for LiDAR / IMU / multi-camera rigs in the next iteration.
 
-The headline numbers on `pexels_aerial_2034115.mp4` (200 frames, YOLO real detection, classes `[0, 2, 5, 7, 16]`):
+The headline numbers on `pexels_aerial_2034115.mp4` (200 frames, real YOLO inference
+with `weights/visdrone_yolov8s.pt`, classes `0,1,2,3,4,5,7,8`, CPU device, drone preset
+for the cascade row):
 
-| tracker              | IDs  | mean length | total obs | avg FPS |
-|---------------------|-----:|------------:|----------:|--------:|
-| DeepSortCascade     |  269 |        9.75 |     2,622 |     0.4 |
-| BoT-SORT            |  224 |        7.45 |     1,668 |    16.1 |
+| tracker              | IDs  | ID/frame | mean length | median | longest | total obs | avg FPS |
+|----------------------|-----:|---------:|------------:|-------:|--------:|----------:|--------:|
+| DeepSortCascade      |   56 |    0.280 |       60.3 |     54 |     174 |     3,379 |     0.9 |
+| DeepSortCascade raw  |  113 |    0.565 |       19.5 |      8 |     104 |     2,199 |     2.6 |
+| BoT-SORT             |   82 |    0.410 |       13.2 |      4 |      83 |     1,083 |    12.3 |
+| DeepSort (legacy)    |  110 |    0.550 |       20.7 |     10 |     159 |     2,277 |    11.8 |
 
-DeepSortCascade observes ~57% more detections than BoT-SORT thanks to the IoU
-fallback that rescues short occlusions. BoT-SORT is faster because it skips the
-ReID cascade. The cascade matcher uses OSNet 512-D embeddings via torchreid
-(loaded_pretrained=False on this run; pass `--reid-weights weights/osnet_x0_25_msmt17.pth.tar`
-for domain-fine-tuned ReID). The retained run outputs live in
-`weights/run_deepsort_cascade_v6/` and `weights/run_botsort_v6/`.
+DeepSortCascade with the drone preset (low min-conf, 8 VisDrone classes, IoU gate 0.20,
+4-DOF Mahalanobis gate 9.4877) gives the longest tracks by a wide margin — the median
+track length 54 vs BoT-SORT's 4. The cascade row uses OSNet 512-D embeddings via
+torchreid (`weights/osnet_x0_25_msmt17.pth.tar`, `loaded_pretrained=True`); the raw
+row runs cascade without preset tweaks so you can see how the ID-explosion warning
+fires (ratio 0.565 > 0.5). The retained run outputs live in
+`weights/run_deepsort_cascade_drone/`, `weights/run_deepsort_cascade/`,
+`weights/run_botsort/`, and `weights/run_deepsort_legacy/`.
 
 ## What's new in v6
 
@@ -132,8 +138,7 @@ cv_tracking_demo/
 │   │   ├── smoother.py       # RTS
 │   │   └── cmc.py            # sparse-OF + ECC
 │   ├── appearance/
-│   │   ├── osnet.py          # OSNet (torchreid)
-│   │   ├── histogram.py      # HSV histogram fallback (v6)
+│   │   ├── osnet.py          # OSNet (torchreid, v6 only appearance backend)
 │   │   ├── gallery.py        # per-track FIFO + EMA
 │   │   └── factory.py        # backend dispatcher
 │   ├── sensors/              # v6 abstraction layer (skeleton)
@@ -314,9 +319,9 @@ python eval/mot17_mini/run_eval.py \
   Two workarounds:
   1. `pip install --user "Cython<3"` then re-run `pip install -e .[reid]`,
      or
-  2. Skip ReID — the cascade matcher gracefully degrades to the
-     `HistogramExtractor` fallback and the head-to-head still runs all
-     three tracker configurations.
+  2. Skip ReID — the cascade matcher gracefully degrades to motion-only
+     tracking and the head-to-head still runs all three tracker
+     configurations.
 
 * **`numpy.core.multiarray failed to import`** when loading ultralytics.
   This box has `numpy 2.2.6` in `~/.local` but the system
