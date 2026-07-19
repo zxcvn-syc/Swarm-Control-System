@@ -10,8 +10,13 @@
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-LOCAL_LIB="${CVTRACK_LOCAL_LIB:-/home/hhh/Downloads/.local_lib}"
-
-export PYTHONPATH="${LOCAL_LIB}:${HERE}/src:${PYTHONPATH:-}"
+# Allow the caller to point at a non-standard user-site install dir via env,
+# otherwise we don't need any PYTHONPATH fiddling for the standard
+# `pip install -e .` workflow.  See .local_lib/ in .gitignore.
+if [ -n "${CVTRACK_LOCAL_LIB:-}" ]; then
+    export PYTHONPATH="${CVTRACK_LOCAL_LIB}:${HERE}/src:${PYTHONPATH:-}"
+else
+    export PYTHONPATH="${HERE}/src:${PYTHONPATH:-}"
+fi
 
 exec python3 -m cvtrack "$@"

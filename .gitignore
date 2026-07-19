@@ -14,22 +14,51 @@ build/
 dist/
 *.egg-info/
 
-# Output directories created by the pipeline
+# ---------------------------------------------------------------------------
+# Pipeline outputs — never commit these.  Re-run locally to regenerate.
+# ---------------------------------------------------------------------------
+
+# Top-level output dirs created by the CLI
 output_*/
 out/
 
-# Test data (large downloads) and outputs
+# Sample video data and rendered videos
 *.mp4
 *.mov
 *.avi
 *.gif
-results/
+*.mkv
+
+# Track CSVs and JSON summaries from any tracker run
+# (cvtrack writes: tracks.csv, tracks_smoothed.csv, tracks_future.csv,
+#  tracks_trails.json, summary.json, v6_runs_summary.json, etc.)
+tracks.csv
+tracks_smoothed.csv
+tracks_future.csv
+tracks_trails.json
+tracks_per_id.csv
+tracks_summary.csv
+sample_gt.csv
+summary.json
+v6_runs_summary.json
+all_results.json
+stats_summary.json
 trajectories.png
+
+# Anything under weights/ — those are either downloaded checkpoints
+# (managed by scripts/download_weights.py) or per-run outputs.
+weights/
+
+# eval/ scripts may pull data into eval/*/data/
+eval/mot17_mini/data/
+
+# User-local lib for restricted-env installs
+.local_lib/
 
 # Editor / OS noise
 .DS_Store
 .idea/
 .vscode/
 
-# User-local lib for restricted-env installs
-.local_lib/
+# Allow users to intentionally check in a tracked weight by name if needed
+!weights/.gitkeep

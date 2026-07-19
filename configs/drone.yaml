@@ -28,7 +28,7 @@ tracker:
 # is fast but the embeddings are not meaningful.
 appearance:
   enabled: false
-  weights: osnet_x0_25_msmt17.pt   # tiny ReID for aerial / drone footage
+  weights: osnet_x0_25_msmt17.pth.tar   # tiny ReID for aerial / drone footage
   model: osnet_x0_25
 
 viz:

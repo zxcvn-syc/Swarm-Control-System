@@ -43,16 +43,10 @@ from cvtrack.types import Box, Track
 
 DEEPSORT_MAHALANOBIS_GATE = CHI2_THRESHOLD
 DEEPSORT_CASCADE_MAHALANOBIS_GATE = CHI2_INV_95_4DOF
+DEEPSORT_APPEARANCE_GATE = 0.5  # cosine distance ceiling (1 - similarity >= 0.5)
 
 
 log = logging.getLogger(__name__)
-
-
-# DeepSORT paper: chi-squared 95% threshold for 4 dof (cx, cy, aspect, h).
-# We're using the 4-state KF here so the gating is the 2-dof variant.
-# Keep both symbols around because the cascade gating can be overridden.
-DEEPSORT_MAHALANOBIS_GATE = CHI2_THRESHOLD
-DEEPSORT_APPEARANCE_GATE = 0.5  # cosine distance ceiling (1 - similarity >= 0.5)
 
 
 def _predicted_box_from_4state(t: Track) -> Box:

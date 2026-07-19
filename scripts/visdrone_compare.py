@@ -82,6 +82,20 @@ def ensure_osnet_weights() -> Path | None:
     return p
 
 
+def ensure_coco_weights() -> Path | None:
+    """Return the COCO yolov8s weight path if cached, else the bare name.
+
+    COCO yolov8s is fetched by ultralytics on first use into its own cache
+    (~/.cache/ultralytics/), so we don't materialise a second copy under
+    ./weights/.  Pass the bare "yolov8s.pt" name downstream and let
+    ultralytics resolve it.
+    """
+    target = WEIGHTS / "yolov8s.pt"
+    if target.exists() and target.stat().st_size > 1_000_000:
+        return target
+    return None
+
+
 def run_cvtrack(extra_args: list[str], out_dir: Path, label: str) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
     # --out-dir is placed LAST so it overrides any YAML-level output path.
@@ -132,7 +146,7 @@ def main() -> int:
     out_root = (HERE.parent / args.out_dir).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
 
-    coco_s = "/home/hhh/CascadeProjects/multi_sensor_perception_ws/models/yolov8s.pt"
+    coco_s = str(ensure_coco_weights() or "yolov8s.pt")
 
     visdrone_p = None
     osnet_p = None

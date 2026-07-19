@@ -11,7 +11,7 @@ same drone video and reports how each affects track quality:
 ## Run it (3 commands)
 
 ```bash
-cd /path/to/cv_tracking_demo
+cd /path/to/cvtrack
 
 # Install ReID extra + download VisDrone & OSNet weights (~150 MB total)
 bash scripts/setup_visdrone_compare.sh

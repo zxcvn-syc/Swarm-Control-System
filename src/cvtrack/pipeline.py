@@ -67,12 +67,10 @@ def resolve_weights(weights: str) -> str:
         return weights
     if os.path.isabs(weights) or os.path.exists(weights):
         return weights
-    candidate = os.path.join(
-        "/home/hhh/CascadeProjects/multi_sensor_perception_ws/models",
-        weights,
-    )
-    if os.path.exists(candidate):
-        return candidate
+    # Conventional local location written by scripts/download_weights.py.
+    local_candidate = os.path.join("weights", weights)
+    if os.path.exists(local_candidate):
+        return local_candidate
     return weights
 
 
@@ -86,8 +84,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="path or name of a YAML preset (e.g. configs/drone.yaml)")
     ap.add_argument("--source", default="",
                     help="path to input video (default: synthesise sample.mp4)")
-    ap.add_argument("--out-dir", default="/home/hhh/Downloads/cv_tracking_demo",
-                    help="output directory for tracked.mp4 / tracks.csv / etc.")
+    ap.add_argument("--out-dir", default="output",
+                    help="output directory for tracked.mp4 / tracks.csv / etc. "
+                         "(default: ./output)")
     ap.add_argument("--weights", default="")
     ap.add_argument("--imgsz", type=int, default=None)
     ap.add_argument("--conf", type=float, default=None)
