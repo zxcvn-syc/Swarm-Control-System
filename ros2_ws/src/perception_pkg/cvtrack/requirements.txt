@@ -1,0 +1,28 @@
+# Core numerical / DL stack
+numpy>=1.24,<3
+scipy>=1.10,<1.16
+
+# Computer vision
+opencv-python>=4.7
+Pillow>=9.0
+
+# YOLOv8 (Ultralytics) — pulls torch automatically.  Pin loosely so CI can
+# resolve a current version.
+ultralytics>=8.0
+
+# ReID — torchreid is referenced from the bundled zip / git in this repo (see
+# README).  If you have it on PyPI in your env, just `pip install torchreid`.
+# Listed here only as a documented *optional* dependency; not required to run
+# the pipeline with `appearance.enabled = false` (the default).
+# torchreid  # optional
+
+# Configuration
+PyYAML>=5.4,<7
+
+# Evaluation
+motmetrics>=1.4
+matplotlib>=3.5
+pandas>=1.4
+
+# Test infrastructure
+pytest>=7.0

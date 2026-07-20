@@ -1,0 +1,16 @@
+extends: default
+
+# Street-level 1080p preset.  Bumps min_box_area to keep detection counts
+# bounded on large foreground objects (people, cars).
+detector:
+  imgsz: 480
+  conf: 0.25
+  classes: [0, 2, 3, 5, 7]
+  min_box_area: 600        # ~25x25 px at 1080p baseline
+  nms_iou: 0.55
+
+tracker:
+  high_conf: 0.40
+  new_track_conf: 0.30
+  iou_thresh: 0.30
+  lost_relink_frames: 25

@@ -1,0 +1,5 @@
+"""cvtrack — drone-target tracking demo (YOLOv8 + BoT-SORT + optional ReID)."""
+
+from __future__ import annotations
+
+__version__ = "6.0.0"
