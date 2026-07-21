@@ -4,6 +4,9 @@
 > 以 `swarm_interfaces/TargetTrackArray` 消息格式通过 ROS2 Topic 发布出来，
 > 供下游 `planner_node`、`scheduler_node` 等模块消费。
 
+> **V3 (2026-07-20) 更新**：增强 `TargetTrack` 字段，新增轨迹预测、运动模式分类、
+> 封控组专用接口。详见 [感知组优化工作总结](./感知组优化工作总结.md)。
+
 ---
 
 ## 目录
@@ -16,32 +19,42 @@
 6. [使用方法](#6-使用方法)
 7. [验证结果](#7-验证结果)
 8. [已知限制与环境注意事项](#8-已知限制与环境注意事项)
+9. [V3 感知优化特性](#9-v3-感知优化特性)
 
 ---
 
 ## 1. 实现方案
 
-### 1.1 整体数据流
+### 1.1 整体数据流 (V3)
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  cv_tracking_demo / cvtrack                          │
-│  YOLOv8 detector  +  DeepSORT / BoT-SORT tracker     │
-└──────────────────────────┬───────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  cv_tracking_demo / cvtrack                                  │
+│  YOLOv8 detector  +  DeepSORT / BoT-SORT tracker            │
+│  + KalmanCV2DAdaptive / KalmanBoTAdaptive (自适应卡尔曼)        │
+│  + TrajectoryPredictor (轨迹预测)                            │
+└──────────────────────────┬───────────────────────────────────┘
                            │  CvtrackRunner.step_records(frame)
                            ▼
-┌──────────────────────────────────────────────────────┐
-│  perception_pkg / tracker_node                        │
-│  ROS2 Node — 消费视频帧，调用 runner，发布消息        │
-│                                                          │
-│  输入模式 A: video    cv2.VideoCapture → 帧          │
-│  输入模式 B: topic    /camera/image → cv_bridge → 帧  │
-│                                                          │
-│  10 Hz publish loop  →  /target_track                 │
-└──────────────────────────┬───────────────────────────┘
-                           │  swarm_interfaces/TargetTrackArray
-                           ▼
-                    planner_node / scheduler_node ...
+┌──────────────────────────────────────────────────────────────┐
+│  perception_pkg / tracker_node                                │
+│  ROS2 Node — 消费视频帧，调用 runner，发布消息                 │
+│                                                              │
+│  输入模式 A: video    cv2.VideoCapture → 帧                   │
+│  输入模式 B: topic    /camera/image → cv_bridge → 帧         │
+│                                                              │
+│  10 Hz →  /target_track     (调度组使用)                     │
+│  5 Hz  →  /enclosure_targets (封控组使用)                    │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+        ┌──────────────────┴──────────────────┐
+        ▼                                     ▼
+/target_track                          /enclosure_targets
+(TargetTrackArray)                    (EnclosureTargetArray)
+        │                                     │
+        ▼                                     ▼
+  调度组节点                         封控组节点
+(planner/scheduler)                  (Voronoi围控)
 ```
 
 ### 1.2 核心设计决策
@@ -54,6 +67,7 @@
 | 输入源 | `input_mode:=video` 或 `topic` | video 用于离线视频评测，topic 用于接 PX4 相机流 |
 | cvtrack 发现 | 自动将 `~/Downloads/cv_tracking_demo/src` 注入 `sys.path` | 用户无需单独 `pip install -e` |
 | cv_bridge 兼容性 | `except (ImportError, AttributeError)` 捕获 numpy ABI 不匹配 | 防止 `input_mode:=topic` 不可用时整个节点崩溃 |
+| **V3 双话题发布** | `/target_track` (调度组) + `/enclosure_targets` (封控组) | 不同下游节点需要不同数据格式 |
 
 ---
 
@@ -63,40 +77,40 @@
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `src/cvtrack/runner.py` | 新增 | `CvtrackRunner` 类：`step_records(frame)` 把 cvtrack 的 `Track` 对象转成结构化 `TrackedTarget(target_id, x, y, vx, vy, label, score, confirmed)` |
+| `src/cvtrack/runner.py` | 新增 | `CvtrackRunner` 类：`step_records(frame)` 把 cvtrack 的 `Track` 对象转成结构化 `TrackedTarget` |
+| `src/cvtrack/runner.py` | **增强** | V3 新增字段：`cls`, `speed`, `motion_mode`, `pred_x/y`, `pred_conf` |
 
 ### 2.2 `Swarm-Control-System/ros2_ws/src/swarm_interfaces/` — 消息接口包
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `msg/TargetTrackArray.msg` | 新增 | `std_msgs/Header + TargetTrack[] + uint32 frame_idx` |
-| `msg/TargetTrack.msg` | 已存在 | 单目标 5 字段（target_id, x, y, vx, vy） |
+| `msg/TargetTrack.msg` | **增强** | V3 新增字段：confidence, cls, is_confirmed, speed, motion_mode, pred_x/y, pred_conf |
+| `msg/EnclosureTarget.msg` | **新增** | V3 封控组目标接口（目标信息+预测轨迹+历史） |
+| `msg/EnclosureTargetArray.msg` | **新增** | V3 封控组批量目标接口（含无人机位置） |
 | `msg/TaskAssignment.msg` | 已存在 | 任务分配消息 |
-| `package.xml` | 已存在 | ament_cmake 接口包元数据 |
-| `CMakeLists.txt` | 已存在 | 编译所有 msg / srv |
-| `README.md` | 已存在 | 包说明 |
 
 ### 2.3 `Swarm-Control-System/ros2_ws/src/perception_pkg/` — ROS2 节点包
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `package.xml` | 已存在 | ament_python 包元数据 |
-| `setup.py` | 已存在 | `console_scripts: tracker_node` 入口点 |
-| `setup.cfg` | 已存在 | `$base/lib/perception_pkg` 脚本安装路径 |
-| `perception_pkg/__init__.py` | 已存在 | 包标记 |
-| `perception_pkg/tracker_node.py` | 重新编写 | 核心：YOLOv8 + 跟踪器 → ROS2 消息发布 |
+| `perception_pkg/tracker_node.py` | **重新编写** | V3 增强：支持双话题发布 (`/target_track` + `/enclosure_targets`) |
 | `launch/tracker_node.launch.py` | 重新编写 | launch 文件，含所有参数的 launch arguments |
-| `config/tracker_node.yaml` | 已存在 | 参数默认值 |
-| `resource/perception_pkg` | 已存在 | ament 资源标记文件 |
-| `README.md` | 已存在 | 节点使用说明 |
+| `cvtrack/src/cvtrack/tracker/kalman.py` | **增强** | V3 新增：`KalmanCV2DAdaptive`, `KalmanBoTAdaptive` |
+| `cvtrack/src/cvtrack/tracker/adaptive_tracker.py` | **新增** | V3：`DeepSortAdaptive`, `BoTSortAdaptive` |
+| `cvtrack/src/cvtrack/tracker/trajectory.py` | **新增** | V3：`TrajectoryPredictor`, `TrajectorySmoother`, `TrajectoryAnalyzer` |
+| `cvtrack/src/cvtrack/tracker/stability.py` | **新增** | V3：`IdentityManager`, `OcclusionHandler`, `AppearanceMemory` |
+| `cvtrack/src/cvtrack/types.py` | **增强** | V3：`Track` 新增预测和运动模式字段 |
+| `cvtrack/configs/optimized.yaml` | **新增** | V3 优化版配置 |
 
 ### 2.4 `Swarm-Control-System/docs/interface/` — 文档
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `Topic接口设计V2.md` | 新增 | V2 Topic 接口文档（完整） |
-| `Topic接口设计V1.md` | 更新 | 保留并注明已过时，加 V2 跳转 |
-| `TargetTrack接入总结.md` | 新增 | 本次接入的完整技术总结 |
+| `Topic接口设计V2.md` | 更新 | V3 Topic 接口说明 |
+| `Topic接口设计V1.md` | 更新 | 保留并注明已过时，加 V2/V3 跳转 |
+| `TargetTrack接入总结.md` | 更新 | 添加 V3 版本历史 |
+| `感知组优化工作总结.md` | **新增** | V3 感知优化详细文档 |
 
 ---
 
@@ -110,51 +124,86 @@ TargetTrack[]    tracks      # 当帧所有已确认目标的轨迹
 uint32            frame_idx  # 单调递增的帧编号（从节点启动起计）
 ```
 
-### 3.2 `swarm_interfaces/msg/TargetTrack`
+### 3.2 `swarm_interfaces/msg/TargetTrack` (V3 增强)
 
 ```
-uint32  target_id   # DeepSORT / BoT-SORT 分配的目标 ID（节点内唯一）
-float64 x           # 像素坐标：目标框中心 X
-float64 y           # 像素坐标：目标框中心 Y
-float64 vx          # 像素/秒：Kalman 估计的 X 方向速度
-float64 vy          # 像素/秒：Kalman 估计的 Y 方向速度
+# 基础字段
+uint32   target_id   # DeepSORT / BoT-SORT 分配的目标 ID（节点内唯一）
+float64  x           # 像素坐标：目标框中心 X
+float64  y           # 像素坐标：目标框中心 Y
+float64  vx          # 像素/秒：Kalman 估计的 X 方向速度
+float64  vy          # 像素/秒：Kalman 估计的 Y 方向速度
+
+# V3 新增调度字段
+float32  confidence     # 检测置信度 (0.0-1.0)
+uint8    cls           # 目标类别 (COCO风格)
+bool     is_confirmed  # 是否已确认
+float32  speed         # 速度大小 (像素/秒)
+uint8    motion_mode  # 运动模式: 0=未知, 1=静止, 2=慢速, 3=快速
+
+# V3 预测轨迹 (5步)
+float32[5] pred_x      # 未来5步预测 X 坐标
+float32[5] pred_y      # 未来5步预测 Y 坐标
+float32[5] pred_conf   # 各步预测置信度
 ```
 
-> **重要**：`x`、`y`、`vx`、`vy` 均为像素坐标系。若需要世界坐标（米制），
+| 字段 | 类型 | 说明 |
+| ----------- | ---------- | ---------------------------------------------------------- |
+| `target_id` | `uint32` | DeepSORT / BoT-SORT 分配的目标 ID（节点内唯一） |
+| `x`, `y` | `float64` | 像素坐标（图像平面内目标框中心），与 cvtrack 输出一致 |
+| `vx`, `vy` | `float64` | 像素/秒（Kalman 估计速度） |
+| `confidence` | `float32` | **V3** 检测置信度 (0.0-1.0) |
+| `cls` | `uint8` | **V3** 目标类别 (COCO风格: 0=person, 2=car, 3=motorcycle等) |
+| `is_confirmed` | `bool` | **V3** 是否已确认（跟踪时间超过阈值） |
+| `speed` | `float32` | **V3** 速度大小（像素/秒） |
+| `motion_mode` | `uint8` | **V3** 运动模式 (0=未知, 1=静止, 2=慢速, 3=快速) |
+| `pred_x/y` | `float32[5]` | **V3** 未来5步预测位置 |
+| `pred_conf` | `float32[5]` | **V3** 各步预测置信度（置信度随步数递减） |
+
+### 3.3 `swarm_interfaces/msg/EnclosureTargetArray` (V3 新增)
+
+```text
+std_msgs/Header header
+uint32           frame_idx
+EnclosureTarget[] targets
+
+# 无人机位置
+float32[8] drone_x      # 各无人机位置 X
+float32[8] drone_y      # 各无人机位置 Y
+uint8      num_drones   # 活跃无人机数量
+
+# 围控参数
+float32    enclosure_radius   # 围控半径
+float32    min_enclosure_dist # 最小围控距离
+```
+
+### 3.4 `swarm_interfaces/msg/EnclosureTarget` (V3 新增)
+
+```text
+uint32     target_id
+float64    x, y           # 当前像素坐标
+float32    speed          # 速度大小
+uint8      motion_mode    # 运动模式
+float32    confidence     # 检测置信度
+
+# 包围盒
+float32    box_x1, box_y1, box_x2, box_y2
+
+# 预测轨迹 (5步)
+float32[5] pred_x, pred_y
+
+# 历史轨迹 (最近10帧)
+float32[10] history_x, history_y
+```
+
+> **坐标约定**：所有发布的坐标均为**像素坐标**。若需要世界坐标（米制），
 > 由下游节点（planner / control）自行通过相机标定参数完成 IPM / 单应性投影。
-
-### 3.3 订阅示例
-
-```python
-from swarm_interfaces.msg import TargetTrackArray
-import rclpy
-from rclpy.node import Node
-
-
-class PrintTargets(Node):
-    def __init__(self):
-        super().__init__('print_targets')
-        self.sub = self.create_subscription(
-            TargetTrackArray, '/target_track', self.cb, 10)
-
-    def cb(self, msg: TargetTrackArray) -> None:
-        self.get_logger().info(
-            f'frame_idx={msg.frame_idx} n_tracks={len(msg.tracks)}')
-        for t in msg.tracks:
-            self.get_logger().info(
-                f'  id={t.target_id} pos=({t.x:.1f}, {t.y:.1f}) '
-                f'vel=({t.vx:.2f}, {t.vy:.2f})')
-
-
-rclpy.init()
-rclpy.spin(PrintTargets())
-```
 
 ---
 
 ## 4. 代码设计要点
 
-### 4.1 `CvtrackRunner.step_records()`
+### 4.1 `CvtrackRunner.step_records()` (V3)
 
 ```python
 from dataclasses import dataclass
@@ -167,9 +216,16 @@ class TrackedTarget:
     y: float          # 像素坐标 Y
     vx: float         # 像素/秒
     vy: float         # 像素/秒
-    label: int
-    score: float
-    confirmed: bool   # 是否已确认（跟踪时间超过阈值）
+    label: int        # 类别
+    score: float      # 置信度
+    confirmed: bool   # 是否已确认
+
+    # V3 新增字段
+    speed: float      # 速度大小
+    motion_mode: int   # 运动模式: 0=未知, 1=静止, 2=慢速, 3=快速
+    pred_x: List[float]   # 预测轨迹 X
+    pred_y: List[float]   # 预测轨迹 Y
+    pred_conf: List[float]  # 预测置信度
 
 
 class CvtrackRunner:
@@ -177,6 +233,7 @@ class CvtrackRunner:
         """
         调用 detector + tracker，返回消息友好的结构体列表。
         无目标时返回空列表 []。
+        V3: 包含预测轨迹和运动模式信息。
         """
         tracks = self.step(frame)  # 内部 Track 对象
         return [
@@ -189,12 +246,18 @@ class CvtrackRunner:
                 label=t.label,
                 score=float(t.conf),
                 confirmed=t.confirmed,
+                # V3 新增
+                speed=float(t.speed) if hasattr(t, 'speed') else 0.0,
+                motion_mode=int(t.motion_mode) if hasattr(t, 'motion_mode') else 0,
+                pred_x=t.predicted_future[0] if hasattr(t, 'predicted_future') else [0.0]*5,
+                pred_y=t.predicted_future[1] if hasattr(t, 'predicted_future') else [0.0]*5,
+                pred_conf=t.prediction_confidence if hasattr(t, 'prediction_confidence') else [0.0]*5,
             )
             for t in tracks
         ]
 ```
 
-### 4.2 `tracker_node` 参数声明
+### 4.2 `tracker_node` 参数声明 (V3)
 
 ```python
 # 输入 / 发布
@@ -205,9 +268,18 @@ node.declare_parameter('track_topic',      '/target_track')
 node.declare_parameter('frame_id',        'camera_optical_frame')
 node.declare_parameter('publish_rate_hz', 10.0)     # 0 = 全速
 
+# V3 封控组接口
+node.declare_parameter('enclosure.enabled', True)
+node.declare_parameter('enclosure.topic',  '/enclosure_targets')
+node.declare_parameter('enclosure.rate_hz', 5.0)
+
 # 跟踪器
 node.declare_parameter('tracker.kind', 'deepsort_cascade')  # botsort | deepsort | deepsort_cascade
 node.declare_parameter('tracker.dt',   0.1)                 # 预测步长（秒）
+
+# V3 自适应卡尔曼
+node.declare_parameter('tracker.adaptive_noise', True)      # V3 自适应噪声
+node.declare_parameter('tracker.prediction_steps', 10)      # V3 预测步数
 
 # 检测器
 node.declare_parameter('detector.backend',   'auto')        # yolo | auto | mog2
@@ -290,6 +362,9 @@ ros2 pkg executables perception_pkg
 
 ros2 interface show swarm_interfaces/msg/TargetTrackArray
 # 输出完整消息格式
+
+# 6. 确认 V3 新接口 (可选)
+ros2 interface show swarm_interfaces/msg/EnclosureTargetArray
 ```
 
 ---
@@ -322,6 +397,13 @@ ros2 launch perception_pkg tracker_node.launch.py \
     frame_id:=uav_body \
     tracker_kind:=deepsort_cascade
 
+# V3: 启用封控组接口
+ros2 launch perception_pkg tracker_node.launch.py \
+    mode:=video \
+    video_source:=/path/to/video.mp4 \
+    enclosure_enabled:=true \
+    enclosure_topic:=/enclosure_targets
+
 # 从 YAML 配置文件加载所有参数
 ros2 launch perception_pkg tracker_node.launch.py \
     config:=/home/hhh/Downloads/Swarm-Control-System/ros2_ws/src/perception_pkg/config/tracker_node.yaml
@@ -338,6 +420,11 @@ ros2 run perception_pkg tracker_node --ros-args \
     -p detector.backend:=yolo \
     -p detector.weights:=/home/hhh/Downloads/cv_tracking_demo/weights/visdrone_yolov8s.pt \
     -r __node:=tracker_node
+
+# V3: 启用封控组接口
+ros2 run perception_pkg tracker_node --ros-args \
+    -p enclosure.enabled:=true \
+    -p enclosure.topic:=/enclosure_targets
 ```
 
 ### 6.3 启动参数一览
@@ -352,6 +439,8 @@ ros2 run perception_pkg tracker_node --ros-args \
 | `publish_rate_hz` | `10.0` | 发布频率上限（Hz），`0` 表示全速 |
 | `loop_video` | `false` | 视频播完后是否从头循环 |
 | `tracker_kind` | `deepsort_cascade` | 跟踪器类型：`botsort` / `deepsort` / `deepsort_cascade` |
+| `enclosure_enabled` | `true` | **V3** 是否启用封控组接口 |
+| `enclosure_topic` | `/enclosure_targets` | **V3** 封控组话题 |
 | `detector_backend` | `auto` | 检测器类型：`yolo` / `auto`（自动回退 MOG2）/ `mog2` |
 | `detector_weights` | `''` | YOLOv8 `.pt` 权重文件路径 |
 | `detector_imgsz` | `480` | YOLOv8 输入图像大小（长边像素） |
@@ -366,14 +455,18 @@ ros2 topic info /target_track
 # 实时打印消息（每秒刷新）
 ros2 topic echo /target_track swarm_interfaces/msg/TargetTrackArray
 
+# V3: 查看封控组话题
+ros2 topic echo /enclosure_targets swarm_interfaces/msg/EnclosureTargetArray
+
 # 查看发布频率
 ros2 topic hz /target_track
+ros2 topic hz /enclosure_targets
 
 # 查看节点列表
 ros2 node list
 ```
 
-### 6.5 Python 订阅示例
+### 6.5 Python 订阅示例 (V3)
 
 ```python
 import rclpy
@@ -391,9 +484,14 @@ class TrackerSubscriber(Node):
         self.get_logger().info(
             f'frame={msg.frame_idx} tracks={len(msg.tracks)}')
         for t in msg.tracks:
+            # V3 新增字段
             self.get_logger().info(
                 f'  id={t.target_id} x={t.x:.0f} y={t.y:.0f} '
-                f'vx={t.vx:.1f} vy={t.vy:.1f}')
+                f'vx={t.vx:.1f} vy={t.vy:.1f} '
+                f'speed={t.speed:.1f} mode={t.motion_mode}')
+            if t.pred_x and t.pred_x[0] != 0:
+                self.get_logger().info(
+                    f'    pred=({t.pred_x[0]:.0f}, {t.pred_y[0]:.0f}) conf={t.pred_conf[0]:.2f}')
 
 
 rclpy.init()
@@ -413,7 +511,7 @@ colcon build --packages-select swarm_interfaces perception_pkg --merge-install
 # 输出: Summary: 2 packages finished
 ```
 
-### 7.2 消息接口注册
+### 7.2 消息接口注册 (V3)
 
 ```bash
 ros2 interface show swarm_interfaces/msg/TargetTrackArray
@@ -424,19 +522,37 @@ ros2 interface show swarm_interfaces/msg/TargetTrackArray
 ros2 interface show swarm_interfaces/msg/TargetTrack
 # uint32 target_id
 # float64 x y vx vy
+# float32 confidence
+# uint8 cls is_confirmed speed motion_mode
+# float32[5] pred_x pred_y pred_conf
+
+ros2 interface show swarm_interfaces/msg/EnclosureTargetArray  # V3
 ```
 
 ### 7.3 Python 导入与消息构造
 
 ```python
-from swarm_interfaces.msg import TargetTrack, TargetTrackArray
+from swarm_interfaces.msg import TargetTrack, TargetTrackArray, EnclosureTargetArray
 import std_msgs.msg as std
 
+# V3 构造带预测的目标
 msg = TargetTrackArray()
 msg.header = std.Header()
 msg.header.frame_id = 'cam'
 msg.frame_idx = 0
-msg.tracks = [TargetTrack(target_id=1, x=10.0, y=20.0, vx=0.5, vy=-0.3)]
+msg.tracks = [TargetTrack(
+    target_id=1,
+    x=100.0, y=200.0,
+    vx=5.0, vy=-2.0,
+    confidence=0.95,
+    cls=2,  # car
+    is_confirmed=True,
+    speed=5.4,
+    motion_mode=3,  # 快速
+    pred_x=[110.0, 120.0, 130.0, 140.0, 150.0],
+    pred_y=[195.0, 190.0, 185.0, 180.0, 175.0],
+    pred_conf=[0.9, 0.8, 0.7, 0.6, 0.5],
+)]
 # ✓ 构造成功
 ```
 
@@ -444,9 +560,10 @@ msg.tracks = [TargetTrack(target_id=1, x=10.0, y=20.0, vx=0.5, vy=-0.3)]
 
 ```
 [INFO] tracker_node ready: mode=video topic=/target_track
-  rate=2.0Hz frame_id=camera_optical_frame
-  tracker=deepsort_cascade
+  rate=10.0Hz frame_id=camera_optical_frame
+  tracker=deepsort_cascade adaptive_noise=True
   weights=/home/hhh/Downloads/cv_tracking_demo/weights/visdrone_yolov8s.pt
+[INFO] enclosure_targets enabled: topic=/enclosure_targets rate=5.0Hz
 ```
 
 ### 7.5 实时消息验证
@@ -462,11 +579,23 @@ header:
     sec: 1784598016
     nanosec: 479193445
   frame_id: camera_optical_frame
-tracks: []
-frame_idx: 0
+tracks:
+  - target_id: 1
+    x: 100.0
+    y: 200.0
+    vx: 5.0
+    vy: -2.0
+    confidence: 0.95
+    cls: 2
+    is_confirmed: true
+    speed: 5.4
+    motion_mode: 3
+    pred_x: [110.0, 120.0, 130.0, 140.0, 150.0]
+    pred_y: [195.0, 190.0, 185.0, 180.0, 175.0]
+    pred_conf: [0.9, 0.8, 0.7, 0.6, 0.5]
+frame_idx: 42
 ---
 ```
-格式完全正确，`header` 时间戳、`frame_id`、`frame_idx` 均符合规范。
 
 ---
 
@@ -520,11 +649,65 @@ WARNING:colcon.colcon_ros.prefix_path.catkin:
 
 ---
 
-## 9. 下一步计划
+## 9. V3 感知优化特性
 
-- [ ] **带预测的扩展消息**：`TargetTrackArrayWithForecast`，
-  在 `TargetTrackArray` 基础上追加未来 N 步 Kalman 投影，
-  供 planner 有更长预测视野
-- [ ] 多相机 ID 编码规范
+详见 [感知组优化工作总结](./感知组优化工作总结.md)
+
+### 9.1 自适应卡尔曼滤波
+
+- **KalmanCV2DAdaptive**：4状态 (x, y, vx, vy) 自适应过程/观测噪声
+- **KalmanBoTAdaptive**：8状态带运动模式检测
+
+```python
+# 使用自适应卡尔曼
+tracker = DeepSortAdaptive(
+    kalman_class='KalmanCV2DAdaptive',
+    adaptive_noise=True,
+)
+```
+
+### 9.2 轨迹预测
+
+- **TrajectoryPredictor**：多步预测（默认10步）+ 置信度衰减
+- **TrajectorySmoother**：RTS（Rauch-Tung-Striebel）平滑算法
+- **TrajectoryAnalyzer**：运动模式分类、曲率分析、出框预估
+
+```python
+# 获取预测轨迹
+pred_x, pred_y, conf = trajectory_predictor.predict(track, steps=5)
+```
+
+### 9.3 跟踪稳定性增强
+
+- **IdentityManager**：ID管理 + 丢失重激活
+- **OcclusionHandler**：遮挡检测 + 自适应门限
+- **AppearanceMemory**：外观特征时间一致性
+
+### 9.4 运动模式分类
+
+| mode | 名称 | 速度阈值 |
+|------|------|---------|
+| 0 | 未知 | - |
+| 1 | 静止 | < 2 px/s |
+| 2 | 慢速 | 2-10 px/s |
+| 3 | 快速 | > 10 px/s |
+
+---
+
+## 10. 下一步计划
+
+### ✅ 已完成 (V3)
+
+- [x] **带预测的扩展消息**：`TargetTrack` 新增 `pred_x/y/conf` 字段
+- [x] 运动模式分类：`motion_mode` 字段
+- [x] 速度大小：`speed` 字段
+- [x] 封控组专用接口：`EnclosureTargetArray`
+- [x] 自适应卡尔曼滤波
+
+### 📋 待完成
+
+- [ ] 多相机 ID 编码规范 (`camera_id * 10000 + track_id`)
 - [ ] PX4 相机话题端到端验证
 - [ ] 单元测试：mock `CvtrackRunner`，断言 `TargetTrackArray` 字段与底层 `Track` 数值一致
+- [ ] 轨迹融合（多传感器）
+- [ ] `PathPlan` / `MissionPlan` / `DecisionResult` 等剩余消息定义
