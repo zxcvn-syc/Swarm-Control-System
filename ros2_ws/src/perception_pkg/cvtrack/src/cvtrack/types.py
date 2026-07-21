@@ -82,6 +82,8 @@ class Track:
     Works with both 4-state (cx, cy, vx, vy) and 8-state BoT-SORT KF
     (cx, cy, w, h, vx, vy, vw, vh). The KF dimensionality is detected via
     `getattr(kf, "STATE_DIM", 4)`.
+
+    Enhanced with trajectory prediction capabilities.
     """
 
     track_id: int
@@ -108,6 +110,12 @@ class Track:
     # Running mean of the ReID embedding for this track (set by Gallery).
     # ``None`` means "no embeddings yet" and disables ReID scoring for the track.
     embedding_mean: Optional[np.ndarray] = None
+
+    # Enhanced trajectory prediction fields
+    predicted_future: List[Tuple[float, float, float, float]] = field(default_factory=list)
+    prediction_confidence: float = 1.0
+    motion_mode: str = "unknown"  # "stationary", "slow", "fast"
+    is_anomaly: bool = False
 
     @property
     def pos(self) -> Tuple[float, float]:
@@ -168,3 +176,90 @@ class Track:
             dy = box.cy - prev_pos[1]
             d2 = dx * dx + dy * dy
             self.motion_score = 0.7 * self.motion_score + 0.3 * d2
+
+    def update_trajectory_prediction(
+        self,
+        kf: Any,
+        n_steps: int = 10,
+        min_confidence: float = 0.1,
+        confidence_decay: float = 0.9,
+    ) -> None:
+        """Update predicted future trajectory using Kalman filter.
+
+        Args:
+            kf: Kalman filter instance (must have predict_n_steps_with_uncertainty)
+            n_steps: Number of future steps to predict
+            min_confidence: Minimum confidence threshold
+            confidence_decay: Confidence decay factor per step
+        """
+        self.predicted_future = []
+
+        if n_steps <= 0:
+            return
+
+        cur_conf = 1.0
+        mean = np.array(self.mean, dtype=np.float64, copy=True)
+        cov = np.array(self.cov, dtype=np.float64, copy=True)
+
+        for _ in range(n_steps):
+            if cur_conf < min_confidence:
+                break
+
+            mean, cov = kf.predict(mean, cov)
+            pred_x = float(mean[0])
+            pred_y = float(mean[1])
+
+            if len(mean) >= 4:
+                std_x = float(np.sqrt(max(cov[0, 0], 1e-6)))
+                std_y = float(np.sqrt(max(cov[1, 1], 1e-6)))
+            else:
+                std_x, std_y = 5.0, 5.0
+
+            self.predicted_future.append((pred_x, pred_y, std_x, std_y))
+            cur_conf *= confidence_decay
+
+        self.prediction_confidence = cur_conf
+
+    def detect_motion_mode(self, speed_threshold_slow: float = 2.0,
+                          speed_threshold_fast: float = 20.0) -> str:
+        """Detect current motion mode based on velocity.
+
+        Args:
+            speed_threshold_slow: Speed below which is considered stationary
+            speed_threshold_fast: Speed above which is considered fast
+
+        Returns:
+            Motion mode: "stationary", "slow", or "fast"
+        """
+        if len(self.mean) >= 4:
+            vx, vy = self.mean[2], self.mean[3]
+        else:
+            vx, vy = self.mean[2], self.mean[3]
+
+        speed = np.sqrt(vx * vx + vy * vy)
+
+        if speed < speed_threshold_slow:
+            self.motion_mode = "stationary"
+        elif speed > speed_threshold_fast:
+            self.motion_mode = "fast"
+        else:
+            self.motion_mode = "slow"
+
+        return self.motion_mode
+
+    def get_speed(self) -> float:
+        """Get current speed (velocity magnitude)."""
+        if len(self.mean) >= 4:
+            vx, vy = self.mean[2], self.mean[3]
+        else:
+            vx, vy = self.mean[2], self.mean[3]
+        return float(np.sqrt(vx * vx + vy * vy))
+
+    def get_position_uncertainty(self) -> Tuple[float, float]:
+        """Get position uncertainty (std_x, std_y) from covariance matrix."""
+        if len(self.cov) >= 2:
+            std_x = float(np.sqrt(max(self.cov[0, 0], 1e-6)))
+            std_y = float(np.sqrt(max(self.cov[1, 1], 1e-6)))
+        else:
+            std_x, std_y = 10.0, 10.0
+        return std_x, std_y

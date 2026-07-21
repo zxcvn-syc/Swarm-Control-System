@@ -100,9 +100,15 @@ def _report_cv_bridge_state() -> None:
 from std_msgs.msg import Header
 
 from swarm_interfaces.msg import TargetTrack, TargetTrackArray
+from swarm_interfaces.msg import EnclosureTarget, EnclosureTargetArray
 
 
 log = logging.getLogger(__name__)
+
+
+# Type hint for the message class used in _make_target_track
+TargetTrack = TargetTrack
+EnclosureTarget = EnclosureTarget
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +159,12 @@ def _declare_parameters(node: Node) -> None:
     # Appearance (only used by deepsort_cascade)
     node.declare_parameter('appearance.enabled', False)
     node.declare_parameter('appearance.weights', '')
+
+    # Enclosure group integration
+    node.declare_parameter('enclosure.enabled', False)
+    node.declare_parameter('enclosure.topic', '/enclosure_targets')
+    node.declare_parameter('enclosure.publish_rate_hz', 5.0)
+    node.declare_parameter('enclosure.drone_positions', [])
 
 
 def _build_runner_overrides(node: Node) -> dict:
@@ -241,6 +253,22 @@ class TrackerNode(Node):
             TargetTrackArray, self._track_topic,
             QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
         )
+
+        # Enclosure group publisher
+        self._enclosure_enabled = bool(self.get_parameter('enclosure.enabled').value)
+        self._enclosure_publisher = None
+        if self._enclosure_enabled:
+            enclosure_topic = self.get_parameter('enclosure.topic').value
+            self._enclosure_publisher = self.create_publisher(
+                EnclosureTargetArray, enclosure_topic,
+                QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE),
+            )
+            enclosure_rate = float(self.get_parameter('enclosure.publish_rate_hz').value)
+            if enclosure_rate > 0:
+                self._enclosure_timer = self.create_timer(
+                    1.0 / enclosure_rate, self._publish_enclosure
+                )
+            self.get_logger().info(f'Enclosure publisher enabled on {enclosure_topic}')
 
         # Input wiring -----------------------------------------------------
         self._video_cap = None
@@ -387,19 +415,126 @@ class TrackerNode(Node):
         msg.frame_idx = self._frame_seq
         self._frame_seq += 1
         msg.tracks = [
-            TargetTrack(
-                target_id=int(rec.target_id),
-                x=float(rec.x),
-                y=float(rec.y),
-                vx=float(rec.vx),
-                vy=float(rec.vy),
-            )
+            self._make_target_track(rec)
             for rec in records
         ]
         self._publisher.publish(msg)
         self.get_logger().debug(
             f'published frame_idx={msg.frame_idx} n_tracks={len(msg.tracks)}'
         )
+
+    def _make_target_track(self, rec) -> "TargetTrack":
+        """Construct a TargetTrack message from a track record."""
+        msg = TargetTrack()
+        msg.target_id = int(rec.target_id)
+        msg.x = float(rec.x)
+        msg.y = float(rec.y)
+        msg.vx = float(rec.vx)
+        msg.vy = float(rec.vy)
+
+        # Enhanced fields with safe defaults
+        msg.confidence = float(getattr(rec, 'confidence', 1.0))
+        msg.cls = int(getattr(rec, 'cls', 0))
+        msg.is_confirmed = bool(getattr(rec, 'is_confirmed', True))
+        msg.speed = float(getattr(rec, 'speed', 0.0))
+        msg.motion_mode = int(getattr(rec, 'motion_mode', 0))
+
+        # Prediction arrays (5 steps ahead)
+        pred_x = getattr(rec, 'pred_x', [0.0] * 5)
+        pred_y = getattr(rec, 'pred_y', [0.0] * 5)
+        pred_conf = getattr(rec, 'pred_conf', [1.0] * 5)
+
+        if len(pred_x) < 5:
+            pred_x = list(pred_x) + [0.0] * (5 - len(pred_x))
+        if len(pred_y) < 5:
+            pred_y = list(pred_y) + [0.0] * (5 - len(pred_y))
+        if len(pred_conf) < 5:
+            pred_conf = list(pred_conf) + [0.0] * (5 - len(pred_conf))
+
+        msg.pred_x = pred_x[:5]
+        msg.pred_y = pred_y[:5]
+        msg.pred_conf = pred_conf[:5]
+
+        return msg
+
+    def _publish_enclosure(self) -> None:
+        """Publish targets for enclosure control group."""
+        if not self._enclosure_enabled or self._enclosure_publisher is None:
+            return
+
+        latest = self._consume_latest_frame()
+        if latest is None:
+            return
+
+        try:
+            records = self._runner.step_records(latest[0])
+        except Exception:
+            return
+
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = self._frame_id
+
+        msg = EnclosureTargetArray()
+        msg.header = header
+        msg.frame_idx = self._frame_seq
+
+        msg.targets = [
+            self._make_enclosure_target(rec)
+            for rec in records
+        ]
+
+        # Get drone positions from parameters
+        drone_positions = self.get_parameter('enclosure.drone_positions').value
+        if drone_positions:
+            drone_x = [float(p.get('x', 0.0)) for p in drone_positions[:8]]
+            drone_y = [float(p.get('y', 0.0)) for p in drone_positions[:8]]
+            while len(drone_x) < 8:
+                drone_x.append(0.0)
+                drone_y.append(0.0)
+            msg.drone_x = drone_x[:8]
+            msg.drone_y = drone_y[:8]
+            msg.num_drones = uint8(min(len(drone_positions), 8))
+        else:
+            msg.drone_x = [0.0] * 8
+            msg.drone_y = [0.0] * 8
+            msg.num_drones = 0
+
+        msg.enclosure_radius = 50.0  # Default, can be made configurable
+        msg.min_enclosure_dist = 20.0
+
+        self._enclosure_publisher.publish(msg)
+
+    def _make_enclosure_target(self, rec) -> "EnclosureTarget":
+        """Create an EnclosureTarget message from a track record."""
+        msg = EnclosureTarget()
+        msg.target_id = rec.target_id
+        msg.x = rec.x
+        msg.y = rec.y
+        msg.speed = getattr(rec, 'speed', 0.0)
+        msg.motion_mode = getattr(rec, 'motion_mode', 0)
+        msg.confidence = getattr(rec, 'confidence', 1.0)
+
+        # Bounding box
+        if hasattr(rec, 'box'):
+            msg.box_x1 = float(rec.box.x1) if hasattr(rec.box, 'x1') else 0.0
+            msg.box_y1 = float(rec.box.y1) if hasattr(rec.box, 'y1') else 0.0
+            msg.box_x2 = float(rec.box.x2) if hasattr(rec.box, 'x2') else 0.0
+            msg.box_y2 = float(rec.box.y2) if hasattr(rec.box, 'y2') else 0.0
+        else:
+            msg.box_x1 = msg.box_y1 = msg.box_x2 = msg.box_y2 = 0.0
+
+        # Predictions
+        pred_x = getattr(rec, 'pred_x', [0.0] * 5)
+        pred_y = getattr(rec, 'pred_y', [0.0] * 5)
+        msg.pred_x = pred_x[:5]
+        msg.pred_y = pred_y[:5]
+
+        # History (placeholder, would need track trail data)
+        msg.history_x = [rec.x] * 10
+        msg.history_y = [rec.y] * 10
+
+        return msg
 
     # ------------------------------------------------------------------
     # Lifecycle

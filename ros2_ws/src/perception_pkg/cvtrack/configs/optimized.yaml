@@ -1,0 +1,82 @@
+# Optimized tracker configuration with enhanced Kalman filtering
+# This configuration enables adaptive noise and trajectory prediction
+
+detector:
+  weights: yolov8s.pt
+  imgsz: 320
+  conf: 0.15
+  classes: [0, 2, 5, 7, 16]
+  min_box_area: 100
+  min_conf: 0.0
+  nms_iou: 0.50
+
+tracker:
+  kind: botsort_adaptive  # Uses KalmanBoTAdaptive with motion-adaptive noise
+  cmc: true
+  cmc_method: sparse_of  # one of: sparse_of, ecc
+  high_conf: 0.35
+  new_track_conf: 0.20
+  iou_thresh: 0.30
+  lost_relink_frames: 30
+  max_age: 15
+  n_init: 3
+  stationary_prune: true
+  # Kalman filter optimization parameters
+  kalman:
+    # For botsort (8-state): KalmanBoTAdaptive
+    dt: 0.033  # ~30 FPS
+    sigma_p: 0.05      # position noise factor
+    sigma_v: 0.00625   # velocity noise factor
+    sigma_m: 0.05       # measurement noise factor
+    acceleration_gain: 0.5
+    motion_threshold_slow: 2.0
+    motion_threshold_fast: 20.0
+  # For deepsort_cascade (4-state): KalmanCV2DAdaptive
+  deepsort_kalman:
+    dt: 0.033
+    base_std_pos: 0.05
+    base_std_vel: 0.00625
+    base_std_meas: 0.05
+    motion_adapt_gain: 0.3
+    velocity_limit: 100.0
+    innovation_gate: 5.991
+
+appearance:
+  enabled: false
+  backend: osnet
+  model: osnet_x1_0
+  weights: osnet_x1_0_msmt17.pt
+  gallery_size: 50
+  ema_alpha: 0.05
+  match_weight: 0.7
+  min_box_side: 8
+
+# Trajectory prediction settings
+trajectory_prediction:
+  enabled: true
+  prediction_steps: 10      # Number of future steps to predict
+  confidence_decay: 0.9     # Confidence decay per step
+  min_confidence: 0.1       # Stop predicting below this confidence
+  smoothing_window: 5       # Window for trajectory smoothing
+
+viz:
+  save_trail: false
+  fps_overlay: true
+  show_prediction: true     # Visualize predicted trajectory
+  prediction_alpha: 0.6      # Transparency of predicted path
+
+output:
+  write_video: true
+  write_csv: true
+  write_smoothed_csv: false
+  write_reid_json: false
+  write_trails_json: false
+  # Enhanced output with trajectory predictions
+  include_predictions: true
+
+pipeline:
+  max_frames: 0
+  max_seconds: 0.0
+  start_frame: 0
+  include_tentative: false
+  id_explosion_warn: 0.5

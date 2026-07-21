@@ -1,5 +1,9 @@
 """Tracker package: BoT-SORT, DeepSORT-lite, DeepSORT-cascade, CMC, smoother, KF."""
 
+from cvtrack.tracker.adaptive_tracker import (
+    BoTSortAdaptive,
+    DeepSortAdaptive,
+)
 from cvtrack.tracker.botsort import BoTSortTracker
 from cvtrack.tracker.cmc import (
     CameraMotionCompensator,
@@ -21,7 +25,9 @@ from cvtrack.tracker.kalman import (
     BOTSORT_NEW_TRACK_CONF,
     CHI2_THRESHOLD,
     KalmanBoT,
+    KalmanBoTAdaptive,
     KalmanCV2D,
+    KalmanCV2DAdaptive,
     predict_n_steps,
     predict_n_steps_with_covariance,
 )
@@ -42,6 +48,7 @@ __all__ = [
     "BOTSORT_IOU_THRESH",
     "BOTSORT_LOST_RELINK_FRAMES",
     "BOTSORT_NEW_TRACK_CONF",
+    "BoTSortAdaptive",
     "BoTSortTracker",
     "CHI2_INV_95_2DOF",
     "CHI2_INV_95_4DOF",
@@ -49,11 +56,14 @@ __all__ = [
     "CameraMotionCompensator",
     "DEEPSORT_APPEARANCE_GATE",
     "DEEPSORT_MAHALANOBIS_GATE",
+    "DeepSortAdaptive",
     "DeepSortCascade",
     "DeepSortLite",
     "EccCompensator",
     "KalmanBoT",
+    "KalmanBoTAdaptive",
     "KalmanCV2D",
+    "KalmanCV2DAdaptive",
     "SparseOFCompensator",
     "affine_is_pure_camera_pan",
     "class_aware_iou_distance",
