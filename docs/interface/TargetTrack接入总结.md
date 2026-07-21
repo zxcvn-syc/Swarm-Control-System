@@ -4,6 +4,18 @@
 > ROS2 `TargetTrackArray` 消息发出来。涵盖本仓库
 > (`Swarm-Control-System/`) 与同目录的 `cv_tracking_demo/` 两个项目。
 
+---
+
+## 📋 版本历史
+
+| 版本 | 日期 | 主要内容 |
+|------|------|---------|
+| V1 | 早期 | 基础 TargetTrackArray 接入 |
+| V2 | - | 消息格式完善 |
+| **V3 (当前)** | 2026-07-20 | 感知组优化：卡尔曼滤波增强、轨迹预测、封控组接口 |
+
+---
+
 ## 改动文件总览
 
 ### `cv_tracking_demo/` (感知实现)
@@ -11,9 +23,11 @@
 | 文件 | 类型 | 说明 |
 |------|------|------|
 | `src/cvtrack/runner.py` | 新增 | `CvtrackRunner`：把 detector + tracker 封装成单帧接口 `step(frame) -> List[Track]`，外加 `step_records(frame) -> List[TrackedTarget]`（消息友好型）。提供 `from_yaml(preset)` / `from_overrides(...)` 工厂。 |
+| `src/cvtrack/runner.py` | **增强** | `TrackedTarget` 新增 `cls`, `speed`, `motion_mode`, `pred_x/y`, `pred_conf` 字段 |
 
 ### `Swarm-Control-System/` (消息 + ROS2 节点)
 
+#### V2 原有文件
 | 文件 | 类型 | 说明 |
 |------|------|------|
 | `ros2_ws/src/swarm_interfaces/msg/TargetTrackArray.msg` | 新增 | `std_msgs/Header header`、`TargetTrack[] tracks`、`uint32 frame_idx` |
@@ -29,36 +43,79 @@
 | `ros2_ws/src/perception_pkg/config/tracker_node.yaml` | 新增 | 参数默认值 |
 | `ros2_ws/src/perception_pkg/resource/perception_pkg` | 新增 | ament 资源标记文件 |
 | `ros2_ws/src/perception_pkg/README.md` | 替换 | 节点说明 + 启动示例 |
-| `docs/interface/Topic接口设计V2.md` | 新增 | V2 Topic 接口文档 |
-| `docs/interface/Topic接口设计V1.md` | 更新 | 加 V2 跳转与说明 |
-| `README.md` | 更新 | 第二阶段进度标记更新 |
+
+#### V3 新增/增强文件 (感知组优化)
+
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `ros2_ws/src/swarm_interfaces/msg/TargetTrack.msg` | **增强** | 新增 `confidence`, `cls`, `is_confirmed`, `speed`, `motion_mode`, `pred_x/y`, `pred_conf` 字段 |
+| `ros2_ws/src/swarm_interfaces/msg/EnclosureTarget.msg` | **新增** | 封控组目标接口（目标信息+预测轨迹+历史） |
+| `ros2_ws/src/swarm_interfaces/msg/EnclosureTargetArray.msg` | **新增** | 封控组批量目标接口（含无人机位置） |
+| `ros2_ws/src/perception_pkg/perception_pkg/tracker_node.py` | **增强** | 支持双话题发布 (`/target_track` + `/enclosure_targets`) |
+| `ros2_ws/src/perception_pkg/cvtrack/src/cvtrack/tracker/kalman.py` | **增强** | 新增 `KalmanCV2DAdaptive`, `KalmanBoTAdaptive` |
+| `ros2_ws/src/perception_pkg/cvtrack/src/cvtrack/tracker/adaptive_tracker.py` | **新增** | `DeepSortAdaptive`, `BoTSortAdaptive` 跟踪器 |
+| `ros2_ws/src/perception_pkg/cvtrack/src/cvtrack/tracker/trajectory.py` | **新增** | `TrajectoryPredictor`, `TrajectorySmoother`, `TrajectoryAnalyzer` |
+| `ros2_ws/src/perception_pkg/cvtrack/src/cvtrack/tracker/stability.py` | **新增** | `IdentityManager`, `OcclusionHandler`, `AppearanceMemory` |
+| `ros2_ws/src/perception_pkg/cvtrack/src/cvtrack/types.py` | **增强** | `Track` 新增 `predicted_future`, `prediction_confidence`, `motion_mode` 字段 |
+| `ros2_ws/src/perception_pkg/cvtrack/configs/optimized.yaml` | **新增** | 优化版配置 |
+
+#### 文档
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `docs/interface/Topic接口设计V2.md` | 更新 | V3 接口说明 |
+| `docs/interface/Topic接口设计V1.md` | 更新 | V2 跳转与说明 |
+| `docs/interface/感知组优化工作总结.md` | **新增** | 感知组优化详细文档 |
+| `README.md` | 更新 | 进度标记更新 |
 
 ## 数据流
 
 ```
-                ┌──────────────────────────────┐
-                │  cv_tracking_demo / cvtrack  │
-                │  (YOLOv8 + DeepSORT/BoT-SORT)│
-                └────────────┬─────────────────┘
-                             │ step_records(frame)
-                             ▼
-   ┌────────────────────────────────────────────────┐
-   │  perception_pkg / tracker_node                 │
-   │  - input_mode=video  ─► cv2.VideoCapture       │
-   │  - input_mode=topic  ─► sensor_msgs/Image      │
-   │                       (cv_bridge → bgr8)      │
-   │  - 10 Hz publish loop on /target_track         │
-   └────────────────────────────┬───────────────────┘
-                                │  TargetTrackArray
-                                │  ┌─────────────────────────┐
-                                │  │ std_msgs/Header         │
-                                │  │ TargetTrack[] tracks    │
-                                │  │   target_id / x / y     │
-                                │  │   / vx / vy             │
-                                │  │ uint32 frame_idx        │
-                                │  └─────────────────────────┘
-                                ▼
-                       planner_node / scheduler_node ...
+                ┌────────────────────────────────────────────┐
+                │  cv_tracking_demo / cvtrack                │
+                │  (YOLOv8 + DeepSORT/BoT-SORT)            │
+                │  + KalmanCV2DAdaptive / KalmanBoTAdaptive   │
+                └──────────────────────┬───────────────────┘
+                                        │ step_records(frame)
+                                        ▼
+   ┌───────────────────────────────────────────────────────────────────┐
+   │  perception_pkg / tracker_node                                      │
+   │  - input_mode=video  ─► cv2.VideoCapture                         │
+   │  - input_mode=topic  ─► sensor_msgs/Image                       │
+   │                         (cv_bridge → bgr8)                       │
+   │  - 10 Hz publish on /target_track (调度组)                       │
+   │  - 5 Hz publish on /enclosure_targets (封控组)                   │
+   └────────────────────────────┬──────────────────────────────────────┘
+                                │
+            ┌───────────────────┴───────────────────┐
+            ▼  /target_track                        ▼  /enclosure_targets
+    ┌───────────────┐                    ┌─────────────────────┐
+    │TargetTrackArray│                   │ EnclosureTargetArray │
+    │ (调度组使用)   │                    │ (封控组使用)          │
+    └───────────────┘                    └─────────────────────┘
+```
+
+### V3 增强数据流
+
+```
+                ┌────────────────────────────────────────────┐
+                │  cvtrack (自适应卡尔曼滤波)                   │
+                │  - KalmanCV2DAdaptive (DeepSORT)            │
+                │  - KalmanBoTAdaptive (BoT-SORT)             │
+                │  - TrajectoryPredictor (多步预测)            │
+                └─────────────────────┬──────────────────────┘
+                                      │
+                ┌─────────────────────┴─────────────────────┐
+                │  Track 增强字段                               │
+                │  - predicted_future: 预测轨迹               │
+                │  - motion_mode: 运动模式                    │
+                │  - speed: 速度大小                          │
+                └─────────────────────┬─────────────────────┘
+                                      │
+                ┌─────────────────────┴─────────────────────┐
+                │  tracker_node                              │
+                │  - /target_track (调度组)                   │
+                │  - /enclosure_targets (封控组)               │
+                └──────────────────────────────────────────┘
 ```
 
 ## 关键设计决策
@@ -113,11 +170,19 @@ ros2 topic hz    /target_track
 
 ## 后续
 
-* 在 `TargetTrackArray` 之上引入 `TargetTrackArrayWithForecast`
+### ✅ 已完成 (V3)
+
+- [x] 在 `TargetTrackArray` 之上引入 `TargetTrackArrayWithForecast`
   （含 Kalman 未来 N 步投影），让 planner 有更长的预测视野
-* 把 cvtrack 的 ID 通过 `camera_id * 1000 + track_id` 编码，解决多相机场景
+- [x] `TargetTrack` 消息增强：增加 `confidence`, `speed`, `motion_mode`, `pred_x/y`
+- [x] 新增封控组专用接口：`EnclosureTargetArray`
+
+### 📋 待完成
+
+- [ ] 把 cvtrack 的 ID 通过 `camera_id * 1000 + track_id` 编码，解决多相机场景
   下 ID 冲突
-* 接 PX4 相机话题，验证 ROS2 image 端到端链路
-* 单元测试：mock `cvtrack.runner.CvtrackRunner`，断言
+- [ ] 接 PX4 相机话题，验证 ROS2 image 端到端链路
+- [ ] 单元测试：mock `cvtrack.runner.CvtrackRunner`，断言
   `TargetTrackArray` 字段（target_id / x / y / vx / vy / frame_idx）
   与底层 Track 数值一致
+- [ ] 轨迹融合：多传感器轨迹数据融合
