@@ -78,23 +78,24 @@ Swarm-Control-System/
 * [x] ROS2 节点设计（V1）
 * [x] Topic 接口设计（V1）
 
----
+## 第二阶段（已完成 + 进行中）
 
-## 第二阶段（进行中）
-
-* [ ] 建立 ROS2 Workspace
-* [ ] 创建 ROS2 Package
-* [ ] 定义自定义 Message（msg）
-* [ ] 完成节点通信测试
+* [x] 建立 ROS2 Workspace (`ros2_ws/`)
+* [x] 创建 ROS2 Package（`swarm_interfaces`、`perception_pkg`）
+* [x] 定义自定义 Message（`TargetTrack`、`TargetTrackArray`、`TaskAssignment`）
+* [x] **`tracker_node` 上线**：YOLOv8 + DeepSORT / BoT-SORT 输出打包成
+      `TargetTrackArray` 发布到 `/target_track`（详见
+      [`perception_pkg`](../ros2_ws/src/perception_pkg/README.md) 与
+      [`Topic接口设计V2`](../docs/interface/Topic接口设计V2.md)）
+* [ ] 完成节点通信测试（`tracker_node` → `planner_node`）
 * [ ] PX4 环境部署
 * [ ] RflySim 联调
 
----
-
 ## 第三阶段（规划中）
 
-* [ ] YOLO 目标检测接入
-* [ ] DeepSORT 目标跟踪
+* [ ] YOLO 目标检测接入 ✓（`perception_pkg/tracker_node` 已内嵌 YOLOv8）
+* [ ] DeepSORT 目标跟踪 ✓（`perception_pkg/tracker_node` 支持
+      `botsort` / `deepsort` / `deepsort_cascade` 三种跟踪器）
 * [ ] A* / D* Lite 路径规划
 * [ ] 多无人机协同调度
 * [ ] 无人车协同控制

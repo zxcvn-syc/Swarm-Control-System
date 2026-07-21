@@ -1,4 +1,9 @@
-# Topic接口设计 V1.0
+# Topic 接口设计 V1.0
+
+> ⚠️ V1 已过时：`/target_track` 现已升级到 `swarm_interfaces/TargetTrackArray`
+> 单帧多目标模式（每帧一条消息，循环 N 个目标），由 `perception_pkg/tracker_node`
+> 发布。详细字段、字段类型、订阅示例见
+> [`Topic接口设计V2.md`](./Topic接口设计V2.md)。
 
 ## 1. 设计说明
 
@@ -6,11 +11,11 @@
 
 ---
 
-## 2. Topic接口
+## 2. Topic 接口
 
 | Topic名称          | 发布节点           | 订阅节点           | 数据内容    |
 | ---------------- | -------------- | -------------- | ------- |
-| /camera/image    | Camera         | detector_node  | 图像数据    |
+| /camera/image    | Camera         | tracker_node   | 图像数据    |
 | /target_info     | detector_node  | tracker_node   | 目标检测结果  |
 | /target_track    | tracker_node   | planner_node   | 目标轨迹    |
 | /environment_map | Map            | planner_node   | 环境地图    |
@@ -59,4 +64,6 @@
 
 ## 4. 后续计划
 
-第二周根据 ROS2 Workspace 建立实际消息类型（msg），完善 Topic 接口，并完成节点通信验证。
+V2.0 已完成：`/target_track` 切换到 `swarm_interfaces/TargetTrackArray`
+单帧多目标模式。下一步是把 V1 中其余的“规划中”消息（`PathPlan` /
+`MissionPlan` / `DecisionResult`）也补齐，并接入 RflySim 仿真。

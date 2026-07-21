@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>swarm_interfaces</name>
+  <version>0.1.0</version>
+  <description>
+    Common message and service definitions shared across the heterogeneous
+    swarm containment system (perception, planning, scheduling, decision,
+    and control packages).
+  </description>
+
+  <maintainer email="swarm@example.com">Swarm Control System Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+</package>

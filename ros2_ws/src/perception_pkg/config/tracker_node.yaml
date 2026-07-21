@@ -1,0 +1,51 @@
+# tracker_node default parameters
+#
+# These are loaded via `ros2 launch perception_pkg tracker_node.launch.py
+# config:=tracker_node.yaml`.  The same keys are also exposed as ROS2
+# parameters, so individual values can be overridden on the command line
+# without editing the file:
+#
+#   ros2 launch perception_pkg tracker_node.launch.py \
+#       tracker.kind:=botsort detector.imgsz:=320
+#
+# All units are pixel coordinates in the camera image plane; conversion to
+# world frame (if needed) is the responsibility of the planner / control
+# nodes downstream.
+
+/**:
+  ros__parameters:
+
+    input_mode: "video"             # 'video' or 'topic'
+    video_source: ""                # path or webcam index, e.g. "/data/clip.mp4" or "0"
+    image_topic: "/camera/image"    # sensor_msgs/Image input (topic mode)
+    track_topic: "/target_track"    # swarm_interfaces/TargetTrackArray output
+    frame_id: "camera_optical_frame"
+    publish_rate_hz: 10.0           # 0 = as fast as frames arrive
+    loop_video: false               # restart at EOF (video mode only)
+
+    detector:
+      backend: "auto"               # 'yolo' or 'auto' (auto falls back to MOG2)
+      weights: ""                   # absolute path to .pt file; leave empty for MOG2 fallback
+      device: "cpu"                 # 'cpu' or 'cuda:0'
+      imgsz: 480
+      conf: 0.15
+      classes: [0, 1, 2, 3, 4, 5, 7, 8]   # COCO+VisDrone subset (person/vehicle)
+      min_box_area: 200.0
+      min_conf: 0.0
+      nms_iou: 0.5
+
+    tracker:
+      kind: "deepsort_cascade"      # one of: botsort, deepsort, deepsort_cascade
+      dt: 0.05                      # seconds per step (1 / video FPS)
+      max_age: 30
+      n_init: 3
+      iou_thresh: 0.30
+      high_conf: 0.35
+      new_track_conf: 0.20
+      lost_relink_frames: 30
+      stationary_prune: true
+      include_tentative: false
+
+    appearance:
+      enabled: false                # OSNet ReID (deepsort_cascade only)
+      weights: ""
