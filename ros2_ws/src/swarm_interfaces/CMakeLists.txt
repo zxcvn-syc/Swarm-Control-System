@@ -20,6 +20,8 @@ set(SWARM_INTERFACES_MSG_FILES
   "msg/TargetTrack.msg"
   "msg/TargetTrackArray.msg"
   "msg/TaskAssignment.msg"
+  "msg/EnclosureTarget.msg"
+  "msg/EnclosureTargetArray.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
