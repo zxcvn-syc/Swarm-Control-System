@@ -1,0 +1,11 @@
+scheduler_node:
+  ros__parameters:
+    num_drones: 8
+    assignment_strategy: greedy       # greedy | hungarian
+    max_per_drone: 2
+    tick_period: 0.5                  # seconds between assignment ticks
+    log_interval_sec: 5.0             # summary log cadence
+    target_topic: /target_track
+    drone_topic: /drone_states
+    output_topic: /task_assignment
+    default_task_type: track
