@@ -60,7 +60,10 @@ import sys
 import threading
 from typing import Any, Optional
 
+import numpy as np
+
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -97,10 +100,13 @@ def _report_cv_bridge_state() -> None:
         'input_mode:=video still works.', _CV_BRIDGE_ERROR,
     )
 
-from std_msgs.msg import Header
+from std_msgs.msg import Header, UInt8
 
 from swarm_interfaces.msg import TargetTrack, TargetTrackArray
 from swarm_interfaces.msg import EnclosureTarget, EnclosureTargetArray
+from swarm_interfaces.msg import TargetTrackDebug
+
+import diagnostic_msgs.msg as diag_msgs
 
 
 log = logging.getLogger(__name__)
@@ -109,6 +115,74 @@ log = logging.getLogger(__name__)
 # Type hint for the message class used in _make_target_track
 TargetTrack = TargetTrack
 EnclosureTarget = EnclosureTarget
+
+
+# ---------------------------------------------------------------------------
+# Lightweight metrics recorder
+# ---------------------------------------------------------------------------
+
+class _MetricsRecorder:
+    """Accumulate per-period statistics inside tracker_node."""
+
+    def __init__(self, period_ms: int) -> None:
+        self._period_ms = period_ms
+        self._id_switch_count = 0
+        self._miss_count = 0
+        self._total_updates = 0
+        self._convergence_times: list[float] = []
+        self._motion_mode_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+        self._id_pool: set[int] = set()
+        self._seen_ids: set[int] = set()
+
+    def update(self, n_active: int, motion_modes: list[int]) -> None:
+        self._total_updates += 1
+        self._id_pool = {i for i in self._id_pool if n_active > 0}
+        self._id_switch_count = max(0, self._id_switch_count)
+        for mm in motion_modes:
+            self._motion_mode_counts[mm] = self._motion_mode_counts.get(mm, 0) + 1
+
+    def on_track_lost(self) -> None:
+        self._miss_count += 1
+
+    def on_convergence(self, elapsed_ms: float) -> None:
+        self._convergence_times.append(elapsed_ms)
+
+    def snapshot(self) -> diag_msgs.KeyValue:
+        """Return a DiagnosticArray payload."""
+        active = len(self._id_pool)
+        miss_rate = self._miss_count / max(self._total_updates, 1)
+        conv_time = (
+            sum(self._convergence_times) / len(self._convergence_times)
+            if self._convergence_times else 0.0
+        )
+        mm_dist = '; '.join(
+            f'{k}={v}' for k, v in sorted(self._motion_mode_counts.items())
+        )
+        kv = diag_msgs.KeyValue()
+        kv.key = 'perception/active_tracks'
+        kv.value = str(active)
+        return kv
+
+    def diagnostic_array(self) -> diag_msgs.DiagnosticArray:
+        arr = diag_msgs.DiagnosticArray()
+        arr.header.stamp = rclpy.time.Time().to_msg()
+        kv_map = {
+            'perception/id_switch_count': str(self._id_switch_count),
+            'perception/miss_rate': f'{self._miss_count / max(self._total_updates, 1):.4f}',
+            'perception/convergence_time_ms': f'{sum(self._convergence_times) / max(len(self._convergence_times), 1):.1f}',
+            'perception/active_tracks': str(len(self._id_pool)),
+            'perception/motion_mode_distribution': '; '.join(
+                f'{k}={v}' for k, v in sorted(self._motion_mode_counts.items())
+            ),
+        }
+        for key, value in kv_map.items():
+            status = diag_msgs.DiagnosticStatus()
+            status.name = key
+            status.level = diag_msgs.DiagnosticStatus.OK
+            status.message = value
+            status.values = [diag_msgs.KeyValue(key=key, value=value)]
+            arr.status.append(status)
+        return arr
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +202,17 @@ def _declare_parameters(node: Node) -> None:
     node.declare_parameter('frame_id', 'camera_optical_frame')
     node.declare_parameter('publish_rate_hz', 10.0)
     node.declare_parameter('loop_video', False)
+    node.declare_parameter('enable_fusion', False)
+    # ROS2 Humble infers a bare [] override as BYTE_ARRAY.  Dynamic typing
+    # keeps the documented empty-list default valid while accepting the
+    # required string[] once sources are supplied by YAML or the CLI.
+    source_descriptor = ParameterDescriptor(dynamic_typing=True)
+    node.declare_parameter(
+        'fusion_sources', [], descriptor=source_descriptor,
+    )
+    node.declare_parameter(
+        'sources', [], descriptor=source_descriptor,
+    )
 
     # Detector.
     # ``backend`` defaults to ``auto`` so an empty ``weights`` parameter
@@ -156,6 +241,28 @@ def _declare_parameters(node: Node) -> None:
     node.declare_parameter('tracker.stationary_prune', True)
     node.declare_parameter('tracker.include_tentative', False)
 
+    # Adaptive Kalman settings.  Declaring these keys is required before
+    # ROS2 parameter files can override the values passed through in
+    # _build_runner_overrides.
+    node.declare_parameter('tracker.kalman.dt', 0.05)
+    node.declare_parameter('tracker.kalman.sigma_p', 0.05)
+    node.declare_parameter('tracker.kalman.sigma_v', 0.00625)
+    node.declare_parameter('tracker.kalman.sigma_m', 0.05)
+    node.declare_parameter('tracker.kalman.acceleration_gain', 0.5)
+    node.declare_parameter('tracker.kalman.motion_threshold_slow', 2.0)
+    node.declare_parameter('tracker.kalman.motion_threshold_fast', 20.0)
+    node.declare_parameter('tracker.kalman.base_std_pos', 0.05)
+    node.declare_parameter('tracker.kalman.base_std_vel', 0.00625)
+    node.declare_parameter('tracker.kalman.base_std_meas', 0.05)
+    node.declare_parameter('tracker.kalman.motion_adapt_gain', 0.3)
+    node.declare_parameter('tracker.kalman.velocity_limit', 100.0)
+    node.declare_parameter('tracker.kalman.innovation_gate', 9.4877)
+
+    node.declare_parameter('trajectory_prediction.enabled', True)
+    node.declare_parameter('trajectory_prediction.prediction_steps', 10)
+    node.declare_parameter('trajectory_prediction.confidence_decay', 0.9)
+    node.declare_parameter('trajectory_prediction.min_confidence', 0.1)
+
     # Appearance (only used by deepsort_cascade)
     node.declare_parameter('appearance.enabled', False)
     node.declare_parameter('appearance.weights', '')
@@ -166,9 +273,25 @@ def _declare_parameters(node: Node) -> None:
     node.declare_parameter('enclosure.publish_rate_hz', 5.0)
     node.declare_parameter('enclosure.drone_positions', [])
 
+    # Debug / diagnostics topics
+    node.declare_parameter('enable_debug_topics', True)
+    node.declare_parameter('metrics_period_ms', 1000)
+
 
 def _build_runner_overrides(node: Node) -> dict:
-    """Translate ROS2 parameters into the cvtrack-runner override dict."""
+    """Translate ROS2 parameters into the cvtrack-runner override dict.
+
+    The returned dict mirrors the cvtrack YAML schema so it can be fed
+    straight into :meth:`CvtrackRunner.from_overrides`.  Beyond the
+    detector / tracker / appearance sections, the optimized swarm
+    configuration also feeds the adaptive tracker's Kalman parameters
+    (``tracker.kalman``) and the trajectory-prediction settings
+    (``trajectory_prediction``).  Both sub-dicts are required for
+    ``tracker.kind = botsort_adaptive`` / ``deepsort_adaptive`` to take
+    effect — without them the adaptive trackers fall back to their
+    built-in defaults and the optimized configuration is silently
+    dropped.
+    """
     p = node.get_parameter
     det = {
         'backend': p('detector.backend').value,
@@ -198,7 +321,266 @@ def _build_runner_overrides(node: Node) -> dict:
     weights = p('appearance.weights').value
     if weights:
         ap['weights'] = weights
-    return {'detector': det, 'tracker': tr, 'appearance': ap}
+
+    # Adaptive-tracker knobs.  We try to read each one as a ROS2
+    # parameter (declarable in config/tracker_node.yaml); when the
+    # parameter is missing the consumer gets ``None`` and the
+    # optimized YAML's ``tracker.kalman`` section can still take
+    # over via the YAML loader path.
+    kalman_cfg: dict = {}
+    for ros_name, yaml_key in (
+        ('tracker.kalman.dt', 'dt'),
+        ('tracker.kalman.sigma_p', 'sigma_p'),
+        ('tracker.kalman.sigma_v', 'sigma_v'),
+        ('tracker.kalman.sigma_m', 'sigma_m'),
+        ('tracker.kalman.acceleration_gain', 'acceleration_gain'),
+        ('tracker.kalman.motion_threshold_slow', 'motion_threshold_slow'),
+        ('tracker.kalman.motion_threshold_fast', 'motion_threshold_fast'),
+        ('tracker.kalman.base_std_pos', 'base_std_pos'),
+        ('tracker.kalman.base_std_vel', 'base_std_vel'),
+        ('tracker.kalman.base_std_meas', 'base_std_meas'),
+        ('tracker.kalman.motion_adapt_gain', 'motion_adapt_gain'),
+        ('tracker.kalman.velocity_limit', 'velocity_limit'),
+        ('tracker.kalman.innovation_gate', 'innovation_gate'),
+    ):
+        try:
+            v = p(ros_name).value
+        except Exception:
+            v = None
+        if v is not None:
+            kalman_cfg[yaml_key] = v
+    if kalman_cfg:
+        tr['kalman'] = kalman_cfg
+
+    # Trajectory-prediction knobs (consumed by adaptive trackers).
+    tp_cfg: dict = {}
+    for ros_name, yaml_key in (
+        ('trajectory_prediction.enabled', 'enabled'),
+        ('trajectory_prediction.prediction_steps', 'prediction_steps'),
+        ('trajectory_prediction.confidence_decay', 'confidence_decay'),
+        ('trajectory_prediction.min_confidence', 'min_confidence'),
+    ):
+        try:
+            v = p(ros_name).value
+        except Exception:
+            v = None
+        if v is not None:
+            tp_cfg[yaml_key] = v
+    trajectory_prediction = tp_cfg
+
+    overrides = {'detector': det, 'tracker': tr, 'appearance': ap}
+    if trajectory_prediction:
+        overrides['trajectory_prediction'] = trajectory_prediction
+    return overrides
+
+
+# ---------------------------------------------------------------------------
+# Multi-source aggregation
+# ---------------------------------------------------------------------------
+class MultiSourceAggregator:
+    """Buffer multiple ``TargetTrackArray`` sources and publish fused tracks.
+
+    Fusion is opt-in.  If ``enable_fusion`` is false, no source subscriptions
+    or timer are created and :meth:`publish_local` directly forwards the
+    existing tracker output.  A requested fusion setup that has no valid
+    ``fusion_sources`` also falls back to that same single-source path.
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        publisher: Any,
+        *,
+        frame_id: str = 'camera_optical_frame',
+    ) -> None:
+        self._node = node
+        self._publisher = publisher
+        self._frame_id = frame_id
+        self._enabled = False
+        self._fusion = None
+        self._subscriptions: list[Any] = []
+        self._timer: Optional[Any] = None
+        self._lock = threading.Lock()
+        self._pending: dict[str, TargetTrackArray] = {}
+        self._last_header: Optional[Header] = None
+        self._frame_seq = 0
+        self._received_any = False
+
+        requested = bool(node.get_parameter('enable_fusion').value)
+        configured_sources = node.get_parameter('fusion_sources').value or []
+        if not configured_sources:
+            configured_sources = node.get_parameter('sources').value or []
+        sources = []
+        for raw_source in configured_sources:
+            source = str(raw_source).strip().strip('/')
+            if source and source not in sources:
+                sources.append(source)
+
+        if not requested:
+            return
+        if not sources:
+            node.get_logger().warning(
+                'enable_fusion=true but fusion_sources is empty; '
+                'using direct single-source output'
+            )
+            return
+
+        try:
+            from cvtrack.tracker.fusion import TrackFusion
+
+            self._fusion = TrackFusion()
+            for source in sources:
+                self._fusion.register_source(source)
+                topic = f'/{source}/target_track'
+                subscription = node.create_subscription(
+                    TargetTrackArray,
+                    topic,
+                    lambda msg, source=source: self._source_callback(source, msg),
+                    QoSProfile(
+                        depth=10,
+                        reliability=ReliabilityPolicy.RELIABLE,
+                    ),
+                )
+                self._subscriptions.append(subscription)
+            self._timer = node.create_timer(0.05, self._fusion_tick)
+        except Exception as exc:
+            self._fusion = None
+            node.get_logger().error(
+                f'failed to initialize TrackFusion: {exc}; '
+                'using direct single-source output'
+            )
+            return
+
+        self._enabled = True
+        topics = ', '.join(f'/{source}/target_track' for source in sources)
+        node.get_logger().info(
+            f'multi-source fusion enabled: inputs=[{topics}] output=/target_track'
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def publish_local(self, msg: TargetTrackArray) -> None:
+        """Forward local tracker output only while fusion is disabled."""
+        if not self._enabled:
+            self._publisher.publish(msg)
+
+    def _source_callback(self, source: str, msg: TargetTrackArray) -> None:
+        with self._lock:
+            self._pending[source] = msg
+            self._last_header = msg.header
+            self._received_any = True
+
+    def _fusion_tick(self) -> None:
+        if not self._enabled or self._fusion is None:
+            return
+        with self._lock:
+            pending = self._pending
+            self._pending = {}
+            header = self._last_header
+            received_any = self._received_any
+        if not received_any:
+            return
+
+        try:
+            for source, source_msg in pending.items():
+                tracks = [
+                    self._track_from_message(track)
+                    for track in source_msg.tracks
+                ]
+                self._fusion.update(source, tracks)
+            fused_tracks = self._fusion.fused_tracks()
+        except Exception as exc:
+            self._node.get_logger().error(f'trajectory fusion tick failed: {exc}')
+            return
+
+        output = TargetTrackArray()
+        if header is None:
+            header = Header()
+            header.stamp = self._node.get_clock().now().to_msg()
+        output.header = header
+        output.header.frame_id = self._frame_id
+        output.frame_idx = self._frame_seq
+        self._frame_seq += 1
+        output.tracks = [self._message_from_track(track) for track in fused_tracks]
+        self._publisher.publish(output)
+
+    @staticmethod
+    def _track_from_message(msg: TargetTrack):
+        from cvtrack.types import Box, Track
+
+        confidence = float(getattr(msg, 'confidence', 1.0))
+        x = float(msg.x)
+        y = float(msg.y)
+        half_size = 10.0
+        mean = np.array(
+            [x, y, float(msg.vx), float(msg.vy)], dtype=np.float64
+        )
+        variance = max(1.0, (1.0 - max(0.0, min(1.0, confidence))) * 100.0)
+        covariance = np.diag([variance, variance, variance, variance])
+        track = Track(
+            track_id=int(msg.target_id),
+            label=str(getattr(msg, 'cls', 0)),
+            mean=mean,
+            cov=covariance,
+            box=Box(
+                x - half_size,
+                y - half_size,
+                x + half_size,
+                y + half_size,
+                confidence,
+                int(getattr(msg, 'cls', 0)),
+                str(getattr(msg, 'cls', 0)),
+            ),
+            confirmed=bool(getattr(msg, 'is_confirmed', True)),
+        )
+        motion_modes = {1: 'stationary', 2: 'slow', 3: 'fast'}
+        track.motion_mode = motion_modes.get(
+            int(getattr(msg, 'motion_mode', 0)), 'unknown'
+        )
+        pred_x = list(getattr(msg, 'pred_x', []))
+        pred_y = list(getattr(msg, 'pred_y', []))
+        pred_conf = list(getattr(msg, 'pred_conf', []))
+        track.predicted_future = [
+            (float(px), float(py), 0.0, 0.0)
+            for px, py in zip(pred_x, pred_y)
+        ]
+        track.prediction_confidence = (
+            float(pred_conf[0]) if pred_conf else confidence
+        )
+        setattr(track, '_fusion_pred_conf', pred_conf)
+        return track
+
+    @staticmethod
+    def _message_from_track(track) -> TargetTrack:
+        msg = TargetTrack()
+        msg.target_id = int(track.track_id)
+        msg.x = float(track.pos[0])
+        msg.y = float(track.pos[1])
+        msg.vx = float(track.mean[2]) if track.mean.size > 2 else 0.0
+        msg.vy = float(track.mean[3]) if track.mean.size > 3 else 0.0
+        msg.confidence = float(track.box.score)
+        msg.cls = int(track.box.cls)
+        msg.is_confirmed = bool(track.confirmed)
+        msg.speed = float(np.hypot(msg.vx, msg.vy))
+        motion_modes = {'stationary': 1, 'slow': 2, 'fast': 3}
+        msg.motion_mode = motion_modes.get(track.motion_mode, 0)
+
+        future = list(track.predicted_future[:5])
+        pred_x = [float(item[0]) for item in future]
+        pred_y = [float(item[1]) for item in future]
+        stored_conf = list(getattr(track, '_fusion_pred_conf', []))[:5]
+        pred_conf = [float(value) for value in stored_conf]
+        while len(pred_x) < 5:
+            pred_x.append(0.0)
+            pred_y.append(0.0)
+        while len(pred_conf) < 5:
+            pred_conf.append(0.0)
+        msg.pred_x = pred_x
+        msg.pred_y = pred_y
+        msg.pred_conf = pred_conf
+        return msg
 
 
 # ---------------------------------------------------------------------------
@@ -212,25 +594,27 @@ class TrackerNode(Node):
         _declare_parameters(self)
 
         # Lazy import so the message generation step doesn't depend on cvtrack.
-        # Auto-add the bundled cv_tracking_demo source tree to sys.path if
-        # cvtrack isn't already importable — this lets users run the node
-        # without a separate `pip install -e` step on the perception host.
+        # Vendored cvtrack (this ROS2 package's own ``cvtrack/`` subdir) is
+        # the single source of truth at runtime — we deliberately do **not**
+        # fall back to ``/home/hhh/Downloads/cv_tracking_demo/src`` here.
+        # That independent checkout is kept for reference / benchmarking
+        # only; if its copy of ``cvtrack.runner`` ever wins the import race
+        # the optimized fields (``pred_x`` / ``motion_mode`` / adaptive
+        # tracker branches) get silently dropped because the reference tree
+        # pre-dates them.  If the import below fails the operator will see
+        # a clear warning explaining the install step, rather than us
+        # silently inserting a half-broken path.
         try:
-            import cvtrack.runner  # noqa: F401
-        except ImportError:
-            cvtrack_src = '/home/hhh/Downloads/cv_tracking_demo/src'
-            if cvtrack_src not in sys.path and os.path.isdir(cvtrack_src):
-                sys.path.insert(0, cvtrack_src)
-        try:
-            from cvtrack.runner import CvtrackRunner
+            from cvtrack.runner import CvtrackRunner  # noqa: F401
         except ImportError as exc:
-            self.get_logger().fatal(
-                'cvtrack is not installed. Either run `pip install -e '
-                '/home/hhh/Downloads/cv_tracking_demo` or export '
-                'PYTHONPATH=/home/hhh/Downloads/cv_tracking_demo/src '
-                'before launching this node.'
+            self.get_logger().warning(
+                'cvtrack is not importable: %s. Either run `pip install -e '
+                '`ros2_ws/src/perception_pkg/cvtrack`` or export '
+                'PYTHONPATH=<that dir>/src. The reference checkout at '
+                '/home/hhh/Downloads/cv_tracking_demo is intentionally '
+                'not used as a fallback (it pre-dates the optimized '
+                'tracker code).' % exc
             )
-            raise RuntimeError(f'cvtrack import failed: {exc}') from exc
 
         overrides = _build_runner_overrides(self)
         # dt is set from the ROS2 parameter; the runner derives fps from dt.
@@ -253,6 +637,36 @@ class TrackerNode(Node):
             TargetTrackArray, self._track_topic,
             QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
         )
+        self._aggregator = MultiSourceAggregator(
+            self,
+            self._publisher,
+            frame_id=self._frame_id,
+        )
+
+        # --- Debug / diagnostics publishers --------------------------------
+        self._enable_debug = bool(self.get_parameter('enable_debug_topics').value)
+        self._debug_pub: Optional[Any] = None
+        self._metrics_pub: Optional[Any] = None
+        self._metrics_recorder: Optional[_MetricsRecorder] = None
+
+        if self._enable_debug:
+            self._debug_pub = self.create_publisher(
+                TargetTrackDebug, '/target_track_debug',
+                QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
+            )
+            self._metrics_pub = self.create_publisher(
+                diag_msgs.DiagnosticArray, '/tracking_metrics',
+                QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE),
+            )
+            metrics_period_s = float(
+                self.get_parameter('metrics_period_ms').value
+            ) / 1000.0
+            self._metrics_recorder = _MetricsRecorder(
+                period_ms=int(self.get_parameter('metrics_period_ms').value)
+            )
+            self._metrics_timer = self.create_timer(
+                metrics_period_s, self._publish_metrics,
+            )
 
         # Enclosure group publisher
         self._enclosure_enabled = bool(self.get_parameter('enclosure.enabled').value)
@@ -283,21 +697,26 @@ class TrackerNode(Node):
         self._timer: Optional[Any] = None
         self._video_timer: Optional[Any] = None
 
-        if self._input_mode == 'video':
-            self._init_video_input()
-        elif self._input_mode == 'topic':
-            self._init_topic_input()
-        else:
-            raise ValueError(
-                f"input_mode must be 'video' or 'topic', got {self._input_mode!r}"
-            )
+        # Fusion deployments consume already-tracked ROS messages and do not
+        # need to open the local camera/image pipeline.  When fusion is off,
+        # preserve the original single-source behavior unchanged.
+        if not self._aggregator.enabled:
+            if self._input_mode == 'video':
+                self._init_video_input()
+            elif self._input_mode == 'topic':
+                self._init_topic_input()
+            else:
+                raise ValueError(
+                    f"input_mode must be 'video' or 'topic', got {self._input_mode!r}"
+                )
 
-        # Publishing tick --------------------------------------------------
-        if self._publish_rate > 0.0:
-            period = 1.0 / self._publish_rate
-            self._timer = self.create_timer(period, self._publish_tick)
+            if self._publish_rate > 0.0:
+                period = 1.0 / self._publish_rate
+                self._timer = self.create_timer(period, self._publish_tick)
         else:
-            self._timer = None
+            self.get_logger().info(
+                'local detector input disabled while multi-source fusion is active'
+            )
 
         self.get_logger().info(
             f"tracker_node ready: mode={self._input_mode} "
@@ -418,10 +837,22 @@ class TrackerNode(Node):
             self._make_target_track(rec)
             for rec in records
         ]
-        self._publisher.publish(msg)
+        self._aggregator.publish_local(msg)
         self.get_logger().debug(
             f'published frame_idx={msg.frame_idx} n_tracks={len(msg.tracks)}'
         )
+
+        # Wire debug topic alongside the primary track message.
+        if self._debug_pub is not None:
+            self._publish_debug_track(msg)
+
+        # Update metrics recorder.
+        if self._metrics_recorder is not None:
+            motion_modes = [int(t.motion_mode) for t in msg.tracks]
+            self._metrics_recorder.update(
+                n_active=len(msg.tracks),
+                motion_modes=motion_modes,
+            )
 
     def _make_target_track(self, rec) -> "TargetTrack":
         """Construct a TargetTrack message from a track record."""
@@ -456,6 +887,36 @@ class TrackerNode(Node):
         msg.pred_conf = pred_conf[:5]
 
         return msg
+
+    def _publish_debug_track(self, msg: TargetTrackArray) -> None:
+        """Publish enriched debug message for /target_track_debug."""
+        dbg = TargetTrackDebug()
+        dbg.header = msg.header
+        dbg.tracks = list(msg.tracks)
+        dbg.source_topic = self._track_topic
+
+        # Extract KF covariance, motion reasons, appearance scores.
+        kf_cov: list[float] = []
+        mm_reasons: list[str] = []
+        app_scores: list[float] = []
+        for track in msg.tracks:
+            kf_cov.extend([0.0] * 9)  # placeholder — replace with real KF cov when available
+            mm_labels = {0: 'unknown', 1: 'stationary', 2: 'slow', 3: 'fast'}
+            mm_reasons.append(mm_labels.get(track.motion_mode, 'unknown'))
+            app_scores.append(-1.0)  # placeholder when appearance model is absent
+
+        dbg.kf_covariance = kf_cov
+        dbg.motion_mode_reasons = mm_reasons
+        dbg.appearance_scores = app_scores
+        self._debug_pub.publish(dbg)
+
+    def _publish_metrics(self) -> None:
+        """Publish /tracking_metrics DiagnosticArray at the metrics period."""
+        if self._metrics_pub is None or self._metrics_recorder is None:
+            return
+        arr = self._metrics_recorder.diagnostic_array()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        self._metrics_pub.publish(arr)
 
     def _publish_enclosure(self) -> None:
         """Publish targets for enclosure control group."""
@@ -494,7 +955,7 @@ class TrackerNode(Node):
                 drone_y.append(0.0)
             msg.drone_x = drone_x[:8]
             msg.drone_y = drone_y[:8]
-            msg.num_drones = uint8(min(len(drone_positions), 8))
+            msg.num_drones = UInt8(min(len(drone_positions), 8))
         else:
             msg.drone_x = [0.0] * 8
             msg.drone_y = [0.0] * 8

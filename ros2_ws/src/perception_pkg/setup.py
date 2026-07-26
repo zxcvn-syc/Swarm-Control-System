@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'tracker_node = perception_pkg.tracker_node:main',
+            'coord_transform_node = perception_pkg.coord_transform_node:main',
         ],
     },
 )

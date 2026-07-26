@@ -22,6 +22,8 @@
     frame_id: "camera_optical_frame"
     publish_rate_hz: 10.0           # 0 = as fast as frames arrive
     loop_video: false               # restart at EOF (video mode only)
+    enable_fusion: false            # true: aggregate fusion_sources at 20 Hz
+    fusion_sources: []              # e.g. [sensor_0, sensor_1]
 
     detector:
       backend: "auto"               # 'yolo' or 'auto' (auto falls back to MOG2)

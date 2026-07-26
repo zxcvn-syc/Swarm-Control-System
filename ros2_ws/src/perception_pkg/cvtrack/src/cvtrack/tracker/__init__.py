@@ -18,6 +18,12 @@ from cvtrack.tracker.deepsort import (
     DeepSortCascade,
     DeepSortLite,
 )
+from cvtrack.tracker.fusion import (
+    ConsistencyGuard,
+    TrackFusion,
+    TrajectoryGraph,
+    weighted_fuse,
+)
 from cvtrack.tracker.kalman import (
     BOTSORT_HIGH_CONF,
     BOTSORT_IOU_THRESH,
@@ -54,6 +60,7 @@ __all__ = [
     "CHI2_INV_95_4DOF",
     "CHI2_THRESHOLD",
     "CameraMotionCompensator",
+    "ConsistencyGuard",
     "DEEPSORT_APPEARANCE_GATE",
     "DEEPSORT_MAHALANOBIS_GATE",
     "DeepSortAdaptive",
@@ -65,6 +72,8 @@ __all__ = [
     "KalmanCV2D",
     "KalmanCV2DAdaptive",
     "SparseOFCompensator",
+    "TrackFusion",
+    "TrajectoryGraph",
     "affine_is_pure_camera_pan",
     "class_aware_iou_distance",
     "gate_mahalanobis",
@@ -76,4 +85,5 @@ __all__ = [
     "predict_n_steps",
     "predict_n_steps_with_covariance",
     "rts_smooth_2d",
+    "weighted_fuse",
 ]

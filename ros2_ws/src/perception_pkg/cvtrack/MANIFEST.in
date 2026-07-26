@@ -1,0 +1,14 @@
+include README.md
+include LICENSE
+include MIGRATION.md
+include requirements.txt
+include Makefile
+include Dockerfile
+recursive-include src/cvtrack *.py
+recursive-include configs *.yaml
+recursive-include configs *.md
+recursive-include scripts *.py
+recursive-include scripts *.sh
+recursive-include eval *.py
+recursive-include tests *.py
+recursive-include tests *.md

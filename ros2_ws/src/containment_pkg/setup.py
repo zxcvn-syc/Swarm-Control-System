@@ -24,6 +24,7 @@ setup(
 
     install_requires=[
         'setuptools',
+        'numpy',
     ],
 
     zip_safe=True,
@@ -36,7 +37,7 @@ setup(
 
     entry_points={
         'console_scripts': [
-            'static_voronoi_uav = containment_pkg.static_voronoi_uav:main',
+            'enclosure_node = containment_pkg.enclosure_node:main',
         ],
     },
 )

@@ -39,6 +39,15 @@ ALLOWED_TOP_LEVEL = {
     "pipeline",
     "extends",
     "sensors",  # multi-sensor preset placeholder; unused by the v6 pipeline
+    # Swarm-Control-System additions: the optimized YAML carries an
+    # adaptive-Kalman config nested under ``tracker.kalman`` plus a
+    # top-level ``trajectory_prediction`` block that drives the
+    # ``botsort_adaptive`` / ``deepsort_adaptive`` tracker variants in
+    # ``cvtrack.runner``.  Listing them here lets ``load_config`` accept
+    # the optimized config without complaining about "unknown top-level
+    # keys".
+    "kalman",
+    "trajectory_prediction",
 }
 
 
@@ -153,10 +162,15 @@ def _validate(data: Dict[str, Any]) -> None:
     if "classes" in det and det["classes"] is not None and not isinstance(det["classes"], list):
         raise ValueError("detector.classes must be a list of ints")
     tr = data.get("tracker", {})
-    if "kind" in tr and tr["kind"] not in {"botsort", "deepsort", "deepsort_cascade"}:
+    if "kind" in tr and tr["kind"] not in {
+        "botsort", "deepsort", "deepsort_cascade",
+        # Swarm-Control-System adaptive variants handled by
+        # ``cvtrack.tracker.adaptive_tracker``.
+        "botsort_adaptive", "deepsort_adaptive",
+    }:
         raise ValueError(
-            f"tracker.kind must be 'botsort', 'deepsort' or 'deepsort_cascade', "
-            f"got {tr['kind']!r}"
+            f"tracker.kind must be 'botsort', 'deepsort', 'deepsort_cascade', "
+            f"'botsort_adaptive' or 'deepsort_adaptive', got {tr['kind']!r}"
         )
     ap = data.get("appearance", {})
     if ap.get("enabled"):

@@ -18,6 +18,8 @@
 
 
   <depend>rclpy</depend>
+  <depend>numpy</depend>
+  <depend>swarm_interfaces</depend>
 
 
   <export>

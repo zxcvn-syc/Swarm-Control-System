@@ -220,6 +220,19 @@ class Track:
 
         self.prediction_confidence = cur_conf
 
+    def _velocity_xy(self) -> Tuple[float, float]:
+        """Return (vx, vy) honouring the KF state dimensionality.
+
+        4-state KF  : mean = [cx, cy, vx, vy]
+        8-state KF  : mean = [cx, cy, w, h, vx, vy, vw, vh]
+        Falls back to zero velocity when neither shape applies.
+        """
+        if len(self.mean) >= 8:
+            return float(self.mean[4]), float(self.mean[5])
+        if len(self.mean) >= 4:
+            return float(self.mean[2]), float(self.mean[3])
+        return 0.0, 0.0
+
     def detect_motion_mode(self, speed_threshold_slow: float = 2.0,
                           speed_threshold_fast: float = 20.0) -> str:
         """Detect current motion mode based on velocity.
@@ -231,11 +244,7 @@ class Track:
         Returns:
             Motion mode: "stationary", "slow", or "fast"
         """
-        if len(self.mean) >= 4:
-            vx, vy = self.mean[2], self.mean[3]
-        else:
-            vx, vy = self.mean[2], self.mean[3]
-
+        vx, vy = self._velocity_xy()
         speed = np.sqrt(vx * vx + vy * vy)
 
         if speed < speed_threshold_slow:
@@ -249,10 +258,7 @@ class Track:
 
     def get_speed(self) -> float:
         """Get current speed (velocity magnitude)."""
-        if len(self.mean) >= 4:
-            vx, vy = self.mean[2], self.mean[3]
-        else:
-            vx, vy = self.mean[2], self.mean[3]
+        vx, vy = self._velocity_xy()
         return float(np.sqrt(vx * vx + vy * vy))
 
     def get_position_uncertainty(self) -> Tuple[float, float]:

@@ -19,9 +19,14 @@ find_package(geometry_msgs REQUIRED)
 set(SWARM_INTERFACES_MSG_FILES
   "msg/TargetTrack.msg"
   "msg/TargetTrackArray.msg"
+  "msg/TargetTrackDebug.msg"
   "msg/TaskAssignment.msg"
   "msg/EnclosureTarget.msg"
   "msg/EnclosureTargetArray.msg"
+  "msg/DroneState.msg"
+  "msg/DroneStateArray.msg"
+  "msg/EnclosureCommand.msg"
+  "msg/EnclosureCommandArray.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
