@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 联调整合（新增 D3 — 何泓林 / 联调总指挥）
+- **顶层集成测试** `ros2_ws/test_three_links.py`：单进程 rclpy 测试，
+  不依赖 YOLO 权重，在 6 秒窗口内打通 tracker_node → scheduler_node →
+  planner_stub_node → enclosure_node 的 4 个真实 ROS2 节点；输出
+  `output/test_three_links_<时间戳>.json`，含 link1/link2/link3 计数器与
+  passed 标记
+- **顶层 launch**：
+  - `ros2_ws/launch/three_links.launch.py` — 同时启动 4 个真实节点
+  - `ros2_ws/launch/integration_test.launch.py` — 启动 4 节点 + 集成 watchdog
+- **planner_stub 占位包** `ros2_ws/src/planner_stub/`：填补 `planning_pkg`
+  空槽；消费 `/task_assignment` + `/target_track` 后产出 `/drone_states` 与
+  单机 `/drone_state`。**程维好的真 planner_node 上线后整包删除**。
+- **脚本**：
+  - `scripts/three_links_demo.sh` 一键 build + source + launch
+  - `scripts/record_three_links.sh` 启动 + 录屏（支持 pseudo / ros2bag / ffmpeg）
+- **文档**：
+  - `docs/integration/three_link_integration.md` — 三关完整说明与责任人
+  - `docs/integration/interface_alignment.md` — 12 条拍板决议（D-1..D-12），
+    Topic / msg / QoS / 坐标系 一锤定音
+  - `docs/integration/troubleshooting.md` — 13 条故障与修复
+  - `docs/integration/logging.md` — 节点标签 + 关键事件文案
+- **顶层 workspace README** `ros2_ws/README.md`：包清单 + 一键命令 + 接口对照
+
 #### 感知组 (perception_pkg)
 - **自适应跟踪器全链路**: `botsort_adaptive` / `deepsort_adaptive` 两种 tracker 类型接进 `CvtrackRunner`，优化 `optimized.yaml` 的 `tracker.kalman.*` 与 `trajectory_prediction.*` 段透传为 ROS 参数
 - **motion_mode 透传**: 在 `_make_target_track` 中写入枚举值（0=unknown / 1=stationary / 2=slow / 3=fast），下游可直接消费
@@ -57,6 +80,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 直接后果：所有 BoT-SORT 轨迹 speed=28.28，无差别误判为 `fast`
   - 修复：抽出 `_velocity_xy()`，按 `len(mean)` 分支（4-state→[2,3]、8-state→[4,5]）。修复后回归 145 passed，0 skip、0 failed
 
+- **【D3 联调】enclosure_node RcutilsLogger.debug() 抛 TypeError**
+  - `enclosure_node.py:87` 原代码使用了 C 风格 `self.get_logger().debug("Voronoi update completed in %.3f ms", elapsed_ms)`，
+    在 ROS2 Humble 下 RcutilsLogger.debug() 只接受 1 个位置参数，运行时抛出
+    `TypeError: RcutilsLogger.debug() takes 2 positional arguments but 3 were given`
+  - 影响：`integration_test.launch.py` 启动时整个 chain 失败，第三关永远跑不通
+  - 修复：改用 f-string `f"Voronoi update completed in {elapsed_ms:.3f} ms"`
+    并触发了 install 重 build（旧的 egg-info 缓存在某些情况下不会自动更新，
+    因此 `touch src/` 之后 colcon build 才会生效）
+
+- **【D3 联调】planner_stub_node 误用 `DroneStateArray.header` 字段**
+  - 该 msg 类型实际没有 `header`，试图赋值会抛 AttributeError
+  - 修复：删除 `arr.header = Header()` 行；保留 `DroneStateArray` 的纯 payload
+
 ### Notes / 遗留项
 
 | 项 | 优先级 | 备注 |
@@ -66,6 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | tracker_node → enclosure_node 的 `/enclosure_targets` 通路 | 中 | 当前封控节点订阅 `/enclosure_targets`，tracker_node 暂未实现该发布路径，需协调实现或对接 |
 | scheduler_node 当前订阅像素坐标 `/target_track` | 低 | 若调度想用世界坐标，需改 `target_topic` 参数为 `/target_track_world` |
 | `kf_covariance` 真实填充 | 低 | `Track` 类型暂未暴露 KF 协方差到记录字段 |
+| `planning_pkg` 空槽，依赖 `planner_stub` 占位 | 中 | 程维好上线 `planner_node` 后删除 `planner_stub`，相应 launch 单行替换 |
+| `coord_transform_node` 是否常驻三关 launch | 低 | 当前默认不在 launch 中；如需世界坐标，加 `Node(package="perception_pkg", executable="coord_transform_node", ...)` 一行 |
 
 ### Verified
 
@@ -73,7 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pytest tests/test_fusion.py -v` → **9 passed**
 - `python3 -m py_compile` 所有改动节点/模块 → 无错
 - ReadLints 改动文件 → 无错
+- `python3 ros2_ws/test_three_links.py` → link1=29/24, link2=24/12, link3=29/6 — **三关全 PASS**
+- `ros2 launch ros2_ws/launch/three_links.launch.py --show-args` → 11 entities, syntax OK
+- `ros2 launch ros2_ws/launch/integration_test.launch.py --show-args` → 13 entities, syntax OK
 
 ---
 
 *生成于 2026-07-26，覆盖 Phase 1 / 2 / 3 / 4 + A4 验证闭环。*
+*2026-07-27 追加 D3 联调整合（何泓林）。*
