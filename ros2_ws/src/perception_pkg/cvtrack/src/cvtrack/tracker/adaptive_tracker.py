@@ -14,6 +14,7 @@ Key improvements:
 from __future__ import annotations
 
 import logging
+import math
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
@@ -30,6 +31,33 @@ from cvtrack.types import Box, Track
 
 
 log = logging.getLogger(__name__)
+
+
+# Numerical constants for robustness
+_EPS = 1e-9
+_INF = float("inf")
+_MIN_TRACK_SIZE = 1
+_MIN_DET_AREA = 1e-9
+_BIG_COST = 1e4
+
+
+def _safe_iou(box1: Optional[Box], box2: Optional[Box]) -> float:
+    """Safely compute IoU, returning 0.0 for invalid inputs."""
+    if box1 is None or box2 is None:
+        return 0.0
+    try:
+        iou_val = box1.iou(box2)
+        return float(iou_val) if math.isfinite(iou_val) else 0.0
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def _safe_normalize_vector(dx: float, dy: float) -> tuple[float, float]:
+    """Safely normalize a 2D vector, returning (0, 0) for zero-magnitude vectors."""
+    mag = math.sqrt(dx * dx + dy * dy)
+    if mag < _EPS or not math.isfinite(mag):
+        return 0.0, 0.0
+    return dx / mag, dy / mag
 
 
 class DeepSortAdaptive:
@@ -290,51 +318,112 @@ class DeepSortAdaptive:
         tier_gate: Optional[np.ndarray],
         tier_app: Optional[np.ndarray],
     ) -> np.ndarray:
-        big = 1e4
-        cost = np.full((len(tier_tracks), len(tier_dets)), big, dtype=np.float64)
+        """Compute cascade matching cost with robust boundary handling.
+
+        Handles:
+        - Empty track or detection sequences
+        - Invalid box coordinates
+        - Appearance cost edge cases (cosine distance overflow)
+        - Gate matrix shape mismatches
+        """
+        cost = np.full(
+            (len(tier_tracks), len(tier_dets)),
+            _BIG_COST,
+            dtype=np.float64,
+        )
+
+        # Handle empty inputs
+        if len(tier_tracks) == 0 or len(tier_dets) == 0:
+            return cost
+
+        # If no gate provided, use IoU-based fallback
         if tier_gate is None:
-            ious = iou_matrix([self._predicted_box(t) for t in tier_tracks], list(tier_dets))
-            return 1.0 - ious
+            try:
+                pred_boxes = [self._predicted_box(t) for t in tier_tracks]
+                ious = iou_matrix(pred_boxes, list(tier_dets))
+                # Clip to avoid negative values from numerical issues
+                ious = np.clip(ious, 0.0, 1.0)
+                cost = 1.0 - ious
+                cost = np.where(np.isfinite(cost), cost, _BIG_COST)
+            except Exception as exc:
+                log.debug("_cascade_cost: IoU computation failed: %s", exc)
+                # Fallback: equal cost matrix
+                cost = np.full(
+                    (len(tier_tracks), len(tier_dets)),
+                    0.5,
+                    dtype=np.float64,
+                )
+            return cost
+
+        # Validate gate shape
+        if tier_gate.shape != (len(tier_tracks), len(tier_dets)):
+            log.warning(
+                "_cascade_cost: gate shape %s doesn't match (tracks, dets) = (%d, %d)",
+                tier_gate.shape, len(tier_tracks), len(tier_dets),
+            )
+            tier_gate = np.ones((len(tier_tracks), len(tier_dets)), dtype=bool)
 
         for i in range(len(tier_tracks)):
+            track = tier_tracks[i]
             for j in range(len(tier_dets)):
-                if not tier_gate[i, j]:
+                try:
+                    if not tier_gate[i, j]:
+                        continue
+
+                    if tier_app is not None:
+                        # Use appearance cost with validation
+                        a_val = float(tier_app[i, j])
+                        if not math.isfinite(a_val):
+                            a_val = 1.0
+                        # Clamp to [0, 2] range for cosine distance
+                        a_val = max(0.0, min(2.0, a_val))
+                        cost[i, j] = a_val
+                    else:
+                        # Fallback to IoU-based cost
+                        det = tier_dets[j]
+                        pb = self._predicted_box(track)
+                        iou_val = _safe_iou(pb, det)
+                        if iou_val > 0.0:
+                            cost[i, j] = 1.0 - iou_val
+                        else:
+                            cost[i, j] = 0.7
+                except (IndexError, AttributeError, TypeError, ValueError) as exc:
+                    log.debug("_cascade_cost: cell (%d, %d) failed: %s", i, j, exc)
                     continue
-                if tier_app is not None:
-                    a = tier_app[i, j]
-                    if a <= self.appearance_thresh:
-                        cost[i, j] = a
-                    else:
-                        cost[i, j] = a
-                else:
-                    tr = tier_tracks[i]
-                    det = tier_dets[j]
-                    pb = self._predicted_box(tr)
-                    iou_val = pb.iou(det)
-                    if iou_val > 0.0:
-                        cost[i, j] = 1.0 - iou_val
-                    else:
-                        cost[i, j] = 0.7
+
         return cost
 
     def _prune(self) -> None:
+        """Prune tracks based on quality criteria with safety checks."""
         alive: List[Track] = []
         for t in self.tracks:
-            stationary = (
-                self.stationary_prune
-                and t.confirmed
-                and t.hits >= 6
-                and t.misses == 0
-                and t.motion_score < 1.5
-            )
-            delete = (
-                (not t.confirmed and t.hits < 1)
-                or (t.confirmed and t.misses > self.max_age)
-                or (not t.confirmed and t.misses > self.n_init)
-                or stationary
-            )
-            if not delete:
+            try:
+                # Ensure valid values for comparison
+                hits = max(int(getattr(t, "hits", 0)), 0)
+                misses = max(int(getattr(t, "misses", 0)), 0)
+                motion_score = float(getattr(t, "motion_score", 0.0))
+                lost_age = max(int(getattr(t, "lost_age", 0)), 0)
+
+                stationary = (
+                    self.stationary_prune
+                    and t.confirmed
+                    and hits >= 6
+                    and misses == 0
+                    and motion_score < 1.5
+                )
+                delete = (
+                    (not t.confirmed and hits < 1)
+                    or (t.confirmed and misses > self.max_age)
+                    or (not t.confirmed and misses > self.n_init)
+                    or stationary
+                )
+                if not delete:
+                    alive.append(t)
+            except Exception as exc:
+                log.debug("_prune: error processing track %d: %s", t.track_id, exc)
+                # On error, keep track to avoid losing data
                 alive.append(t)
+
         self.tracks = alive
 
 
@@ -410,14 +499,53 @@ class BoTSortAdaptive:
         self.tracks: List[Track] = []
 
     def _affine_for_frame(self, frame: np.ndarray, fg_boxes=None) -> Optional[np.ndarray]:
-        """Get affine transform for camera motion compensation."""
+        """Get affine transform for camera motion compensation with error handling.
+
+        Handles:
+        - None or invalid frames
+        - GMC algorithm failures
+        - Invalid affine matrices
+        - Empty foreground boxes
+        """
         if self.gmc is None:
             return None
-        from cvtrack.tracker.cmc import affine_is_pure_camera_pan
-        A = self.gmc(frame, fg_boxes=fg_boxes)
-        if A is None or not affine_is_pure_camera_pan(A):
+        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+            log.debug("_affine_for_frame: invalid frame, skipping CMC")
             return None
-        return A
+        if frame.ndim < 2:
+            return None
+
+        from cvtrack.tracker.cmc import affine_is_pure_camera_pan
+
+        try:
+            A = self.gmc(frame, fg_boxes=fg_boxes)
+        except Exception as exc:
+            log.debug("_affine_for_frame: GMC failed: %s", exc)
+            return None
+
+        if A is None:
+            return None
+
+        # Validate A is a proper 2x3 affine matrix
+        try:
+            A_arr = np.asarray(A, dtype=np.float64)
+            if A_arr.shape != (2, 3):
+                log.debug("_affine_for_frame: invalid affine shape %s", A_arr.shape)
+                return None
+            if not np.all(np.isfinite(A_arr)):
+                return None
+        except (TypeError, ValueError) as exc:
+            log.debug("_affine_for_frame: affine validation failed: %s", exc)
+            return None
+
+        try:
+            if not affine_is_pure_camera_pan(A_arr):
+                return None
+        except Exception as exc:
+            log.debug("_affine_for_frame: pan check failed: %s", exc)
+            return None
+
+        return A_arr
 
     def _predicted_box(self, t: Track) -> Box:
         """Get predicted bounding box from track state."""
@@ -540,64 +668,199 @@ class BoTSortAdaptive:
         detections: List[Box],
         det_embeddings: Optional[List[Optional[np.ndarray]]] = None,
     ) -> np.ndarray:
-        """Compute fused IoU + Mahalanobis cost."""
-        big = 1e4
+        """Compute fused IoU + Mahalanobis cost with numerical stability.
+
+        Enhanced with:
+        - NaN/Inf protection throughout
+        - Stable matrix inversion with fallback
+        - Robust gate radius computation
+        - Appearance cost with cosine distance bounds
+        """
+        big = _BIG_COST
         cost = np.full((len(tracks), len(detections)), big, dtype=np.float64)
+
+        if len(tracks) == 0 or len(detections) == 0:
+            return cost
+
         w_iou, w_maha = 0.6, 0.4
         maha_gate = CHI2_INV_95_4DOF
-        ious = iou_matrix([self._predicted_box(t) for t in tracks], detections)
+
+        try:
+            pred_boxes = [self._predicted_box(t) for t in tracks]
+            ious = iou_matrix(pred_boxes, detections)
+            ious = np.clip(ious, 0.0, 1.0)
+            ious = np.where(np.isfinite(ious), ious, 0.0)
+        except Exception as exc:
+            log.debug("_fused_cost: iou_matrix failed: %s", exc)
+            ious = np.zeros((len(tracks), len(detections)), dtype=np.float64)
 
         for i, tr in enumerate(tracks):
-            pred = self._predicted_box(tr)
-            z_pred = np.array([pred.cx, pred.cy, pred.w, pred.h], dtype=np.float64)
-            S = np.eye(4, 8) @ tr.cov @ np.eye(4, 8).T + self.kf._r(tr.mean)
             try:
-                S_inv = np.linalg.inv(S)
-            except np.linalg.LinAlgError:
-                continue
-            for j, det in enumerate(detections):
-                if det.label != tr.label:
-                    continue
-                iou = ious[i, j]
-                centre_dist = ((det.cx - pred.cx) ** 2 + (det.cy - pred.cy) ** 2) ** 0.5
-                gate_radius = (pred.w + pred.h) * 0.6 + 8.0
-                if iou <= 0.0 and centre_dist > gate_radius:
-                    continue
-                z = np.array([det.cx, det.cy, det.w, det.h], dtype=np.float64)
-                maha = float((z - z_pred) @ S_inv @ (z - z_pred))
-                if iou <= 0.0 and maha > maha_gate:
-                    continue
-                iou_term = 1.0 - max(iou, 0.0)
-                maha_term = min(maha / maha_gate, 1.5)
-                cost[i, j] = w_iou * iou_term + w_maha * maha_term
+                pred = self._predicted_box(tr)
+                z_pred = np.array(
+                    [pred.cx, pred.cy, pred.w, pred.h], dtype=np.float64
+                )
 
-                if (self.appearance_reid_weight > 0 and det_embeddings
-                        and det_embeddings[j] is not None and tr.embedding_mean is not None):
-                    emb = det_embeddings[j]
-                    cos_d = float(1.0 - np.dot(emb, tr.embedding_mean))
-                    cost[i, j] = ((1.0 - self.appearance_reid_weight) * cost[i, j]
-                                  + self.appearance_reid_weight * cos_d)
+                # Compute S matrix with validation
+                try:
+                    eye_4_8 = np.eye(4, 8)
+                    tr_cov = np.asarray(tr.cov, dtype=np.float64)
+                    if tr_cov.shape[0] >= 8 and tr_cov.shape[1] >= 8:
+                        S = eye_4_8 @ tr_cov @ eye_4_8.T
+                    else:
+                        # Fallback for smaller covariance
+                        padded = np.eye(8, dtype=np.float64) * 1.0
+                        rows = min(tr_cov.shape[0], 8)
+                        cols = min(tr_cov.shape[1], 8)
+                        padded[:rows, :cols] = tr_cov[:rows, :cols]
+                        S = eye_4_8 @ padded @ eye_4_8.T
+                    S = S + self.kf._r(tr.mean)
+                except Exception as exc:
+                    log.debug("_fused_cost: S matrix build failed for track %d: %s", tr.track_id, exc)
+                    continue
+
+                # Stable matrix inversion
+                try:
+                    # Add small regularization for numerical stability
+                    S_reg = S + np.eye(S.shape[0]) * _EPS
+                    S_inv = np.linalg.inv(S_reg)
+                    # Verify inversion is valid
+                    if not np.all(np.isfinite(S_inv)):
+                        continue
+                except (np.linalg.LinAlgError, ValueError) as exc:
+                    log.debug("_fused_cost: S inversion failed for track %d: %s", tr.track_id, exc)
+                    continue
+
+                for j, det in enumerate(detections):
+                    try:
+                        if det.label != tr.label:
+                            continue
+
+                        iou = ious[i, j]
+                        centre_dist = float(math.sqrt(
+                            (det.cx - pred.cx) ** 2 + (det.cy - pred.cy) ** 2
+                        ))
+                        gate_radius = (pred.w + pred.h) * 0.6 + 8.0
+
+                        if iou <= 0.0 and centre_dist > gate_radius:
+                            continue
+
+                        z = np.array(
+                            [det.cx, det.cy, det.w, det.h], dtype=np.float64
+                        )
+                        innovation = z - z_pred
+                        maha = float(innovation @ S_inv @ innovation)
+
+                        if not math.isfinite(maha):
+                            continue
+
+                        if iou <= 0.0 and maha > maha_gate:
+                            continue
+
+                        iou_term = 1.0 - max(iou, 0.0)
+                        maha_term = min(max(maha, 0.0) / maha_gate, 1.5)
+                        cost[i, j] = w_iou * iou_term + w_maha * maha_term
+
+                        # Add appearance cost if applicable
+                        if (self.appearance_reid_weight > 0 and det_embeddings
+                                and j < len(det_embeddings)
+                                and det_embeddings[j] is not None
+                                and tr.embedding_mean is not None):
+                            try:
+                                emb = det_embeddings[j]
+                                cos_d = float(1.0 - np.dot(emb, tr.embedding_mean))
+                                if not math.isfinite(cos_d):
+                                    cos_d = 1.0
+                                cos_d = max(0.0, min(2.0, cos_d))
+                                cost[i, j] = (
+                                    (1.0 - self.appearance_reid_weight) * cost[i, j]
+                                    + self.appearance_reid_weight * cos_d
+                                )
+                            except (AttributeError, TypeError, ValueError):
+                                pass
+                    except (IndexError, AttributeError, TypeError, ValueError) as exc:
+                        log.debug("_fused_cost: cell (%d, %d) failed: %s", i, j, exc)
+                        continue
+            except (AttributeError, TypeError, ValueError, IndexError) as exc:
+                log.debug("_fused_cost: track %d failed: %s", tr.track_id, exc)
+                continue
+
+        # Final NaN/Inf cleanup
+        cost = np.where(np.isfinite(cost), cost, _BIG_COST)
         return cost
 
     @staticmethod
     def _accept_match(tr: Track, det: Box, cost: float) -> bool:
-        if cost >= 1e4 - 1 or tr.label != det.label:
+        if not math.isfinite(cost) or cost >= _BIG_COST - 1 or tr.label != det.label:
             return False
         return cost < 0.85
 
     def _spawn(self, det: Box) -> Track:
-        z = np.array([det.cx, det.cy, det.w, det.h], dtype=np.float64)
-        mean, cov = self.kf.initiate(z)
-        return Track(
-            track_id=self._next_id(),
-            label=det.label,
-            mean=mean, cov=cov,
-            box=det,
-            n_init=self.n_init,
-            trail=[(det.cx, det.cy)],
-            pred_trail=[(float(mean[0]), float(mean[1]))],
-            trail_scores=[det.score],
-        )
+        """Spawn new track with robust initialization.
+
+        Handles:
+        - Invalid detection coordinates
+        - KF initialization failures
+        - Missing required fields
+        """
+        try:
+            # Validate detection
+            if det is None:
+                raise ValueError("detection is None")
+            if not (math.isfinite(det.cx) and math.isfinite(det.cy)):
+                raise ValueError("detection has invalid center")
+            if det.w < _EPS or det.h < _EPS:
+                raise ValueError("detection has zero area")
+
+            z = np.array([det.cx, det.cy, det.w, det.h], dtype=np.float64)
+            try:
+                mean, cov = self.kf.initiate(z)
+            except Exception as exc:
+                log.warning("_spawn: KF initiate failed: %s, using fallback", exc)
+                # Fallback: simple state initialization
+                mean = np.zeros(8, dtype=np.float64)
+                mean[0] = det.cx
+                mean[1] = det.cy
+                mean[2] = max(det.w, 1.0)
+                mean[3] = max(det.h, 1.0)
+                cov = np.eye(8, dtype=np.float64) * 100.0
+
+            # Ensure mean and cov are valid arrays
+            mean = np.asarray(mean, dtype=np.float64)
+            cov = np.asarray(cov, dtype=np.float64)
+
+            return Track(
+                track_id=self._next_id(),
+                label=str(det.label),
+                mean=mean,
+                cov=cov,
+                box=det,
+                n_init=self.n_init,
+                trail=[(det.cx, det.cy)],
+                pred_trail=[(float(mean[0]), float(mean[1]))],
+                trail_scores=[float(det.score)],
+            )
+        except Exception as exc:
+            log.error("_spawn: critical error: %s", exc)
+            # Last resort: return a track with safe defaults
+            mean = np.zeros(8, dtype=np.float64)
+            mean[0] = det.cx if det else 0.0
+            mean[1] = det.cy if det else 0.0
+            mean[2] = 1.0
+            mean[3] = 1.0
+            cov = np.eye(8, dtype=np.float64) * 100.0
+            safe_box = det if det else Box(0, 0, 1, 1, 0.0, 0, "")
+            return Track(
+                track_id=self._next_id(),
+                label=safe_box.label,
+                mean=mean,
+                cov=cov,
+                box=safe_box,
+                n_init=self.n_init,
+                trail=[(safe_box.cx, safe_box.cy)],
+                pred_trail=[(safe_box.cx, safe_box.cy)],
+                trail_scores=[safe_box.score],
+            )
 
     def _next_id(self) -> int:
         BoTSortAdaptive._id_seq += 1
@@ -606,22 +869,40 @@ class BoTSortAdaptive:
     _id_seq = 0
 
     def _prune(self) -> None:
+        """Prune dead/unstable tracks with safety checks."""
         alive: List[Track] = []
         for t in self.tracks:
-            stationary = (
-                self.stationary_prune
-                and t.confirmed
-                and t.hits >= 6
-                and t.misses == 0
-                and t.motion_score < 1.5
-            )
-            too_old_lost = (t.state == 1 and t.lost_age > self.max_age)
-            tentative_dead = (not t.confirmed and t.lost_age > self.max_age)
-            delete = stationary or too_old_lost or tentative_dead
-            if delete:
-                t.state = 2
-                continue
-            alive.append(t)
+            try:
+                # Validate numeric fields
+                hits = max(int(getattr(t, "hits", 0)), 0)
+                misses = max(int(getattr(t, "misses", 0)), 0)
+                motion_score = float(getattr(t, "motion_score", 0.0))
+                lost_age = max(int(getattr(t, "lost_age", 0)), 0)
+                state = int(getattr(t, "state", 0))
+
+                if not math.isfinite(motion_score):
+                    motion_score = 0.0
+
+                stationary = (
+                    self.stationary_prune
+                    and t.confirmed
+                    and hits >= 6
+                    and misses == 0
+                    and motion_score < 1.5
+                )
+                too_old_lost = (state == 1 and lost_age > self.max_age)
+                tentative_dead = (not t.confirmed and lost_age > self.max_age)
+                delete = stationary or too_old_lost or tentative_dead
+
+                if delete:
+                    t.state = 2
+                    continue
+                alive.append(t)
+            except Exception as exc:
+                log.debug("_prune: error processing track %d: %s", t.track_id, exc)
+                # On error, keep the track
+                alive.append(t)
+
         self.tracks = alive
 
 

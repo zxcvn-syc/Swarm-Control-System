@@ -54,6 +54,8 @@ the swarm's optimized configuration.
 from __future__ import annotations
 
 import logging
+import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -71,12 +73,82 @@ from cvtrack.types import Box, Track
 log = logging.getLogger(__name__)
 
 
+# Performance thresholds
+_MIN_FRAME_SIZE = 1  # Minimum frame pixel count
+_MIN_FRAME_DIM = 4  # Minimum frame dimension (h, w >= 4)
+
+
 # Adaptive tracker kinds route through cvtrack.tracker.adaptive_tracker.
 # Listed here so other modules (and the runner settings dataclass) can
 # validate against the same set without re-typing the strings.
 ADAPTIVE_KINDS = frozenset({"botsort_adaptive", "deepsort_adaptive"})
 LEGACY_KINDS = frozenset({"botsort", "deepsort", "deepsort_cascade"})
 ALL_KINDS = LEGACY_KINDS | ADAPTIVE_KINDS
+
+
+@dataclass
+class RunnerStats:
+    """Performance statistics for the runner.
+
+    Tracks frame processing counts, times, and resource usage.
+    """
+
+    total_frames: int = 0
+    successful_frames: int = 0
+    failed_frames: int = 0
+    total_detection_time: float = 0.0
+    total_tracking_time: float = 0.0
+    total_reid_time: float = 0.0
+    last_frame_time: float = 0.0
+    max_tracks_seen: int = 0
+    _start_time: float = field(default_factory=time.monotonic)
+
+    @property
+    def average_frame_time(self) -> float:
+        """Average time per successful frame in seconds."""
+        if self.successful_frames == 0:
+            return 0.0
+        total_time = (
+            self.total_detection_time
+            + self.total_tracking_time
+            + self.total_reid_time
+        )
+        return total_time / self.successful_frames
+
+    @property
+    def average_fps(self) -> float:
+        """Average frames per second."""
+        avg = self.average_frame_time
+        return (1.0 / avg) if avg > 0 else 0.0
+
+    @property
+    def uptime_seconds(self) -> float:
+        """Total uptime in seconds."""
+        return time.monotonic() - self._start_time
+
+    def reset(self) -> None:
+        """Reset all statistics."""
+        self.total_frames = 0
+        self.successful_frames = 0
+        self.failed_frames = 0
+        self.total_detection_time = 0.0
+        self.total_tracking_time = 0.0
+        self.total_reid_time = 0.0
+        self.last_frame_time = 0.0
+        self.max_tracks_seen = 0
+        self._start_time = time.monotonic()
+
+    def to_dict(self) -> dict:
+        """Export stats as a dictionary."""
+        return {
+            "total_frames": self.total_frames,
+            "successful_frames": self.successful_frames,
+            "failed_frames": self.failed_frames,
+            "average_frame_time_ms": self.average_frame_time * 1000.0,
+            "average_fps": self.average_fps,
+            "uptime_seconds": self.uptime_seconds,
+            "max_tracks_seen": self.max_tracks_seen,
+        }
 
 
 @dataclass
@@ -272,6 +344,20 @@ class CvtrackRunner:
             else:
                 self._vx_idx, self._vy_idx = 2, 3
 
+        # Performance statistics
+        self.stats = RunnerStats()
+
+    # ------------------------------------------------------------------
+    # Performance statistics accessors
+    # ------------------------------------------------------------------
+    def get_stats(self) -> dict:
+        """Return current performance statistics as a dictionary."""
+        return self.stats.to_dict()
+
+    def reset_stats(self) -> None:
+        """Reset performance statistics."""
+        self.stats.reset()
+
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
@@ -318,63 +404,156 @@ class CvtrackRunner:
         ``include_tentative`` was set to True in the settings.  The
         returned list is the same list the underlying tracker keeps
         internally; do not mutate it in place.
+
+        Enhanced with:
+        - Comprehensive frame validation (None, empty, wrong dtype, wrong dims)
+        - Exception handling with detailed error logging
+        - Performance statistics tracking
         """
-        if frame is None or frame.size == 0:
+        frame_start = time.monotonic()
+        self.stats.total_frames += 1
+
+        # Comprehensive frame validation
+        if frame is None:
+            self.stats.failed_frames += 1
+            log.debug("step: received None frame, returning empty")
             return []
-        detections = self.detector(frame)
+
+        try:
+            if not isinstance(frame, np.ndarray):
+                self.stats.failed_frames += 1
+                log.warning("step: frame is not numpy.ndarray (got %s)", type(frame))
+                return []
+
+            if frame.size == 0:
+                self.stats.failed_frames += 1
+                log.debug("step: frame has zero size, returning empty")
+                return []
+
+            if frame.ndim < 2 or frame.ndim > 3:
+                self.stats.failed_frames += 1
+                log.warning("step: frame has invalid ndim=%d", frame.ndim)
+                return []
+
+            if frame.ndim == 3:
+                h, w, c = frame.shape
+                if h < _MIN_FRAME_DIM or w < _MIN_FRAME_DIM:
+                    self.stats.failed_frames += 1
+                    log.warning("step: frame too small: %dx%d", w, h)
+                    return []
+                if c not in (1, 3, 4):
+                    self.stats.failed_frames += 1
+                    log.warning("step: frame has invalid channels=%d", c)
+                    return []
+            else:
+                h, w = frame.shape
+                if h < _MIN_FRAME_DIM or w < _MIN_FRAME_DIM:
+                    self.stats.failed_frames += 1
+                    log.warning("step: frame too small: %dx%d", w, h)
+                    return []
+        except (AttributeError, ValueError, TypeError) as exc:
+            self.stats.failed_frames += 1
+            log.warning("step: frame validation failed: %s", exc)
+            return []
+
+        # Run detection with timing
+        det_start = time.monotonic()
+        try:
+            detections = self.detector(frame)
+        except Exception as exc:
+            self.stats.failed_frames += 1
+            log.error("step: detector failed: %s", exc)
+            return []
+        self.stats.total_detection_time += time.monotonic() - det_start
+
+        # Ensure detections is iterable
+        if detections is None:
+            detections = []
+        detections = list(detections)
+        detections = [d for d in detections if d is not None]
+
         embeddings: List[Optional[np.ndarray]] = [None] * len(detections)
-        if self.reid_extractor is not None:
-            for j, d in enumerate(detections):
-                if min(d.w, d.h) >= self._reid_min_side:
-                    embeddings[j] = self.reid_extractor(
-                        frame, (d.x1, d.y1, d.x2, d.y2)
-                    )
 
-        # Dispatch on tracker class so each variant gets the exact
-        # signature it expects.  BoT-SORT (legacy + adaptive) needs the
-        # frame for CMC; the 4-state DeepSORT variants do not.
-        if isinstance(self.tracker, (BoTSortTracker, BoTSortAdaptive)):
-            tracks = self.tracker.step(frame, detections, det_embeddings=embeddings)
-        elif isinstance(self.tracker, (DeepSortCascade, DeepSortAdaptive)):
-            tracks = self.tracker.step(
-                detections,
-                det_embeddings=embeddings,
-                galleries=self._reid_galleries,
-            )
-        else:
-            # Defensive fallback: DeepSortLite (no frame, no embeddings).
-            tracks = self.tracker.step(detections)
-
-        # Refresh galleries + per-track embedding means so the cascade
-        # matcher has an updated appearance prototype next step.
-        if self.reid_extractor is not None:
-            for t in tracks:
-                best_idx, best_d2 = -1, float("inf")
+        # ReID extraction with timing
+        if self.reid_extractor is not None and detections:
+            reid_start = time.monotonic()
+            try:
                 for j, d in enumerate(detections):
-                    if embeddings[j] is None:
+                    if min(d.w, d.h) >= self._reid_min_side:
+                        try:
+                            embeddings[j] = self.reid_extractor(
+                                frame, (d.x1, d.y1, d.x2, d.y2)
+                            )
+                        except Exception as exc:
+                            log.debug("ReID extraction failed for det %d: %s", j, exc)
+                            embeddings[j] = None
+            except Exception as exc:
+                log.warning("ReID batch extraction failed: %s", exc)
+            self.stats.total_reid_time += time.monotonic() - reid_start
+
+        # Track with timing
+        track_start = time.monotonic()
+        try:
+            # Dispatch on tracker class so each variant gets the exact
+            # signature it expects.  BoT-SORT (legacy + adaptive) needs the
+            # frame for CMC; the 4-state DeepSORT variants do not.
+            if isinstance(self.tracker, (BoTSortTracker, BoTSortAdaptive)):
+                tracks = self.tracker.step(frame, detections, det_embeddings=embeddings)
+            elif isinstance(self.tracker, (DeepSortCascade, DeepSortAdaptive)):
+                tracks = self.tracker.step(
+                    detections,
+                    det_embeddings=embeddings,
+                    galleries=self._reid_galleries,
+                )
+            else:
+                # Defensive fallback: DeepSortLite (no frame, no embeddings).
+                tracks = self.tracker.step(detections)
+        except Exception as exc:
+            self.stats.failed_frames += 1
+            log.error("step: tracker failed: %s", exc)
+            return []
+        self.stats.total_tracking_time += time.monotonic() - track_start
+
+        tracks = tracks if tracks is not None else []
+
+        # Refresh galleries + per-track embedding means
+        if self.reid_extractor is not None and tracks:
+            for t in tracks:
+                try:
+                    best_idx, best_d2 = -1, float("inf")
+                    for j, d in enumerate(detections):
+                        if embeddings[j] is None:
+                            continue
+                        dd = (d.cx - t.pos[0]) ** 2 + (d.cy - t.pos[1]) ** 2
+                        if dd < best_d2:
+                            best_d2 = dd
+                            best_idx = j
+                    if best_idx < 0:
                         continue
-                    dd = (d.cx - t.pos[0]) ** 2 + (d.cy - t.pos[1]) ** 2
-                    if dd < best_d2:
-                        best_d2 = dd
-                        best_idx = j
-                if best_idx < 0:
-                    continue
-                max_d2 = (max(t.box.w, t.box.h) ** 2) * 4.0
-                if best_d2 > max_d2:
-                    continue
-                g = self._reid_galleries.get(t.track_id)
-                if g is None:
-                    g = Gallery(
-                        size=self._reid_gallery_size,
-                        ema_alpha=self._reid_ema_alpha,
-                    )
-                    self._reid_galleries[t.track_id] = g
-                g.add(embeddings[best_idx])
-                t.embedding_mean = g.mean
+                    max_d2 = (max(t.box.w, t.box.h) ** 2) * 4.0
+                    if best_d2 > max_d2:
+                        continue
+                    g = self._reid_galleries.get(t.track_id)
+                    if g is None:
+                        g = Gallery(
+                            size=self._reid_gallery_size,
+                            ema_alpha=self._reid_ema_alpha,
+                        )
+                        self._reid_galleries[t.track_id] = g
+                    g.add(embeddings[best_idx])
+                    t.embedding_mean = g.mean
+                except Exception as exc:
+                    log.debug("Gallery update failed for track %d: %s", t.track_id, exc)
+
+        # Update statistics
+        self.stats.successful_frames += 1
+        self.stats.last_frame_time = time.monotonic() - frame_start
+        if len(tracks) > self.stats.max_tracks_seen:
+            self.stats.max_tracks_seen = len(tracks)
 
         if self.settings.include_tentative:
             return tracks
-        return [t for t in tracks if t.confirmed]
+        return [t for t in tracks if t.confirmed] if tracks else []
 
     # ------------------------------------------------------------------
     # Convenience: structured output for downstream protocols
@@ -413,49 +592,112 @@ class CvtrackRunner:
         collapse to zero / one and the motion_mode falls back to
         ``0`` (unknown).  Downstream consumers should treat those as
         "not available" rather than as a real classification.
+
+        Enhanced with:
+        - Robust value extraction with NaN/Inf protection
+        - Velocity index bounds checking
+        - Type validation with fallback values
         """
-        # Extract predicted trajectory
+        # Extract predicted trajectory with validation
         pred_x = [0.0] * 5
         pred_y = [0.0] * 5
         pred_conf = [1.0] * 5
 
-        if hasattr(t, 'predicted_future') and t.predicted_future:
-            for i, (px, py, std_x, std_y) in enumerate(t.predicted_future[:5]):
-                pred_x[i] = px
-                pred_y[i] = py
-                pred_conf[i] = t.prediction_confidence if i == 0 else max(0.1, t.prediction_confidence - i * 0.15)
+        try:
+            predicted = getattr(t, "predicted_future", None)
+            if predicted and isinstance(predicted, (list, tuple)):
+                for i, pred_item in enumerate(predicted[:5]):
+                    try:
+                        if not isinstance(pred_item, (tuple, list)) or len(pred_item) < 2:
+                            continue
+                        px = float(pred_item[0])
+                        py = float(pred_item[1])
+                        if math.isfinite(px) and math.isfinite(py):
+                            pred_x[i] = px
+                            pred_y[i] = py
+                            pred_conf[i] = max(0.1, t.prediction_confidence - i * 0.15) \
+                                if i > 0 else float(getattr(t, "prediction_confidence", 1.0))
+                    except (TypeError, ValueError, IndexError):
+                        continue
+        except Exception:
+            pass
 
-        # Get motion mode
+        # Get motion mode with type safety
         motion_mode = 0
-        if hasattr(t, 'motion_mode'):
-            mode_str = getattr(t, 'motion_mode', 'unknown')
-            if mode_str == 'stationary':
+        try:
+            mode_str = getattr(t, "motion_mode", "unknown")
+            if mode_str == "stationary":
                 motion_mode = 1
-            elif mode_str == 'slow':
+            elif mode_str == "slow":
                 motion_mode = 2
-            elif mode_str == 'fast':
+            elif mode_str == "fast":
                 motion_mode = 3
+        except Exception:
+            motion_mode = 0
 
-        # Calculate speed
+        # Calculate speed with NaN/Inf protection
         speed = 0.0
-        if hasattr(t, 'get_speed'):
-            speed = t.get_speed()
-        else:
-            speed = float(np.sqrt(t.mean[self._vx_idx]**2 + t.mean[self._vy_idx]**2))
+        try:
+            if hasattr(t, "get_speed"):
+                speed = float(t.get_speed())
+                if not math.isfinite(speed):
+                    speed = 0.0
+            else:
+                # Fallback: compute from mean vector with bounds checking
+                try:
+                    vx = float(t.mean[self._vx_idx])
+                    vy = float(t.mean[self._vy_idx])
+                    speed = float(np.sqrt(vx * vx + vy * vy))
+                    if not math.isfinite(speed):
+                        speed = 0.0
+                except (IndexError, TypeError):
+                    speed = 0.0
+        except Exception:
+            speed = 0.0
+
+        # Extract velocity with bounds checking
+        vx = 0.0
+        vy = 0.0
+        try:
+            mean_arr = np.asarray(t.mean, dtype=np.float64)
+            if mean_arr.size > max(self._vx_idx, self._vy_idx):
+                vx = float(mean_arr[self._vx_idx])
+                vy = float(mean_arr[self._vy_idx])
+                if not math.isfinite(vx):
+                    vx = 0.0
+                if not math.isfinite(vy):
+                    vy = 0.0
+        except (AttributeError, TypeError, ValueError, IndexError):
+            pass
+
+        # Extract position with validation
+        try:
+            pos_x, pos_y = t.pos
+            pos_x = float(pos_x) if math.isfinite(pos_x) else 0.0
+            pos_y = float(pos_y) if math.isfinite(pos_y) else 0.0
+        except Exception:
+            pos_x, pos_y = 0.0, 0.0
+
+        # Extract score with clamping
+        try:
+            score = float(t.box.score)
+            score = max(0.0, min(1.0, score))
+        except Exception:
+            score = 0.0
 
         return TrackedTarget(
             target_id=int(t.track_id),
-            x=float(t.pos[0]),
-            y=float(t.pos[1]),
-            vx=float(t.mean[self._vx_idx]),
-            vy=float(t.mean[self._vy_idx]),
-            label=str(t.label),
-            score=float(t.box.score),
-            confirmed=bool(t.confirmed),
-            cls=int(t.box.cls),
+            x=pos_x,
+            y=pos_y,
+            vx=vx,
+            vy=vy,
+            label=str(getattr(t, "label", "")),
+            score=score,
+            confirmed=bool(getattr(t, "confirmed", True)),
+            cls=int(getattr(t.box, "cls", 0)),
             speed=speed,
             motion_mode=motion_mode,
-            confidence=float(t.box.score),
+            confidence=score,
             pred_x=pred_x,
             pred_y=pred_y,
             pred_conf=pred_conf,
@@ -583,5 +825,6 @@ __all__ = [
     "CvtrackRunner",
     "LEGACY_KINDS",
     "RunnerSettings",
+    "RunnerStats",
     "TrackedTarget",
 ]

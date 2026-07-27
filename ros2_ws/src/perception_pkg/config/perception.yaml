@@ -1,0 +1,118 @@
+# perception_pkg default parameters (unified config)
+#
+# Loaded via `ros2 launch perception_pkg perception.launch.py`.
+# This file supersedes the older tracker_node.yaml and adds settings
+# for the full perception pipeline including coord_transform_node.
+#
+# All coordinates published on /target_track are **pixel** coordinates
+# in the source image plane.  Downstream nodes that need world-frame
+# positions must use the /target_track_transformed topic (if enabled)
+# or perform their own IPM / homography calibration.
+#
+# Performance targets (CPU, YOLOv8s, 480px input):
+#   - Frame rate : 3–10 Hz  (depends on video complexity and publish_rate_hz)
+#   - Detector    : YOLOv8s via ultralytics (CPU inference ≈ 150–300 ms/frame)
+#   - Tracker     : DeepSORT cascade or BoT-SORT adaptive
+#   - Memory      : ≈ 500 MB resident (model + background buffers)
+
+/**:
+  ros__parameters:
+
+    # ── Input ──────────────────────────────────────────────────────────────
+    input_mode: "video"                    # 'video' or 'topic'
+    video_source: ""                       # path or webcam index, e.g. "videos/test_synthetic_multi_target.mp4"
+    image_topic: "/camera/image"            # sensor_msgs/Image (topic mode)
+    loop_video: false                       # restart at EOF (video mode only)
+
+    # ── Output ─────────────────────────────────────────────────────────────
+    track_topic: "/target_track"           # swarm_interfaces/TargetTrackArray
+    frame_id: "camera_optical_frame"
+    publish_rate_hz: 10.0                   # 0 = as-fast-as-frames; cap publish rate
+    enable_debug_topics: true
+
+    # ── Multi-source fusion (optional) ─────────────────────────────────────
+    enable_fusion: false                    # true = aggregate multiple /<source>/target_track
+    fusion_sources: []                      # e.g. [sensor_0, sensor_1]
+    sources: []                             # fallback alias for fusion_sources
+
+    # ── Detector ───────────────────────────────────────────────────────────
+    detector:
+      backend: "yolo"                     # 'yolo' or 'auto' (auto → MOG2 fallback)
+      weights: ""                          # absolute path to .pt YOLOv8 weights (required for backend:=yolo)
+      device: "cpu"                         # 'cpu' or 'cuda:0'
+      imgsz: 480                            # YOLO input size (longest side, pixels)
+      conf: 0.15                            # detection confidence threshold
+      classes: [0, 1, 2, 3, 4, 5, 7, 8]   # COCO+VisDrone subset: person/bicycle/car/motorcycle/bus/truck
+      min_box_area: 200.0
+      min_conf: 0.0
+      nms_iou: 0.5
+
+    # ── Tracker ───────────────────────────────────────────────────────────
+    tracker:
+      kind: "deepsort_cascade"            # botsort | deepsort | deepsort_cascade
+                                           # *_adaptive variants enable trajectory prediction
+      dt: 0.05                             # time step (seconds) — set to 1/fps_of_source_video
+      max_age: 30
+      n_init: 3
+      iou_thresh: 0.30
+      high_conf: 0.35
+      new_track_conf: 0.20
+      lost_relink_frames: 30
+      stationary_prune: true
+      include_tentative: false
+
+    # ── Kalman filter (adaptive trackers) ─────────────────────────────────
+    # These are consumed by trackers: botsort_adaptive, deepsort_adaptive
+    # Leave unset to use tracker built-in defaults.
+    kalman:
+      dt: 0.05
+      sigma_p: 0.05
+      sigma_v: 0.00625
+      sigma_m: 0.05
+      acceleration_gain: 0.5
+      motion_threshold_slow: 2.0
+      motion_threshold_fast: 20.0
+      base_std_pos: 0.05
+      base_std_vel: 0.00625
+      base_std_meas: 0.05
+      motion_adapt_gain: 0.3
+      velocity_limit: 100.0
+      innovation_gate: 9.4877
+
+    # ── Trajectory prediction (adaptive trackers) ──────────────────────────
+    trajectory_prediction:
+      enabled: true
+      prediction_steps: 10                  # how many steps ahead to predict
+      confidence_decay: 0.9                 # per-step confidence multiplier
+      min_confidence: 0.1                   # stop predicting below this confidence
+
+    # ── Appearance (deepsort_cascade only) ────────────────────────────────
+    appearance:
+      enabled: false                        # OSNet ReID; requires appearance weights file
+      weights: ""
+
+    # ── Enclosure group (陈思睿接口) ──────────────────────────────────────
+    enclosure:
+      enabled: false
+      topic: "/enclosure_targets"
+      publish_rate_hz: 5.0
+      drone_positions: []                    # e.g. [{x: 0.0, y: 0.0}, ...]
+
+    # ── Coordinate transform (coord_transform_node) ──────────────────────────
+    coord_transform:
+      enabled: false                         # true = also publish world-frame tracks
+      output_topic: "/target_track_transformed"  # not yet implemented — placeholder
+      camera_info_topic: "/camera/camera_info"
+      drone_pose_topic: "/drone_pose"
+      input_topic: "/target_track"
+      world_frame: "world"
+      ground_altitude: 0.0                  # Z height of ground plane in world frame (m)
+      max_pose_age_s: 0.5                   # max age of drone pose before skipping frame
+      camera_mount_roll: 0.0
+      camera_mount_pitch: 0.0
+      camera_mount_yaw: 0.0
+      # NOTE: homography-based IPM is not yet implemented in coord_transform_node.
+      # The node uses the ray-intersection approach with camera intrinsics + drone pose.
+
+    # ── Diagnostics ───────────────────────────────────────────────────────
+    metrics_period_ms: 1000

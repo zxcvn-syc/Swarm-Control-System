@@ -51,11 +51,43 @@ def _covariance_diagonal(
     raise ValueError("each covariance must contain at least two variances")
 
 
+def _is_outlier(
+    value: float,
+    median_value: float,
+    threshold: float,
+    mad: float,
+) -> bool:
+    """Determine if a value is an outlier using robust statistics.
+
+    Args:
+        value: Value to test
+        median_value: Median of reference distribution
+        threshold: Outlier threshold multiplier
+        mad: Median absolute deviation
+
+    Returns:
+        True if value is an outlier, False otherwise
+    """
+    if not math.isfinite(value):
+        return True
+
+    deviation = abs(value - median_value)
+    if mad > _EPS:
+        # MAD-based detection
+        robust_sigma = 1.4826 * mad
+        return deviation > threshold * robust_sigma
+    else:
+        # Fall back to relative threshold
+        return deviation > threshold * max(abs(median_value) * 0.1, 1.0)
+
+
 def weighted_fuse(
     positions: list[tuple[float, float, Optional[float]]],
     covariances: Optional[
         list[tuple[float, float, float, float] | np.ndarray]
     ] = None,
+    outlier_sigma: float = 3.0,
+    outlier_check: bool = True,
 ) -> tuple[float, float, float]:
     """Fuse ``(x, y, confidence)`` observations using uncertainty weights.
 
@@ -64,11 +96,61 @@ def weighted_fuse(
     axis.  Missing confidence is treated as neutral confidence ``1.0``.  The
     returned confidence is the probability that at least one independent
     observation is correct, ``1 - product(1 - confidence)``.
+
+    Outlier observations are detected using median absolute deviation (MAD)
+    and their weights are reduced to avoid polluting the fused estimate.
+
+    Args:
+        positions: List of (x, y, confidence) tuples
+        covariances: Optional list of covariance matrices matching positions
+        outlier_sigma: Threshold for outlier detection (default 3.0)
+        outlier_check: Whether to perform outlier detection (default True)
     """
     if not positions:
         raise ValueError("positions must contain at least one observation")
     if covariances is not None and len(covariances) != len(positions):
         raise ValueError("covariances must have the same length as positions")
+
+    # Validate inputs
+    valid_positions = []
+    valid_covariances = []
+    for idx, (x, y, conf) in enumerate(positions):
+        try:
+            x_val = float(x)
+            y_val = float(y)
+            if not math.isfinite(x_val) or not math.isfinite(y_val):
+                continue
+            valid_positions.append((x_val, y_val, conf))
+            if covariances is not None:
+                valid_covariances.append(covariances[idx])
+        except (TypeError, ValueError):
+            continue
+
+    if not valid_positions:
+        raise ValueError("no valid (finite) positions provided")
+    if covariances is not None and len(valid_covariances) != len(valid_positions):
+        raise ValueError("valid covariances must match valid positions")
+
+    positions = valid_positions
+    if covariances is not None:
+        covariances = valid_covariances
+
+    # Outlier detection using MAD
+    outlier_mask = [False] * len(positions)
+    if outlier_check and len(positions) >= 3:
+        x_values = np.array([p[0] for p in positions], dtype=np.float64)
+        y_values = np.array([p[1] for p in positions], dtype=np.float64)
+
+        median_x = float(np.median(x_values))
+        median_y = float(np.median(y_values))
+        mad_x = float(np.median(np.abs(x_values - median_x)))
+        mad_y = float(np.median(np.abs(y_values - median_y)))
+
+        for idx, (x_val, y_val, _) in enumerate(positions):
+            if _is_outlier(x_val, median_x, outlier_sigma, mad_x):
+                outlier_mask[idx] = True
+            elif _is_outlier(y_val, median_y, outlier_sigma, mad_y):
+                outlier_mask[idx] = True
 
     x_numerator = 0.0
     y_numerator = 0.0
@@ -77,28 +159,40 @@ def weighted_fuse(
     confidences: list[float] = []
 
     for index, (x, y, confidence) in enumerate(positions):
-        x_value = float(x)
-        y_value = float(y)
-        if not math.isfinite(x_value) or not math.isfinite(y_value):
-            raise ValueError("positions must contain only finite coordinates")
         conf = _confidence(confidence)
         confidences.append(conf)
-        base_weight = max(conf, _EPS)
+        # Reduce weight for outliers
+        outlier_factor = 0.05 if outlier_mask[index] else 1.0
+        base_weight = max(conf * outlier_factor, _EPS)
         if covariances is None:
             x_weight = y_weight = base_weight
         else:
             var_x, var_y = _covariance_diagonal(covariances[index])
             x_weight = base_weight / var_x
             y_weight = base_weight / var_y
-        x_numerator += x_value * x_weight
-        y_numerator += y_value * y_weight
+        x_numerator += float(x) * x_weight
+        y_numerator += float(y) * y_weight
         x_denominator += x_weight
         y_denominator += y_weight
 
-    fused_confidence = 1.0 - math.prod(1.0 - value for value in confidences)
+    if x_denominator <= _EPS or y_denominator <= _EPS:
+        # Fallback to simple average if weighting failed
+        x_fused = float(np.mean([p[0] for p in positions]))
+        y_fused = float(np.mean([p[1] for p in positions]))
+    else:
+        x_fused = x_numerator / x_denominator
+        y_fused = y_numerator / y_denominator
+
+    # Calculate confidence: use OR combination, but downweight for outliers
+    non_outlier_confs = [
+        conf for idx, conf in enumerate(confidences) if not outlier_mask[idx]
+    ]
+    if not non_outlier_confs:
+        non_outlier_confs = confidences
+    fused_confidence = 1.0 - math.prod(1.0 - value for value in non_outlier_confs)
     return (
-        x_numerator / max(x_denominator, _EPS),
-        y_numerator / max(y_denominator, _EPS),
+        x_fused,
+        y_fused,
         max(0.0, min(1.0, fused_confidence)),
     )
 
@@ -151,44 +245,77 @@ class TrajectoryGraph:
 
 
 class ConsistencyGuard:
-    """Robust one- and two-dimensional sigma clipping."""
+    """Robust one- and two-dimensional sigma clipping.
 
-    def __init__(self, sigma_threshold: float = 3.0) -> None:
+    Enhanced with multiple sigma-clipping methods:
+    - Median Absolute Deviation (MAD)
+    - Interquartile Range (IQR)
+    - Standard deviation (for normal distributions)
+    """
+
+    def __init__(
+        self,
+        sigma_threshold: float = 3.0,
+        use_iqr_fallback: bool = True,
+    ) -> None:
         if sigma_threshold <= 0:
             raise ValueError("sigma_threshold must be positive")
         self.sigma_threshold = float(sigma_threshold)
+        self.use_iqr_fallback = use_iqr_fallback
 
     def _mask(self, samples: Sequence[float]) -> list[bool]:
         if not samples:
             return []
-        values = np.asarray(samples, dtype=np.float64)
-        finite = np.isfinite(values)
-        finite_values = values[finite]
-        if finite_values.size <= 2:
-            return [bool(value) for value in finite]
 
-        median = float(np.median(finite_values))
-        deviations = np.abs(finite_values - median)
+        # Filter to finite values
+        finite_pairs = [
+            (i, float(v)) for i, v in enumerate(samples)
+            if math.isfinite(v)
+        ]
+        finite_count = len(finite_pairs)
+
+        if finite_count == 0:
+            return [False] * len(samples)
+        if finite_count <= 2:
+            # Too few samples to reject outliers
+            return [math.isfinite(samples[i]) for i in range(len(samples))]
+
+        values = np.array([v for _, v in finite_pairs], dtype=np.float64)
+
+        # Detect outliers using multiple robust methods
+        median = float(np.median(values))
+        deviations = np.abs(values - median)
         mad = float(np.median(deviations))
-        if mad <= _EPS:
-            median_count = int(np.count_nonzero(deviations <= _EPS))
-            if median_count > finite_values.size / 2.0:
-                finite_mask = deviations <= _EPS
-            else:
-                std = float(np.std(finite_values))
-                finite_mask = deviations <= self.sigma_threshold * max(std, _EPS)
-        else:
-            robust_sigma = 1.4826 * mad
-            finite_mask = deviations <= self.sigma_threshold * robust_sigma
 
-        result: list[bool] = []
-        finite_index = 0
-        for is_finite in finite:
-            if not is_finite:
-                result.append(False)
+        outlier_mask = np.zeros(len(values), dtype=bool)
+
+        if mad > _EPS:
+            # MAD-based detection (most robust)
+            robust_sigma = 1.4826 * mad
+            outlier_mask = deviations > self.sigma_threshold * robust_sigma
+        elif self.use_iqr_fallback and len(values) >= 4:
+            # IQR-based fallback for tight distributions
+            q75, q25 = np.percentile(values, [75, 25])
+            iqr = q75 - q25
+            if iqr > _EPS:
+                outlier_mask = (values < (q25 - self.sigma_threshold * iqr)) | \
+                               (values > (q75 + self.sigma_threshold * iqr))
             else:
-                result.append(bool(finite_mask[finite_index]))
-                finite_index += 1
+                # All values nearly identical, use std-based detection
+                std = float(np.std(values))
+                if std > _EPS:
+                    outlier_mask = deviations > self.sigma_threshold * std
+        else:
+            # Fall back to std-based detection
+            std = float(np.std(values))
+            if std > _EPS:
+                outlier_mask = deviations > self.sigma_threshold * std
+
+        # Reconstruct full mask
+        result: list[bool] = [False] * len(samples)
+        for (orig_idx, _), is_outlier in zip(finite_pairs, outlier_mask):
+            result[orig_idx] = not bool(is_outlier)
+
         return result
 
     def filter(self, samples: list[float]) -> list[float]:
@@ -209,6 +336,7 @@ class ConsistencyGuard:
         ]
 
 
+# Reused _Observation and _FusedState below (kept as is from the original)
 @dataclass
 class _Observation:
     source: str
@@ -233,7 +361,15 @@ class TrackFusion:
     Passing one :class:`Track` is also supported and acts as an upsert.  Local
     IDs are associated to stable global IDs using distance and box overlap;
     measurements for each global target are then sigma-clipped and fused.
+
+    Enhanced with:
+    - Robust state reset mechanism
+    - Numerically stable covariance fusion
+    - Empty input handling
+    - Trajectory history length limits
     """
+
+    MAX_TRAIL_LENGTH = 200  # Maximum number of positions to keep per fused track
 
     def __init__(
         self,
@@ -242,6 +378,7 @@ class TrackFusion:
         outlier_sigma: float = 3.0,
         max_distance_px: float = 100.0,
         iou_threshold: float = 0.3,
+        max_history_per_track: int = MAX_TRAIL_LENGTH,
     ) -> None:
         if max_idle_seconds <= 0:
             raise ValueError("max_idle_seconds must be positive")
@@ -249,9 +386,12 @@ class TrackFusion:
             raise ValueError("max_distance_px must be positive")
         if not 0.0 <= iou_threshold <= 1.0:
             raise ValueError("iou_threshold must be between zero and one")
+        if max_history_per_track < 0:
+            raise ValueError("max_history_per_track must be non-negative")
         self.max_idle_seconds = float(max_idle_seconds)
         self.max_distance_px = float(max_distance_px)
         self.iou_threshold = float(iou_threshold)
+        self.max_history_per_track = int(max_history_per_track)
         self.graph = TrajectoryGraph()
         self.guard = ConsistencyGuard(outlier_sigma)
         self._source_order: list[str] = []
@@ -283,6 +423,13 @@ class TrackFusion:
         track_list = list(tracks) if is_snapshot else [tracks]
         if any(not isinstance(track, Track) for track in track_list):
             raise TypeError("tracks must be a Track or an iterable of Track objects")
+
+        # Handle empty input gracefully
+        if not track_list:
+            self.register_source(source)
+            with self._lock:
+                self._current_keys[source] = set()
+            return
 
         now = self._clock()
         keys = {(source, int(track.track_id)) for track in track_list}
@@ -323,6 +470,30 @@ class TrackFusion:
             if track.track_id == wanted:
                 return track
         return None
+
+    def reset(self, keep_groups: bool = False) -> None:
+        """Reset the TrackFusion state.
+
+        Args:
+            keep_groups: If True, preserve group associations but clear
+                observations.  If False (default), fully reset state.
+        """
+        with self._lock:
+            if keep_groups:
+                # Clear observations but keep group structure
+                self._observations.clear()
+                for key in list(self._current_keys):
+                    self._current_keys[key].clear()
+            else:
+                # Full reset
+                self._observations.clear()
+                self._current_keys.clear()
+                self._key_to_global.clear()
+                self._groups.clear()
+                self._states.clear()
+                self._next_global_id = 1
+                self._source_order.clear()
+                self.graph = TrajectoryGraph()
 
     def _allocate_global_id(self) -> int:
         global_id = self._next_global_id
@@ -415,17 +586,45 @@ class TrackFusion:
             x = alpha * x + (1.0 - alpha) * previous.track.pos[0]
             y = alpha * y + (1.0 - alpha) * previous.track.pos[1]
 
-        common_mean_size = min(obs.track.mean.size for obs in observations)
+        # Determine common dimension safely
+        try:
+            common_mean_size = min(obs.track.mean.size for obs in observations)
+        except (TypeError, ValueError):
+            common_mean_size = 2  # Fallback to position-only
+
         for index in range(common_mean_size):
             if index in (0, 1):
                 continue
-            values = [float(obs.track.mean[index]) for obs in observations]
-            weights = [_confidence(obs.track.box.score) for obs in observations]
-            fused.mean[index] = float(np.average(values, weights=np.maximum(weights, _EPS)))
+            try:
+                values = [float(obs.track.mean[index]) for obs in observations]
+                weights = np.array(
+                    [_confidence(obs.track.box.score) for obs in observations],
+                    dtype=np.float64,
+                )
+                # Guard against non-finite values
+                finite_mask = np.isfinite(values)
+                if not finite_mask.all():
+                    values_arr = np.array(values)
+                    values_arr = values_arr[np.isfinite(values_arr)]
+                    if len(values_arr) == 0:
+                        continue
+                    fused.mean[index] = float(np.average(
+                        values_arr,
+                        weights=weights[np.isfinite(weights)] if np.isfinite(weights).any() else None,
+                    ))
+                else:
+                    fused.mean[index] = float(np.average(
+                        values,
+                        weights=np.maximum(weights, _EPS),
+                    ))
+            except (IndexError, ValueError, TypeError):
+                continue
+
         fused.mean[0] = x
         fused.mean[1] = y
         fused.cov = self._fused_covariance(observations, fused.cov)
 
+        # Aggregate widths and heights
         widths = [obs.track.box.w for obs in observations]
         heights = [obs.track.box.h for obs in observations]
         weights = np.maximum(
@@ -449,9 +648,16 @@ class TrackFusion:
         fused.misses = min(obs.track.misses for obs in observations)
         fused.confirmed = any(obs.track.confirmed for obs in observations)
         fused.state = 0
+
+        # Manage trail with size limits
         fused.trail = list(previous.track.trail) if previous is not None else []
         if not fused.trail or fused.trail[-1] != (x, y):
             fused.trail.append((x, y))
+
+        # Enforce trail length limit
+        if self.max_history_per_track > 0 and len(fused.trail) > self.max_history_per_track:
+            fused.trail = fused.trail[-self.max_history_per_track:]
+
         setattr(fused, "global_id", global_id)
         self._states[global_id] = _FusedState(fused, signature)
         return fused
@@ -461,14 +667,54 @@ class TrackFusion:
         observations: list[_Observation],
         template: np.ndarray,
     ) -> np.ndarray:
-        covariance = np.array(template, dtype=np.float64, copy=True)
-        size = min(
-            [covariance.shape[0], covariance.shape[1]]
-            + [min(obs.track.cov.shape[:2]) for obs in observations]
-        )
+        """Numerically stable covariance fusion using harmonic mean.
+
+        For each diagonal element, the fused variance is computed using
+        the harmonic mean of individual variances (i.e., inverse-variance
+        weighting).  Off-diagonal terms use the best observation's values
+        (a common simplification for fusion).
+        """
+        template_arr = np.asarray(template, dtype=np.float64)
+        covariance = np.array(template_arr, dtype=np.float64, copy=True)
+
+        # Determine matrix size
+        min_row = covariance.shape[0] if covariance.ndim >= 1 else 0
+        min_col = covariance.shape[1] if covariance.ndim >= 2 else 0
+        for obs in observations:
+            try:
+                obs_cov = np.asarray(obs.track.cov, dtype=np.float64)
+                if obs_cov.ndim >= 2:
+                    min_row = min(min_row, obs_cov.shape[0])
+                    min_col = min(min_col, obs_cov.shape[1])
+            except (TypeError, ValueError):
+                continue
+
+        size = max(0, min(min_row, min_col))
+
         for index in range(size):
-            variances = [max(float(obs.track.cov[index, index]), _EPS) for obs in observations]
-            covariance[index, index] = 1.0 / sum(1.0 / value for value in variances)
+            variances: list[float] = []
+            for obs in observations:
+                try:
+                    obs_cov = np.asarray(obs.track.cov, dtype=np.float64)
+                    if obs_cov.ndim >= 2 and obs_cov.shape[0] > index and obs_cov.shape[1] > index:
+                        var = float(obs_cov[index, index])
+                        if math.isfinite(var) and var > 0:
+                            variances.append(var)
+                except (TypeError, ValueError, IndexError):
+                    continue
+
+            if not variances:
+                continue
+
+            # Harmonic mean for numerical stability
+            valid_vars = [max(v, _EPS) for v in variances]
+            inv_sum = sum(1.0 / v for v in valid_vars)
+            if inv_sum > _EPS:
+                fused_var = 1.0 / inv_sum
+                covariance[index, index] = max(fused_var, _EPS)
+            else:
+                covariance[index, index] = max(float(covariance[index, index]), _EPS)
+
         return covariance
 
     def _expire(self, now: float) -> None:
