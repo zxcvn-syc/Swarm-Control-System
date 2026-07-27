@@ -16,14 +16,67 @@ arrived yet, ``tick`` simply logs once and returns.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
-from swarm_interfaces.msg import DroneStateArray, TargetTrackArray, TaskAssignment
+try:  # Keep pure parsing and unit tests usable without a sourced ROS2 setup.
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+    from swarm_interfaces.msg import DroneStateArray, TargetTrackArray, TaskAssignment
+    _HAS_ROS = True
+except ImportError:  # pragma: no cover - exercised in non-ROS test environments
+    _HAS_ROS = False
+
+    class _FallbackLogger:
+        def info(self, *args, **kwargs):
+            return None
+
+        def warn(self, *args, **kwargs):
+            return None
+
+    class Node:  # type: ignore[no-redef]
+        def __init__(self, name: str) -> None:
+            self._parameters = {}
+            self._logger = _FallbackLogger()
+
+        def declare_parameter(self, name, value):
+            self._parameters.setdefault(name, value)
+
+        def get_parameter(self, name):
+            return SimpleNamespace(value=self._parameters[name])
+
+        def get_logger(self):
+            return self._logger
+
+        def create_subscription(self, *args, **kwargs):
+            return SimpleNamespace()
+
+        def create_publisher(self, *args, **kwargs):
+            return SimpleNamespace(publish=lambda msg: None)
+
+        def create_timer(self, *args, **kwargs):
+            return SimpleNamespace()
+
+    class QoSProfile:
+        def __init__(self, depth=10):
+            self.depth = depth
+            self.reliability = None
+
+    class QoSReliabilityPolicy:
+        RELIABLE = 1
+
+    class TaskAssignment:  # type: ignore[no-redef]
+        def __init__(self):
+            self.drone_id = 0
+            self.target_id = 0
+            self.task_type = ""
+
+    DroneStateArray = object  # type: ignore[assignment,misc]
+    TargetTrackArray = object  # type: ignore[assignment,misc]
+    rclpy = None  # type: ignore[assignment]
 
 from .assign import greedy_assign, hungarian_assign
 
@@ -31,6 +84,40 @@ from .assign import greedy_assign, hungarian_assign
 def uint32(x: int) -> int:
     """Coerce int to uint32 range so ROS2 does not raise on assignment."""
     return int(x) & 0xFFFFFFFF
+
+
+def normalize_strategy(strategy: str) -> str:
+    """Accept supported strategies and default unknown values to greedy."""
+    return strategy if strategy in ("greedy", "hungarian") else "greedy"
+
+
+def target_priority(track) -> float:
+    """Convert a track confidence/confirmation pair into assignment priority."""
+    priority = float(np.clip(track.confidence, 0.0, 1.0))
+    if bool(track.is_confirmed):
+        priority = min(1.0, priority + 0.1)
+    return priority
+
+
+def parse_targets(msg: TargetTrackArray) -> Dict[int, Tuple[float, float, float]]:
+    """Return the latest target snapshot keyed by target ID."""
+    return {
+        int(track.target_id): (
+            float(track.x),
+            float(track.y),
+            target_priority(track),
+        )
+        for track in msg.tracks
+    }
+
+
+def parse_drones(msg: DroneStateArray) -> Dict[int, Tuple[float, float]]:
+    """Return available drones from the latest state snapshot."""
+    return {
+        int(drone.drone_id): (float(drone.x), float(drone.y))
+        for drone in msg.drones
+        if bool(drone.available)
+    }
 
 
 class SchedulerNode(Node):
@@ -62,11 +149,12 @@ class SchedulerNode(Node):
             self.get_parameter("default_task_type").value
         )
 
-        if self.strategy not in ("greedy", "hungarian"):
+        configured_strategy = self.strategy
+        self.strategy = normalize_strategy(configured_strategy)
+        if self.strategy != configured_strategy:
             self.get_logger().warn(
-                f"Unknown strategy '{self.strategy}', falling back to greedy."
+                f"Unknown strategy '{configured_strategy}', falling back to greedy."
             )
-            self.strategy = "greedy"
 
         # ----- state caches -----
         # target_id -> (x, y, priority). We keep the last-seen position per
@@ -110,22 +198,11 @@ class SchedulerNode(Node):
     # Callbacks
     # ----------------------------------------------------------------
     def on_target(self, msg: TargetTrackArray) -> None:
-        for tr in msg.tracks:
-            # Priority heuristic: faster / more-confirmed targets rank higher.
-            # We keep it in [0, 1] to match the cost weight in assign.py.
-            priority = float(np.clip(tr.confidence, 0.0, 1.0))
-            if tr.is_confirmed:
-                priority = min(1.0, priority + 0.1)
-            self._targets[int(tr.target_id)] = (float(tr.x), float(tr.y), priority)
+        self._targets = parse_targets(msg)
+        self._empty_target_logged = False
 
     def on_drone(self, msg: DroneStateArray) -> None:
-        for d in msg.drones:
-            if not d.available:
-                # Drop unavailable drones from the cache so they are not
-                # assigned to.
-                self._drones.pop(int(d.drone_id), None)
-                continue
-            self._drones[int(d.drone_id)] = (float(d.x), float(d.y))
+        self._drones = parse_drones(msg)
 
     # ----------------------------------------------------------------
     # Tick
