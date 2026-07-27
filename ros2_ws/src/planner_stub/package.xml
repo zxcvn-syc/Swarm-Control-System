@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>planner_stub</name>
+  <version>0.1.0</version>
+  <description>
+    Integration stub for the empty planning_pkg slot.  Implements the
+    *minimum* surface so the three-link integration can be exercised
+    end-to-end before the real planner_node lands.  Concrete behaviour:
+
+    * Subscribes to /task_assignment (scheduler output) + /target_track
+      (perception output, for coordinates TaskAssignment does not carry).
+    * Publishes synthetic /drone_states (DroneStateArray) for the swarm.
+    * Publishes the next-step pose on /drone_state (DroneState) so the
+      scheduler + enclosure loops can be closed.
+
+    This is the *integration shim*, not a path planner.  Once
+    planning_pkg lands a real planner_node, this stub should be removed
+    and the real node wired in at the same topics.
+  </description>
+  <maintainer email="swarm@example.com">Swarm Control System Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>swarm_interfaces</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -1,0 +1,13 @@
+planner_stub_node:
+  ros__parameters:
+    num_drones: 8
+    max_speed: 2.0                 # m/s
+    tick_period: 0.5               # s
+    altitude: 5.0                  # m
+    min_sep: 3.0                   # m, drone-drone repulsion
+    frame_id: world                # ENU local frame
+    seed_grid_spacing: 6.0
+    assignment_topic: /task_assignment
+    target_topic: /target_track
+    drone_states_topic: /drone_states
+    drone_state_topic: /drone_state
