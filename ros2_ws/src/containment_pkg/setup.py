@@ -20,6 +20,14 @@ setup(
             'share/' + package_name,
             ['package.xml']
         ),
+        (
+            'share/' + package_name + '/launch',
+            ['launch/containment.launch.py']
+        ),
+        (
+            'share/' + package_name + '/config',
+            ['config/containment.yaml']
+        ),
     ],
 
     install_requires=[

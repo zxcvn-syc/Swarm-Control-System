@@ -8,26 +8,33 @@ from swarm_interfaces.msg import (
     EnclosureCommand,
     EnclosureCommandArray,
     EnclosureTargetArray,
+    TargetTrackArray,
 )
 
 from .voronoi import voronoi_enclose
 
 
 class EnclosureNode(Node):
-    """ROS2 adapter for the Voronoi enclosure calculation."""
+    """Compute dynamic Voronoi enclosure commands from ROS2 state updates."""
 
     def __init__(self):
         super().__init__("enclosure_node")
         self.declare_parameter("enclosure_radius", 25.0)
         self.declare_parameter("min_dist", 5.0)
         self.declare_parameter("update_period", 1.0)
-        self._targets = None
-        self._drones = None
-        self._target_sub = self.create_subscription(
-            EnclosureTargetArray, "/enclosure_targets", self._targets_callback, 10
+        self._targets = []
+        self._drones = []
+        self._dirty = False
+        self._last_update_time = None
+        self._update_count = 0
+        self._target_track_sub = self.create_subscription(
+            TargetTrackArray, "/target_track", self.on_target_track, 10
+        )
+        self._enclosure_target_sub = self.create_subscription(
+            EnclosureTargetArray, "/enclosure_targets", self.on_enclosure_targets, 10
         )
         self._drone_sub = self.create_subscription(
-            DroneStateArray, "/drone_states", self._drones_callback, 10
+            DroneStateArray, "/drone_states", self.on_drone, 10
         )
         self._publisher = self.create_publisher(
             EnclosureCommandArray, "/enclosure_command", 10
@@ -35,32 +42,38 @@ class EnclosureNode(Node):
         period = max(float(self.get_parameter("update_period").value), 0.01)
         self._timer = self.create_timer(period, self.tick)
 
-    def _targets_callback(self, message):
-        self._targets = message
+    def on_target_track(self, message):
+        """Use tracker output as the primary target source."""
+        self._targets = list(getattr(message, "tracks", []))
+        self._dirty = True
 
-    def _drones_callback(self, message):
-        self._drones = message
+    def on_enclosure_targets(self, message):
+        """Accept the legacy enclosure-target message as a fallback input."""
+        self._targets = list(getattr(message, "targets", []))
+        self._dirty = True
+
+    def on_drone(self, message):
+        self._drones = self._state_list(message)
+        self._dirty = True
+
+    # Compatibility aliases for callers using the old callback names.
+    _targets_callback = on_enclosure_targets
+    _drones_callback = on_drone
 
     @staticmethod
     def _state_list(message):
-        return list(getattr(message, "states", getattr(message, "drones", [])))
+        return list(getattr(message, "drones", getattr(message, "states", [])))
 
     def tick(self):
-        if self._targets is None or self._drones is None:
-            return
-        states = self._state_list(self._drones)
-        targets = list(getattr(self._targets, "targets", []))
-        command = EnclosureCommandArray()
-        command.num_drones = len(states)
-        if not states:
-            command.commands = []
-            self._publisher.publish(command)
-            return
-        if not targets:
-            command.commands = [self._standby(state) for state in states]
-            self._publisher.publish(command)
-            return
+        """Recalculate at most once per timer period when state changed."""
+        if not self._dirty or not self._targets or not self._drones:
+            return False
+        self._recalculate()
+        return True
 
+    def _recalculate(self):
+        states = self._drones
+        targets = self._targets
         target_xy = np.array([[target.x, target.y] for target in targets], dtype=float)
         drone_xy = np.array([[state.x, state.y] for state in states], dtype=float)
         start = time.perf_counter()
@@ -71,13 +84,15 @@ class EnclosureNode(Node):
             float(self.get_parameter("min_dist").value),
         )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        self.get_logger().debug("Voronoi tick completed in %.3f ms", elapsed_ms)
+        self.get_logger().debug(f"Voronoi update completed in {elapsed_ms:.3f} ms")
 
-        commands = []
+        command = EnclosureCommandArray()
+        command.num_drones = len(states)
         active_count = min(len(states), len(targets))
+        command.commands = []
         for index, state in enumerate(states):
             if index >= active_count:
-                commands.append(self._standby(state))
+                command.commands.append(self._standby(state))
                 continue
             item = EnclosureCommand()
             item.drone_id = int(state.drone_id)
@@ -85,9 +100,11 @@ class EnclosureNode(Node):
             item.target_y = float(drone_targets[index, 1])
             item.target_z = float(getattr(state, "z", 0.0))
             item.enclosure_radius = float(radii[index])
-            commands.append(item)
-        command.commands = commands
+            command.commands.append(item)
         self._publisher.publish(command)
+        self._dirty = False
+        self._last_update_time = self.get_clock().now()
+        self._update_count += 1
 
     @staticmethod
     def _standby(state):

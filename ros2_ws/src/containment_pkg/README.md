@@ -1,363 +1,49 @@
-# 协同封控模块
-# 无人机Voronoi封控模块（containment_pkg）
+# containment_pkg：动态 Voronoi 封控
 
+`containment_pkg` 将目标跟踪坐标和无人机位置转换为封控编队指令。当前实现以目标为中心、以无人机相对目标方向为外法向，生成确定性的 Voronoi-inspired 环形封控点；目标或无人机移动后会自动更新。
 
-## 1. 模块简介
+## ROS2 接口
 
-`containment_pkg` 是一个基于 ROS2 的无人机协同封控研究模块。
+| 方向 | 话题 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| 输入 | `/target_track` | `swarm_interfaces/msg/TargetTrackArray` | 主目标输入，读取 `tracks[].x/y` |
+| 输入 | `/enclosure_targets` | `swarm_interfaces/msg/EnclosureTargetArray` | 兼容输入，读取 `targets[].x/y` |
+| 输入 | `/drone_states` | `swarm_interfaces/msg/DroneStateArray` | 读取 `drones[].drone_id/x/y/z` |
+| 输出 | `/enclosure_command` | `swarm_interfaces/msg/EnclosureCommandArray` | 每架无人机的 `target_x/y/z` 和半径 |
 
-本模块实现基于 Voronoi 图的无人机区域划分与封控模型，用于研究多无人机在二维任务区域中的空间分配和覆盖能力。
+`/target_track` 是主要来源；兼容话题适用于已有封控/调度节点。两者同时发布时，最后到达的消息会覆盖内部目标快照，联调时建议只启用一个目标输入。
 
-当前版本主要实现：
+## 动态更新机制
 
-- 无人机静态部署
-- 静态 Voronoi 区域划分
-- 无人机封控范围建模
-- 封控覆盖率计算
-- 封控结果可视化
+节点回调只更新内存快照并设置 dirty 标记，不直接计算。定时器以 `update_period` 触发检查：只有目标和无人机都已收到且 dirty 时才执行一次 `voronoi_enclose()` 并发布。计算完成后清除 dirty，因此同一周期内连续收到多条更新只产生一次输出；下一条输入会开启下一次更新。
 
+## 参数
 
----
+默认配置位于 `config/containment.yaml`：
 
-# 2. 软件包结构
+- `enclosure_radius: 25.0`：封控点距目标的有效半径（米）。
+- `min_dist: 5.0`：半径下限（米）。
+- `update_period: 1.0`：动态重算周期（秒）。
 
-
-```
-containment_pkg/
-│
-├── containment_pkg/
-│   ├── __init__.py
-│   └── static_voronoi_uav.py
-│
-├── resource/
-│   └── containment_pkg
-│
-├── package.xml
-├── setup.py
-├── setup.cfg
-│
-└── README.md
-```
-
-
----
-
-# 3. 静态Voronoi封控模型设计
-
-
-## 3.1 无人机部署模型
-
-
-假设任务区域为二维平面区域：
-
-\[
-\Omega \subset R^2
-\]
-
-
-区域内部署 N 架无人机。
-
-
-无人机位置集合表示为：
-
-\[
-P=\{p_1,p_2,...,p_N\}
-\]
-
-
-其中：
-
-\[
-p_i=(x_i,y_i)
-\]
-
-
-表示第 i 架无人机的位置坐标。
-
-
-
----
-
-## 3.2 Voronoi区域划分模型
-
-
-根据无人机之间的欧氏距离，对任务区域进行划分。
-
-
-第 i 架无人机对应的 Voronoi 区域定义为：
-
-
-\[
-V_i=
-\{x\in\Omega | d(x,p_i)<d(x,p_j),j\neq i\}
-\]
-
-
-其中：
-
-- \(V_i\)：第 i 架无人机负责区域
-- \(d(x,p_i)\)：目标点 x 到无人机 i 的距离
-
-
-所有无人机区域满足：
-
-
-\[
-\Omega=
-V_1\cup V_2\cup ...\cup V_N
-\]
-
-
-并且：
-
-
-\[
-V_i\cap V_j=\emptyset
-\]
-
-
-表示不同无人机负责区域之间不存在重复划分。
-
-
-
----
-
-# 4. 无人机封控覆盖模型
-
-
-假设每架无人机具有固定探测/封控半径：
-
-\[
-R_i
-\]
-
-
-第 i 架无人机覆盖区域表示为：
-
-
-\[
-C_i=
-\{x||x-p_i|\leq R_i\}
-\]
-
-
-其中：
-
-- \(C_i\)：第 i 架无人机覆盖区域
-- \(R_i\)：无人机封控半径
-
-
-所有无人机形成的总封控区域为：
-
-
-\[
-C=
-\bigcup_{i=1}^{N}C_i
-\]
-
-
----
-
-# 5. 封控覆盖率计算
-
-
-采用覆盖面积比例评价无人机封控能力。
-
-
-覆盖率公式：
-
-
-\[
-Coverage=
-\frac{Area(C)}
-{Area(\Omega)}
-\times100\%
-\]
-
-
-其中：
-
-
-- \(Area(C)\)：无人机实际覆盖区域面积
-- \(Area(\Omega)\)：任务区域总面积
-
-
-覆盖率越高，表示无人机对目标区域的封控能力越强。
-
-
-
----
-
-# 6. 仿真参数
-
-
-| 参数 | 数值 |
-| ---- | ---- |
-|任务区域大小|100m × 100m|
-|无人机数量|5架|
-|无人机类型|静态部署|
-|区域划分方法|Voronoi图|
-|封控半径|25m|
-
-
-
----
-
-# 7. 环境依赖
-
-
-Python依赖库：
-
+## 启动
 
 ```bash
-pip install numpy scipy matplotlib shapely
-```
-
-
-
-ROS2环境：
-
-- ROS2 Humble（推荐）
-- Python3
-- colcon build工具
-
-
-
----
-
-# 8. 运行方法
-
-
-## Python直接运行
-
-
-进入工作空间：
-
-
-```bash
-cd ~/ros2_ws
-```
-
-
-运行程序：
-
-
-```bash
-python3 src/containment_pkg/containment_pkg/static_voronoi_uav.py
-```
-
-
-
----
-
-## ROS2方式运行
-
-
-编译工作空间：
-
-
-```bash
-colcon build
-```
-
-
-加载环境：
-
-
-```bash
+cd /home/hhh/Downloads/Swarm-Control-System/ros2_ws
+colcon build --packages-select swarm_interfaces containment_pkg
 source install/setup.bash
+ros2 launch containment_pkg containment.launch.py
 ```
 
+## 静态 baseline
 
-运行节点：
+先固定发布一帧目标和无人机状态，确认 `/enclosure_command` 有输出；再保持无人机位置不变，只移动 `TargetTrackArray.tracks[0].x/y`，每个 `update_period` 周期应看到封控点整体随目标移动。目标为空或无人机尚未到达时节点等待，不发布不完整的计算结果。
 
+## 测试
+
+在已 source ROS2 和 `swarm_interfaces` 的环境中执行：
 
 ```bash
-ros2 run containment_pkg static_voronoi_uav
+pytest containment_pkg/tests/
 ```
 
-
-
----
-
-# 9. 输出结果
-
-
-程序运行后输出：
-
-
-## （1）Voronoi区域划分结果
-
-显示每架无人机对应负责区域。
-
-
-## （2）无人机覆盖范围
-
-显示无人机有效封控范围。
-
-
-## （3）封控覆盖率
-
-
-示例：
-
-
-```
-无人机数量: 5
-
-任务区域面积: 10000 m²
-
-覆盖区域面积: xxxx m²
-
-封控覆盖率: xx.xx %
-```
-
-
-
----
-
-# 10. 后续研究方向
-
-
-本模块后续将进一步扩展：
-
-
-## 动态Voronoi更新机制
-
-包括：
-
-- 无人机位置实时更新
-- Voronoi区域动态重构
-- 封控区域实时变化
-
-
-## 多无人机协同控制
-
-包括：
-
-- 无人机任务分配
-- 编队控制
-- 协同封控策略
-
-
-## Voronoi优化方法
-
-包括：
-
-- 加权Voronoi划分
-- Lloyd算法优化部署
-- 自适应覆盖优化
-
-
-
----
-
-# 11. 作者信息
-
-
-作者：Chen
-
-
-版本：
-
-v0.0.0
+其中动态算法测试不依赖 ROS2；节点测试在缺少 ROS2 接口时会自动跳过。

@@ -1,0 +1,5 @@
+enclosure_node:
+  ros__parameters:
+    enclosure_radius: 25.0
+    min_dist: 5.0
+    update_period: 1.0
