@@ -28,6 +28,11 @@ from swarm_interfaces.msg import DroneStateArray, TargetTrackArray, TaskAssignme
 from .assign import greedy_assign, hungarian_assign
 
 
+def uint32(x: int) -> int:
+    """Coerce int to uint32 range so ROS2 does not raise on assignment."""
+    return int(x) & 0xFFFFFFFF
+
+
 class SchedulerNode(Node):
     """Minimal but production-shape scheduler node."""
 
@@ -219,11 +224,6 @@ class SchedulerNode(Node):
                 f"{len(self._drones)} active drones, "
                 f"tick={period * 1000:.0f} ms"
             )
-
-
-def uint32(x: int) -> int:
-    """Coerce int to uint32 range so ROS2 does not raise on assignment."""
-    return int(x) & 0xFFFFFFFF
 
 
 def main(args: Optional[List[str]] = None) -> None:
