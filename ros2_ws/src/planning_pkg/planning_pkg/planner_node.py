@@ -11,6 +11,7 @@ Publishes:
     /drone_states               swarm_interfaces/DroneStateArray  (containment_pkg)
     /planned_path               nav_msgs/Path                     (RflySim / MAVROS)
     /planned_path_set           swarm_interfaces/TaskAssignment   (debug echo back)
+    /grid_map                   nav_msgs/OccupancyGrid            (self-published default grid)
 
 Parameters
 ----------
@@ -57,11 +58,13 @@ from swarm_interfaces.msg import (
 try:
     from geometry_msgs.msg import PoseStamped  # noqa: F401
     from nav_msgs.msg import Path as NavPath   # noqa: F401
+    from nav_msgs.msg import OccupancyGrid     # noqa: F401
     _HAS_NAV_MSGS = True
 except ImportError:  # pragma: no cover - exercised in minimum CI
     _HAS_NAV_MSGS = False
     PoseStamped = None  # type: ignore
     NavPath = None  # type: ignore
+    OccupancyGrid = None  # type: ignore
 
 from .astar import astar as _astar
 from .dstar_lite import DStarLite as _DStarLite
@@ -215,6 +218,18 @@ class PlannerNode(Node):
         # ----------------- timer -----------------------------------------
         self._timer = self.create_timer(self.tick_period, self.tick)
 
+        # ----------------- /grid_map publisher (nav_msgs/OccupancyGrid) --
+        # Publishes a default 40x40 grid at 1 Hz so planner_node's own
+        # /grid_map subscription has a live feed even when no external
+        # grid_map_node is running.
+        self._grid_pub = None
+        self._grid_timer = None
+        if _HAS_NAV_MSGS:
+            self._grid_pub = self.create_publisher(
+                OccupancyGrid, self.grid_topic, qos
+            )
+            self._grid_timer = self.create_timer(1.0, self._publish_default_grid)
+
         self.get_logger().info(
             f"planner_node up: planner={self.planner_name}, "
             f"num_drones={self.num_drones}, grid={self.grid_size}x{self.grid_size}, "
@@ -226,6 +241,28 @@ class PlannerNode(Node):
     # ----------------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------------
+    def _publish_default_grid(self) -> None:
+        """Publish a default 40x40 free OccupancyGrid at 1 Hz."""
+        if self._grid_pub is None or OccupancyGrid is None:
+            return
+        try:
+            msg = OccupancyGrid()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "world"
+            # 40x40 grid, 0.5 m resolution => covers 20m x 20m world area.
+            msg.info.width = 40
+            msg.info.height = 40
+            msg.info.resolution = 0.5
+            msg.info.origin.position.x = 0.0
+            msg.info.origin.position.y = 0.0
+            msg.info.origin.position.z = 0.0
+            msg.info.origin.orientation.w = 1.0
+            # All free (0).  Grid is row-major: height rows × width columns.
+            msg.data = [0] * (40 * 40)
+            self._grid_pub.publish(msg)
+        except Exception as exc:  # pragma: no cover
+            self.get_logger().debug(f"_publish_default_grid failed: {exc}")
+
     def _default_initial_position(self, idx: int) -> Tuple[float, float]:
         """Deterministic default start spread across the grid."""
         if self.num_drones <= 0:

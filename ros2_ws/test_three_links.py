@@ -7,12 +7,12 @@ self-contained:
 
 * it does **not** require a real ROS2 daemon (no `ros2 launch`); instead
   it spins the four real nodes (``tracker_node``,
-  ``scheduler_node``, ``planner_stub_node``, ``enclosure_node``) in a
+  ``scheduler_node``, ``planner_node``, ``enclosure_node``) in a
   single ``rclpy`` process and exercises the full pipeline.
 * it does **not** require YOLO weights: tracker_node is loaded in
   ``input_mode:=topic`` and a synthetic image publisher drives the
   pipeline via the standard image topic.
-* it does **not** require PX4 / RflySim: ``planner_stub_node`` produces
+* it does **not** require PX4 / RflySim: ``planner_node`` produces
   a ``DroneStateArray`` so the second and third links close.
 
 What it checks
@@ -24,7 +24,7 @@ What it checks
 
 2. **Link 2 (scheduler → planner)**
    - ``scheduler_node`` publishes ``/task_assignment``.
-   - ``planner_stub_node`` consumes it and produces ``/drone_states``
+   - ``planner_node`` consumes it and produces ``/drone_states``
      (DroneStateArray).
 
 3. **Link 3 (perception + planner → enclosure → feedback)**
@@ -142,7 +142,7 @@ TEST_WORLD = {
 
 LOG_TAG_TRACKER = "[integration/tracker]"
 LOG_TAG_SCHED = "[integration/scheduler]"
-LOG_TAG_PLAN = "[integration/planner_stub]"
+LOG_TAG_PLAN = "[integration/planner]"
 LOG_TAG_ENC = "[integration/enclosure]"
 LOG_TAG_TEST = "[integration/test]"
 
@@ -394,14 +394,15 @@ def _make_scheduler_node():
         return None
 
 
-def _make_planner_stub_node():
-    mod = _try_import("planner_stub.planner_stub_node")
-    if mod is None or not hasattr(mod, "PlannerStubNode"):
+def _make_planner_node():
+    """Try to construct the real planner_node; return None on failure."""
+    mod = _try_import("planning_pkg.planner_node")
+    if mod is None or not hasattr(mod, "PlannerNode"):
         return None
     try:
-        return mod.PlannerStubNode()
+        return mod.PlannerNode()
     except Exception as exc:  # noqa: BLE001
-        logging.warning(f"{LOG_TAG_TEST} PlannerStubNode() failed: {exc}")
+        logging.warning(f"{LOG_TAG_TEST} PlannerNode() failed: {exc}")
         return None
 
 
@@ -530,7 +531,7 @@ def main() -> int:
     real_nodes: List[Any] = []
     if not args.no_real_nodes:
         for fn in (_make_tracker_node, _make_scheduler_node,
-                   _make_planner_stub_node, _make_enclosure_node):
+                   _make_planner_node, _make_enclosure_node):
             node = fn()
             if node is not None:
                 real_nodes.append(node)
