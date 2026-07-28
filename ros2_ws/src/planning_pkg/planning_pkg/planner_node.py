@@ -3,7 +3,8 @@ the swarm.
 
 Subscribes:
     /task_assignment            swarm_interfaces/TaskAssignment   (scheduler_pkg)
-    /grid_map                   std_msgs/UInt8MultiArray          (custom 2D grid)
+    /grid_map                   std_msgs/UInt8MultiArray          (grid_map_node)
+    /target_track_world         swarm_interfaces/TargetTrackArray (coord_transform_node)
     /planned_path_set           swarm_interfaces/TaskAssignment   (optional, RflySim ack)
     /drone_pose_external        swarm_interfaces/DroneStateArray  (optional, RflySim pose)
 
@@ -52,6 +53,7 @@ from swarm_interfaces.msg import (
     DroneState,
     DroneStateArray,
     TaskAssignment,
+    TargetTrackArray,
 )
 
 # std_srvs / optional types
@@ -95,6 +97,7 @@ class PlannerNode(Node):
         # Topics
         self.declare_parameter("task_topic", "/task_assignment")
         self.declare_parameter("grid_topic", "/grid_map")
+        self.declare_parameter("target_track_world_topic", "/target_track_world")
         self.declare_parameter("drone_states_topic", "/drone_states")
         self.declare_parameter("planned_path_topic", "/planned_path")
         self.declare_parameter("rfly_pose_topic", "/drone_pose_external")
@@ -119,6 +122,7 @@ class PlannerNode(Node):
 
         self.task_topic: str = str(self.get_parameter("task_topic").value)
         self.grid_topic: str = str(self.get_parameter("grid_topic").value)
+        self.target_track_world_topic: str = str(self.get_parameter("target_track_world_topic").value)
         self.drone_states_topic: str = str(self.get_parameter("drone_states_topic").value)
         self.planned_path_topic: str = str(self.get_parameter("planned_path_topic").value)
         self.rfly_pose_topic: str = str(self.get_parameter("rfly_pose_topic").value)
@@ -204,6 +208,9 @@ class PlannerNode(Node):
         )
         self.sub_grid = self.create_subscription(
             UInt8MultiArray, self.grid_topic, self.on_grid, qos
+        )
+        self.sub_target_world = self.create_subscription(
+            TargetTrackArray, self.target_track_world_topic, self.on_target_world, qos
         )
         self.sub_rfly = self.create_subscription(
             DroneStateArray, self.rfly_pose_topic, self.on_rfly_pose, qos
@@ -496,6 +503,20 @@ class PlannerNode(Node):
             if did not in self._drone_path or not self._drone_path[did]:
                 # No path yet; one will be planned the next task arrives.
                 continue
+
+    def on_target_world(self, msg: TargetTrackArray) -> None:
+        """Optional world-coordinate targets from coord_transform_node.
+
+        Logs the arrival of world targets for observability.
+        This subscription closes the loop: /target_track_world published by
+        coord_transform_node now has a consumer in the planning pipeline.
+        """
+        if not msg.tracks:
+            return
+        self.get_logger().debug(
+            f"/target_track_world: {len(msg.tracks)} track(s) "
+            f"frame={msg.header.frame_id if msg.header else 'none'}"
+        )
 
     # ----------------------------------------------------------------
     # Tick
