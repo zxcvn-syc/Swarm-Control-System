@@ -9,37 +9,45 @@
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          Swarm Control System                           │
-│                                                                         │
-│  ┌──────────────┐    /target_track     ┌─────────────────┐             │
-│  │ tracker_node │ ─────────────────────▶│  scheduler_node │             │
-│  │(perception_pkg)                      │ (scheduler_pkg) │             │
-│  └──────────────┘                      └────────┬────────┘             │
-│        │                                          │                     │
-│        │ /enclosure_targets                       │ /task_assignment    │
-│        ▼                                          ▼                     │
-│  ┌────────────────┐                    ┌──────────────────┐            │
-│  │ enclosure_node │                    │ planner_stub_node│            │
-│  │(containment_pkg)                   │  (planner_stub)  │            │
-│  └───────┬────────┘                    └────────┬─────────┘            │
-│          │                                      │                      │
-│          │ /enclosure_command                   │ /drone_states        │
-└──────────┼──────────────────────────────────────┼──────────────────────┘
-           │                                      │
-           └────────── /enclosure_command ◀───────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                              Swarm Control System                                  │
+│                                                                                  │
+│  ┌──────────────┐    /target_track    ┌─────────────────┐                       │
+│  │ tracker_node │ ──────────────────▶ │  scheduler_node  │                       │
+│  │(perception_pkg)                   │  (scheduler_pkg)│                       │
+│  └──────┬───────┘                     └────────┬────────┘                       │
+│         │                                       │                                │
+│         │ /enclosure_targets                    │ /task_assignment               │
+│         ▼                                       ▼                                │
+│  ┌────────────────┐                 ┌───────────────────┐                        │
+│  │enclosure_node  │                 │  planner_node    │                        │
+│  │(containment_pkg)                 │ (planning_pkg)   │                        │
+│  └───────┬────────┘                 └─────────┬─────────┘                        │
+│          │                                    │                                  │
+│          │ /enclosure_command                  │ /drone_states                   │
+│          ▼                                    ▼                                  │
+│  ┌──────────────────┐        ┌────────────────────────────────┐                 │
+│  │ coord_transform_ │        │  grid_map_node (planning_pkg)  │                 │
+│  │ node (/grid_map_nav│◀──────│   /grid_map (UInt8MultiArray) │                 │
+│  │  → /target_track_ │        └────────────────────────────────┘                 │
+│  │  world)           │        subscribes /grid_map_nav (OccupancyGrid)           │
+│  └──────────────────┘                                                            │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Topic Contract
 
-| Topic                 | Type                      | Publisher          | Subscribers                      |
-|-----------------------|---------------------------|--------------------|-----------------------------------|
-| `/target_track`       | `TargetTrackArray`        | tracker_node       | scheduler_node, planner_stub_node |
-| `/enclosure_targets`  | `EnclosureTargetArray`    | tracker_node       | enclosure_node                    |
-| `/task_assignment`    | `TaskAssignment`          | scheduler_node     | planner_stub_node                 |
-| `/drone_states`       | `DroneStateArray`         | planner_stub_node  | scheduler_node, enclosure_node    |
-| `/drone_state`        | `DroneState`              | planner_stub_node  | (future: enclosure feedback)       |
-| `/enclosure_command`  | `EnclosureCommandArray`   | enclosure_node     | —                                 |
+| Topic                     | Type                      | Publisher              | Subscribers                        |
+|---------------------------|---------------------------|------------------------|------------------------------------|
+| `/target_track`           | `TargetTrackArray`        | tracker_node           | scheduler_node, coord_transform_node |
+| `/target_track_world`     | `TargetTrackArray`       | coord_transform_node   | scheduler_node, **planner_node**    |
+| `/enclosure_targets`      | `EnclosureTargetArray`   | tracker_node           | enclosure_node                     |
+| `/task_assignment`        | `TaskAssignment`         | scheduler_node         | planner_node                       |
+| `/drone_states`           | `DroneStateArray`        | planner_node           | scheduler_node, enclosure_node      |
+| `/drone_state`            | `DroneState`             | planner_node           | —                                  |
+| `/enclosure_command`      | `EnclosureCommandArray`  | enclosure_node         | —                                  |
+| `/grid_map_nav`           | `nav_msgs/OccupancyGrid`| planner_node           | grid_map_node                      |
+| `/grid_map`               | `std_msgs/UInt8MultiArray`| grid_map_node        | planner_node                       |
 
 ---
 
@@ -104,19 +112,22 @@ ros2 run perception_pkg tracker_node \
     -p enclosure.enabled:=true \
     -p enclosure.topic:=/enclosure_targets
 
-# Terminal 2 — planner stub (provides synthetic drone_states)
-ros2 run planner_stub planner_stub_node \
+# Terminal 2 — planner node (A*/D* Lite path planner, self-publishes /grid_map_nav)
+ros2 run planning_pkg planner_node \
     --ros-args \
     -p num_drones:=8 \
     -p tick_period:=0.5
 
-# Terminal 3 — scheduler
+# Terminal 3 — grid_map_node (bridges /grid_map_nav OccupancyGrid → /grid_map UInt8MultiArray)
+ros2 run planning_pkg grid_map_node
+
+# Terminal 4 — scheduler
 ros2 run scheduler_pkg scheduler_node \
     --ros-args \
     -p num_drones:=8 \
     -p assignment_strategy:=greedy
 
-# Terminal 4 — enclosure
+# Terminal 5 — enclosure
 ros2 run containment_pkg enclosure_node \
     --ros-args \
     -p enclosure_radius:=25.0
@@ -127,9 +138,10 @@ ros2 run containment_pkg enclosure_node \
 ## Node Dependency Order
 
 1. **tracker_node** — no input dependencies; publishes first
-2. **planner_stub_node** — scheduler_node subscribes to its `/drone_states`; must start before scheduler
-3. **scheduler_node** — subscribes to `/target_track` + `/drone_states`
-4. **enclosure_node** — subscribes to `/enclosure_targets` + `/drone_states`
+2. **planner_node** — publishes `/drone_states`; scheduler_node subscribes; also publishes `/grid_map_nav`
+3. **grid_map_node** — subscribes `/grid_map_nav`, publishes `/grid_map`; planner_node subscribes `/grid_map`
+4. **scheduler_node** — subscribes to `/target_track` + `/target_track_world` + `/drone_states`
+5. **enclosure_node** — subscribes to `/enclosure_targets` + `/drone_states`
 
 ---
 
@@ -141,7 +153,8 @@ ros2 run containment_pkg enclosure_node \
 ros2 node list
 # Expected:
 #   /enclosure_node
-#   /planner_stub_node
+#   /grid_map_node
+#   /planner_node
 #   /scheduler_node
 #   /tracker_node
 ```
@@ -156,10 +169,13 @@ ros2 topic list
 #   /drone_states
 #   /enclosure_command
 #   /enclosure_targets
+#   /grid_map              (UInt8MultiArray, from grid_map_node)
+#   /grid_map_nav          (OccupancyGrid, from planner_node)
 #   /parameter_events
 #   /rosout
 #   /target_track
 #   /target_track_debug
+#   /target_track_world    (from coord_transform_node)
 #   /task_assignment
 #   /tracking_metrics
 ```
