@@ -34,3 +34,11 @@ env/
 .env
 .env.local
 *.local.yaml
+
+# Build & test artifacts
+output/
+*.tar.gz
+
+# Generated test videos
+videos/*.mp4
+videos/generate_test_video.py
