@@ -11,7 +11,6 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/config", ["config/planner_stub.yaml"]),
     ],
-    install_requires=["setuptools", "numpy"],
     zip_safe=True,
     maintainer="Swarm Control System Team",
     maintainer_email="swarm@example.com",

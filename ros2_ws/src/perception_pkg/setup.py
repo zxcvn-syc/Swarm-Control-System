@@ -13,7 +13,6 @@ setup(
         ('share/' + package_name + '/launch', ['launch/tracker_node.launch.py']),
         ('share/' + package_name + '/config', ['config/tracker_node.yaml']),
     ],
-    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Swarm Control System Team',
     maintainer_email='swarm@example.com',

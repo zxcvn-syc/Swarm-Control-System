@@ -12,7 +12,6 @@ setup(
         ("share/" + package_name + "/config", ["config/scheduler.yaml"]),
         ("share/" + package_name + "/launch", ["launch/scheduler.launch.py"]),
     ],
-    install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Swarm Control System Team",
     maintainer_email="swarm@example.com",

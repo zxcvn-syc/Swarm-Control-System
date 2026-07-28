@@ -30,11 +30,6 @@ setup(
         ),
     ],
 
-    install_requires=[
-        'setuptools',
-        'numpy',
-    ],
-
     zip_safe=True,
 
     maintainer='chen',
