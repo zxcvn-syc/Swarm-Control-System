@@ -417,6 +417,18 @@ def _make_enclosure_node():
         return None
 
 
+def _make_grid_map_node():
+    """Try to construct grid_map_node; return None on failure."""
+    mod = _try_import("planning_pkg.grid_map_node")
+    if mod is None or not hasattr(mod, "GridMapNode"):
+        return None
+    try:
+        return mod.GridMapNode()
+    except Exception as exc:  # noqa: BLE001
+        logging.warning(f"{LOG_TAG_TEST} GridMapNode() failed: {exc}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Main driver
 # ---------------------------------------------------------------------------
@@ -531,7 +543,8 @@ def main() -> int:
     real_nodes: List[Any] = []
     if not args.no_real_nodes:
         for fn in (_make_tracker_node, _make_scheduler_node,
-                   _make_planner_node, _make_enclosure_node):
+                   _make_planner_node, _make_grid_map_node,
+                   _make_enclosure_node):
             node = fn()
             if node is not None:
                 real_nodes.append(node)

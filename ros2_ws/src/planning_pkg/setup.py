@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "planner_node = planning_pkg.planner_node:main",
+            "grid_map_node = planning_pkg.grid_map_node:main",
         ],
     },
 )
