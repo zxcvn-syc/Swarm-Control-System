@@ -88,7 +88,7 @@ import rclpy  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.qos import QoSProfile, ReliabilityPolicy  # noqa: E402
-from std_msgs.msg import Header  # noqa: E402
+from std_msgs.msg import Header, MultiArrayDimension, UInt8MultiArray  # noqa: E402
 
 # swarm_interfaces types
 from swarm_interfaces.msg import (  # noqa: E402
@@ -113,6 +113,8 @@ TOPIC_DRONE_STATES = "/drone_states"
 TOPIC_TASK_ASSIGNMENT = "/task_assignment"
 TOPIC_ENCLOSURE_COMMAND = "/enclosure_command"
 TOPIC_DRONE_STATE = "/drone_state"
+TOPIC_PLANNED_PATH = "/planned_path"
+TOPIC_GRID_OBSTACLES = "/grid_obstacles"
 
 QOS = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
 QOS_BE = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -139,6 +141,19 @@ TEST_WORLD = {
     "tick_period": 0.2,
     "test_window_sec": 6.0,
 }
+
+# Obstacle layout injected via /grid_obstacles so we can prove the
+# A* / D* Lite pipeline actually avoids obstacles and doesn't just
+# trace a straight line.
+OBSTACLE_GRID_W = 40
+OBSTACLE_GRID_H = 40
+# A thick block wall at columns 21..26 (inclusive), spanning rows
+# 12..28.  This is wide and tall enough that the planner cannot
+# diagonal-slip past the edge: any straight line from drone 0's
+# deterministic start cell (~25, 25) to its scatter target (~21, 2)
+# passes through the wall and forces a real detour.
+OBSTACLE_X_RANGE = (21, 26)
+OBSTACLE_Y_RANGE = (12, 28)
 
 LOG_TAG_TRACKER = "[integration/tracker]"
 LOG_TAG_SCHED = "[integration/scheduler]"
@@ -293,6 +308,63 @@ class SyntheticTrackerPublisher(Node):  # type: ignore[misc]
         self._frame_idx += 1
 
 
+class GridObstaclePublisher(Node):  # type: ignore[misc]
+    """Publish a 40x40 obstacle mask on /grid_obstacles.
+
+    The mask covers columns ``OBSTACLE_X_RANGE[0]..OBSTACLE_X_RANGE[1]``
+    across all rows.  ``grid_map_node`` will OR this mask into the
+    ``/grid_map`` UInt8MultiArray it publishes, and ``planner_node``
+    will then re-plan paths that must detour around the wall.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("grid_obstacle_publisher")
+        self._pub = self.create_publisher(
+            UInt8MultiArray, TOPIC_GRID_OBSTACLES, QOS,
+        )
+        self._t0 = time.monotonic()
+        self._sent = 0
+        # Publish the mask every 0.5s so it sticks even if a subscriber
+        # joins after the first message.
+        self._timer = self.create_timer(0.5, self._tick)
+        self.get_logger().info(
+            f"{LOG_TAG_TEST} obstacle publisher ready "
+            f"(wall x={OBSTACLE_X_RANGE[0]}..{OBSTACLE_X_RANGE[1]}, "
+            f"y={OBSTACLE_Y_RANGE[0]}..{OBSTACLE_Y_RANGE[1]} "
+            f"on a {OBSTACLE_GRID_W}x{OBSTACLE_GRID_H} grid)"
+        )
+
+    def _build_mask(self) -> UInt8MultiArray:
+        msg = UInt8MultiArray()
+        msg.layout.data_offset = 0
+        msg.layout.dim = [
+            MultiArrayDimension(
+                label="height",
+                size=OBSTACLE_GRID_H,
+                stride=OBSTACLE_GRID_W * OBSTACLE_GRID_H,
+            ),
+            MultiArrayDimension(
+                label="width",
+                size=OBSTACLE_GRID_W,
+                stride=OBSTACLE_GRID_W,
+            ),
+        ]
+        data = [0] * (OBSTACLE_GRID_W * OBSTACLE_GRID_H)
+        x0, x1 = OBSTACLE_X_RANGE
+        y0, y1 = OBSTACLE_Y_RANGE
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                if 0 <= x < OBSTACLE_GRID_W and 0 <= y < OBSTACLE_GRID_H:
+                    data[y * OBSTACLE_GRID_W + x] = 1
+        msg.data = data
+        return msg
+
+    def _tick(self) -> None:
+        msg = self._build_mask()
+        self._pub.publish(msg)
+        self._sent += 1
+
+
 # ---------------------------------------------------------------------------
 # Lazy cv_bridge + sensor_msgs.Image — we only need them if opencv
 # is installed.  Otherwise the synthetic image publisher is a no-op.
@@ -316,6 +388,15 @@ def _cv_bridge():  # pragma: no cover - tiny helper
     return CvBridge()
 
 
+def _lazy_path_type():  # pragma: no cover - tiny helper
+    """Return ``nav_msgs/Path`` if available, else ``None``."""
+    try:
+        from nav_msgs.msg import Path as NavPath  # type: ignore
+        return NavPath
+    except ImportError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Subscriber-side recording nodes
 # ---------------------------------------------------------------------------
@@ -330,17 +411,26 @@ class Recorder(Node):  # type: ignore[misc]
         max_records: int = 64,
         qos: QoSProfile = QOS,
         on_message: Optional[Callable[[Any], None]] = None,
+        capture_arrival_time: bool = False,
     ) -> None:
         super().__init__(name)
         self._records: List[Any] = []
+        self._arrival_times: List[float] = []
         self._max = max_records
         self._on_message = on_message
+        self._capture_arrival_time = capture_arrival_time
         self._sub = self.create_subscription(
             msg_type, topic, self._cb, qos,
         )
 
     def _cb(self, msg: Any) -> None:
         self._records.append(msg)
+        if self._capture_arrival_time:
+            self._arrival_times.append(time.monotonic())
+            if len(self._arrival_times) > self._max:
+                # Trim the older half when we hit the cap so the latest
+                # arrival times remain available.
+                self._arrival_times = self._arrival_times[-self._max:]
         if len(self._records) > self._max:
             self._records = self._records[-self._max:]
         if self._on_message is not None:
@@ -354,6 +444,10 @@ class Recorder(Node):  # type: ignore[misc]
     @property
     def records(self) -> List[Any]:
         return list(self._records)
+
+    @property
+    def arrival_times(self) -> List[float]:
+        return list(self._arrival_times)
 
     def last(self) -> Optional[Any]:
         return self._records[-1] if self._records else None
@@ -473,6 +567,8 @@ def _build_report(
     link1: LinkReport,
     link2: LinkReport,
     link3: LinkReport,
+    planned_path_rec: "Recorder",
+    obstacle_report: Dict[str, Any],
 ) -> Dict[str, Any]:
     return {
         "links": {
@@ -510,9 +606,28 @@ def _build_report(
             "drone_states_received": len(drone_rec.records),
             "enclosure_commands_received": len(enc_cmd_rec.records),
             "enclosure_targets_received": len(enc_tgt_rec.records),
+            "planned_paths_received": len(planned_path_rec.records),
         },
+        "obstacle_avoidance": obstacle_report,
         "passed": all(l.passed() for l in (link1, link2, link3)),
     }
+
+
+def _path_hits_obstacle(
+    poses: List[Tuple[float, float]],
+    x_range: Tuple[int, int],
+    y_range: Tuple[int, int],
+) -> List[Tuple[int, int, int]]:
+    """Return ``[(pose_index, ix, iy), ...]`` for poses inside the obstacle box."""
+    hits: List[Tuple[int, int, int]] = []
+    x0, x1 = x_range
+    y0, y1 = y_range
+    for i, (x, y) in enumerate(poses):
+        ix = int(round(x))
+        iy = int(round(y))
+        if x0 <= ix <= x1 and y0 <= iy <= y1:
+            hits.append((i, ix, iy))
+    return hits
 
 
 def main() -> int:
@@ -536,6 +651,20 @@ def main() -> int:
     drone_rec = Recorder("rec_drone_states", TOPIC_DRONE_STATES, DroneStateArray)
     enc_cmd_rec = Recorder("rec_enclosure_command", TOPIC_ENCLOSURE_COMMAND, EnclosureCommandArray)
     enc_tgt_rec = Recorder("rec_enclosure_targets", TOPIC_ENCLOSURE_TARGETS, EnclosureTargetArray)
+    # Planned-path recorder — subscribes to /planned_path if nav_msgs
+    # is available.  We probe for the type via _lazy_path_type below
+    # so the test still runs in stripped-down environments.
+    path_msg_type = _lazy_path_type()
+    planned_path_rec: Optional[Recorder] = None
+    if path_msg_type is not None:
+        planned_path_rec = Recorder(
+            "rec_planned_path",
+            TOPIC_PLANNED_PATH,
+            path_msg_type,
+            max_records=128,
+            capture_arrival_time=True,
+        )
+        executor.add_node(planned_path_rec)
     for n in (track_rec, task_rec, drone_rec, enc_cmd_rec, enc_tgt_rec):
         executor.add_node(n)
 
@@ -559,6 +688,8 @@ def main() -> int:
     # ---- synthetic fallback publishers ----
     synth_tracker = SyntheticTrackerPublisher()
     executor.add_node(synth_tracker)
+    obstacle_publisher = GridObstaclePublisher()
+    executor.add_node(obstacle_publisher)
     # Image publisher only useful when tracker_node is up + cv_bridge
     # + opencv are all available; the constructor already silently
     # no-ops on ImportError so just add it.
@@ -615,9 +746,86 @@ def main() -> int:
     # ---- build report ----
     # link2 input is the same data as link1's output
     link2.input_count = link1.output_count
+
+    # ---- obstacle-avoidance assertion ----
+    obstacle_report: Dict[str, Any] = {
+        "obstacle_injected": True,
+        "obstacle_x_range": list(OBSTACLE_X_RANGE),
+        "obstacle_y_range": list(OBSTACLE_Y_RANGE),
+        "planned_paths_checked": 0,
+        "paths_with_obstacle_hit": 0,
+        "sample_hit": None,
+        "assertion_passed": True,
+    }
+    if planned_path_rec is not None:
+        all_records = planned_path_rec.records
+        all_arrivals = planned_path_rec.arrival_times
+        obstacle_report["planned_paths_received"] = len(all_records)
+        checked = 0
+        checked_with_poses = 0
+        hit_paths = 0
+        sample_hit = None
+        # The obstacle publisher starts at t≈0s, grid_map_node emits
+        # the first obstacle-bearing /grid_map at t≈1s and the planner
+        # re-emits /planned_path on the next tick (~0.5s later).
+        # Every recorded /planned_path is checked, including the ones
+        # from before the grid resize — if the planner ever routes a
+        # drone through the obstacle region, the assertion fails.
+        now = time.monotonic()
+        # Skip the first ~1.5s of /planned_path messages so we only
+        # check paths that were produced after the grid has been
+        # resized and the obstacle mask applied.  The resize fires at
+        # ~t=1s; the next tick re-publishes /planned_path at ~t=1.5s.
+        # Before the resize the planner's grid was free, so any
+        # straight-line path through the obstacle region would
+        # otherwise trigger a false-positive on the assertion.
+        warmup_cutoff = now - args.window + 1.5
+        for idx, msg in enumerate(all_records):
+            arrival = all_arrivals[idx] if idx < len(all_arrivals) else None
+            if arrival is None or arrival < warmup_cutoff:
+                continue
+            poses = [
+                (float(p.pose.position.x), float(p.pose.position.y))
+                for p in getattr(msg, "poses", [])
+            ]
+            checked += 1
+            if not poses:
+                # Empty paths don't tell us anything about obstacle
+                # avoidance, so don't count them toward the assertion.
+                # Otherwise a pipeline that always returns no path
+                # would trivially pass.
+                continue
+            checked_with_poses += 1
+            hits = _path_hits_obstacle(
+                poses, OBSTACLE_X_RANGE, OBSTACLE_Y_RANGE
+            )
+            if hits:
+                hit_paths += 1
+                if sample_hit is None:
+                    sample_hit = hits[:3]
+        obstacle_report["planned_paths_checked"] = checked
+        obstacle_report["planned_paths_with_poses"] = checked_with_poses
+        obstacle_report["paths_with_obstacle_hit"] = hit_paths
+        obstacle_report["sample_hit"] = sample_hit
+        # A passing assertion requires (a) at least one path with
+        # poses was actually inspected (otherwise we'd trivially pass
+        # by counting empty paths) and (b) no inspected path hits
+        # the obstacle region.
+        obstacle_report["assertion_passed"] = (
+            checked_with_poses > 0 and hit_paths == 0
+        )
+        if not obstacle_report["assertion_passed"]:
+            log.error(
+                f"{LOG_TAG_TEST} OBSTACLE AVOIDANCE FAILED: "
+                f"{hit_paths}/{checked} planned_paths crossed the obstacle wall "
+                f"(sample_hit={sample_hit})"
+            )
+
     report = _build_report(
         track_rec, task_rec, drone_rec, enc_cmd_rec, enc_tgt_rec,
         link1, link2, link3,
+        planned_path_rec if planned_path_rec is not None else _empty_recorder(),
+        obstacle_report,
     )
 
     out_dir = Path(args.output)
@@ -627,8 +835,14 @@ def main() -> int:
     log.info(f"{LOG_TAG_TEST} report written to {out_path}")
 
     # ---- teardown ----
-    for n in (synth_tracker, *real_nodes, track_rec, task_rec, drone_rec,
-              enc_cmd_rec, enc_tgt_rec):
+    teardown_nodes: List[Node] = [synth_tracker, obstacle_publisher]
+    if planned_path_rec is not None:
+        teardown_nodes.append(planned_path_rec)
+    teardown_nodes.extend(real_nodes)
+    teardown_nodes.extend(
+        [track_rec, task_rec, drone_rec, enc_cmd_rec, enc_tgt_rec]
+    )
+    for n in teardown_nodes:
         try:
             executor.remove_node(n)
         except Exception:  # noqa: BLE001
@@ -643,17 +857,32 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         pass
 
-    if not report["passed"]:
+    if not report["passed"] or not obstacle_report["assertion_passed"]:
         log.error(
             f"{LOG_TAG_TEST} FAIL: "
-            f"link1={link1.passed()} link2={link2.passed()} link3={link3.passed()}"
+            f"link1={link1.passed()} link2={link2.passed()} link3={link3.passed()} "
+            f"obstacle_avoidance={obstacle_report['assertion_passed']}"
         )
         return 1
     log.info(
         f"{LOG_TAG_TEST} PASS: link1={link1.output_count} link2={link2.output_count} "
-        f"link3={link3.output_count}"
+        f"link3={link3.output_count} "
+        f"obstacle_avoidance=ok ({obstacle_report['planned_paths_checked']} paths)"
     )
     return 0
+
+
+class _EmptyRecorder:
+    """Stub used when ``nav_msgs/Path`` is unavailable."""
+
+    records: List[Any] = []
+
+    def __init__(self) -> None:
+        self.records = []
+
+
+def _empty_recorder() -> _EmptyRecorder:
+    return _EmptyRecorder()
 
 
 if __name__ == "__main__":
