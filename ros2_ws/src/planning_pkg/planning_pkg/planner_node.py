@@ -11,7 +11,7 @@ Publishes:
     /drone_states               swarm_interfaces/DroneStateArray  (containment_pkg)
     /planned_path               nav_msgs/Path                     (RflySim / MAVROS)
     /planned_path_set           swarm_interfaces/TaskAssignment   (debug echo back)
-    /grid_map                   nav_msgs/OccupancyGrid            (self-published default grid)
+    /grid_map_nav               nav_msgs/OccupancyGrid            (self-published default grid)
 
 Parameters
 ----------
@@ -226,7 +226,7 @@ class PlannerNode(Node):
         self._grid_timer = None
         if _HAS_NAV_MSGS:
             self._grid_pub = self.create_publisher(
-                OccupancyGrid, self.grid_topic, qos
+                OccupancyGrid, "/grid_map_nav", qos
             )
             self._grid_timer = self.create_timer(1.0, self._publish_default_grid)
 
