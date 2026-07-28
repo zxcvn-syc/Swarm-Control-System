@@ -336,6 +336,7 @@ class PlannerNode(Node):
         gx, gy = self._world_to_cell(self._drone_xy[did])
         tx, ty = int(target_xy[0]), int(target_xy[1])
 
+        plan_start = time.monotonic()
         if self.planner_name == "dstar_lite" and did in self._dstar:
             # Re-use the existing search tree, just re-plan from the
             # current robot cell.  If the start has moved we update the
@@ -356,12 +357,22 @@ class PlannerNode(Node):
             else:
                 path = _astar(self._grid, (gx, gy), (tx, ty), diagonal=True)
                 self._drone_path[did] = path
+        duration_ms = (time.monotonic() - plan_start) * 1000.0
 
         if not self._drone_path[did]:
             self.get_logger().warn(
                 f"no path for drone {did} -> ({tx}, {ty}); "
                 f"goal may be unreachable."
             )
+
+        # Observable metric: every re-plan emits a structured line so
+        # downstream log scrapers / Prometheus exporters can collect
+        # ``plan.duration_ms`` / ``plan.path_len`` per drone.
+        self.get_logger().info(
+            f"metric plan.duration_ms={duration_ms:.2f}, "
+            f"drone={did}, path_len={len(self._drone_path[did])}, "
+            f"goal=({tx}, {ty})"
+        )
 
     def _apply_pending_obstacle_changes(self) -> None:
         """Forward any buffered obstacle edits into the D* Lite trees."""
@@ -481,6 +492,13 @@ class PlannerNode(Node):
             # Replan all known targets against the new grid.
             for did, target in self._drone_target.items():
                 self._plan_for_drone(did, target)
+            # Observable metric for the grid resize event.
+            n_blocked = int((self._grid != 0).sum())
+            self.get_logger().info(
+                f"metric grid.obstacles={n_blocked}, "
+                f"grid.changed_cells={h * w}, "
+                f"grid.size={w}x{h} (resize)"
+            )
             return
         # Same shape, in-place grid edits so D* Lite trees can stay warm.
         for cy in range(h):
@@ -493,6 +511,17 @@ class PlannerNode(Node):
         if edits:
             self._pending_obstacle_changes.extend(edits)
             self._apply_pending_obstacle_changes()
+
+        # Observable metric: emit a single structured line summarising
+        # the grid update (total blocked cells + this-tick diff).  This
+        # makes it trivial for a log scraper to count ``grid.changed``
+        # events without parsing the verbose ``planner summary`` line.
+        n_blocked = int((self._grid != 0).sum())
+        self.get_logger().info(
+            f"metric grid.obstacles={n_blocked}, "
+            f"grid.changed_cells={len(edits)}, "
+            f"grid.size={w}x{h}"
+        )
 
     def on_rfly_pose(self, msg: DroneStateArray) -> None:
         """Optional pose feedback from RflySim / MAVROS (cells)."""

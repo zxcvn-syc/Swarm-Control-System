@@ -301,6 +301,14 @@ class SchedulerNode(Node):
                 f"{len(self._drones)} active drones, "
                 f"tick={period * 1000:.0f} ms"
             )
+            # Observable per-tick metric line in Prometheus-ish form:
+            # ``metric assignments.active=A, targets.active=B, latency.ms=L``.
+            self.get_logger().info(
+                f"metric assignments.active={n_pairs}, "
+                f"targets.active={len(self._targets)}, "
+                f"drones.active={len(self._drones)}, "
+                f"latency.ms={period * 1000:.0f}"
+            )
 
 
 def main(args: Optional[List[str]] = None) -> None:
