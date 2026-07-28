@@ -35,6 +35,7 @@
 | `/drone_states` (`DroneStateArray`)        | ·    | · | **S** | **P** | **S** |
 | `/task_assignment` (`TaskAssignment`)      | ·    | · | **P** | **S** | · |
 | `/grid_map` (`UInt8MultiArray`)            | ·    | · | · | **S** | · |
+| `/grid_map_nav` (`OccupancyGrid`)          | ·    | · | · | **P** | · |
 | `/planned_path` (`nav_msgs/Path`)          | ·    | · | · | **P** | · |
 | `/enclosure_command` (`EnclosureCommandArray`) | · | · | · | · | **P** |
 
@@ -263,9 +264,7 @@ planner 把 `/drone_states` 喂回 scheduler，scheduler summary 显示 8 active
   下游消费者（scheduler / enclosure / planner）目前用 `tracks` 字段即可，不依赖
   track 级 header；`/target_track_debug` 用了一个独立 `TargetTrackDebug.msg`，也没要求
   track 级 header。如果未来要做 frame-level time sync，需要把 header 加到 TargetTrack。
-- ⚠️ 当前没有 `/grid_map` 的发布方。`planner_node` 订阅 `/grid_map` 但没人发。
-  在本次联调里 grid 始终是空默认（默认 100×100 全部 free），所以 planner 还能跑；
-  真实集成需要 simulation_pkg 或 perception_pkg 提供 grid map 发布器。
+- ⚠️ `/grid_map` (std_msgs/UInt8MultiArray) still has no external publisher; `planner_node`'s subscription remains open for future grid_map_node.  The nav_msgs/OccupancyGrid variant is published on a separate topic `/grid_map_nav` (see §2).
 - ⚠️ `coord_transform_node` 输出 `/target_track_world` 在本次联调里没人订阅（subscription count=0）。
   它是 "感知 → 规划" 的可选 world-frame 中间表示，目前调度链路不依赖它。建议在 matrix 文档中
   显式标注它是 **可选 / reserved**，避免下游误以为它已被使用。
