@@ -1,0 +1,35 @@
+project:
+  name: astar_basic_map
+
+map:
+  width: 15
+  height: 15
+
+  # 每个栅格边长，单位为米
+  resolution: 1.0
+
+  # 地图数值定义
+  obstacle_value: 1
+  free_value: 0
+
+  # Gazebo世界中，整个栅格地图左下角的位置
+  origin:
+    x: -7.5
+    y: -7.5
+
+  # 地图文本第一行表示地图上方
+  row_order: top_to_bottom
+
+planner:
+  connectivity: 4
+  heuristic: manhattan
+
+# 起点位于左下区域
+start:
+  x: 1
+  y: 13
+
+# 终点位于右上区域
+goal:
+  x: 13
+  y: 1
