@@ -217,3 +217,31 @@ def test_camera_to_world_identity():
     R_roll180 = ct.quaternion_to_matrix(1.0, 0.0, 0.0, 0.0)
     expected = np.diag([1.0, -1.0, -1.0])
     assert np.allclose(R_roll180, expected, atol=1e-12)
+
+
+def test_nadir_mount_projects_pixels_and_velocity_in_world_units():
+    """The default mount must see the ground and preserve metre/second units."""
+    K = np.array([
+        [500.0, 0.0, 320.0],
+        [0.0, 500.0, 240.0],
+        [0.0, 0.0, 1.0],
+    ])
+    camera_world = np.array([0.0, 0.0, 10.0])
+    R_world_from_cam = ct._NADIR_CAMERA_OPTICAL_TO_BODY
+
+    forward_body = ct.camera_to_body(0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+    assert np.allclose(forward_body, [0.0, 0.0, -1.0])
+
+    point = ct.project_pixel_to_ground(
+        320.0, 240.0, K, R_world_from_cam, camera_world, 0.0,
+    )
+    assert point is not None
+    assert np.allclose(point, [0.0, 0.0, 0.0])
+
+    velocity = ct.pixel_velocity_to_ground_velocity(
+        320.0, 240.0, 5.0, 0.0,
+        K, R_world_from_cam, camera_world, 0.0,
+    )
+    assert velocity is not None
+    assert velocity[0] == pytest.approx(0.1, abs=1e-9)
+    assert velocity[1] == pytest.approx(0.0, abs=1e-9)

@@ -15,11 +15,8 @@ Pipeline
    using the drone's pose (and the camera mount), then intersect with
    the ground plane ``Z_world = ground_altitude`` (a parameter,
    default 0 m).
-3. The intersection point is rotated back into the camera optical
-   frame so it can be used by the rest of the pipeline uniformly.
-4. The KF image-plane velocity ``(vx, vy)`` and the optional 2×2
-   position covariance are rotated into the world frame using the same
-   rotation chain so downstream nodes see consistent units.
+3. The local pixel velocity is projected through the same ground-plane
+   geometry, yielding a world-frame velocity in metres per second.
 
 ROS2 wiring
 -----------
@@ -77,6 +74,44 @@ from swarm_interfaces.msg import TargetTrack, TargetTrackArray
 # rejected.
 _GROUND_PLANE_MIN_DZ = 1e-3
 
+# ROS camera optical frames use X right, Y down, Z forward.  The perception
+# camera is assumed to be nadir-facing by default: X maps to body X, Y maps
+# to body -Y, and the optical axis maps to body -Z.  This is a proper rotation
+# (unlike the tempting but invalid X/+X, Y/-Y, Z/+Z reflection).
+_NADIR_CAMERA_OPTICAL_TO_BODY = np.diag([1.0, -1.0, -1.0])
+
+
+def _as_bool(value: object, default: bool = False) -> bool:
+    """Coerce ROS parameter values, including launch substitution strings."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return default
+
+
+def _fixed_float_list(value: Sequence[float] | None, size: int) -> list[float]:
+    """Sanitize a fixed-size ROS numeric array without leaking NaN values."""
+    result: list[float] = []
+    try:
+        values = list(value) if value is not None else []
+    except TypeError:
+        values = []
+    for item in values[:size]:
+        try:
+            numeric = float(item)
+        except (TypeError, ValueError):
+            numeric = 0.0
+        result.append(numeric if math.isfinite(numeric) else 0.0)
+    result.extend([0.0] * (size - len(result)))
+    return result
+
 
 def pixel_to_ray(u: float, v: float, K: np.ndarray) -> Optional[np.ndarray]:
     """Back-project a pixel ``(u, v)`` to a unit ray in the camera frame.
@@ -87,9 +122,18 @@ def pixel_to_ray(u: float, v: float, K: np.ndarray) -> Optional[np.ndarray]:
     trick), so callers that want a unit ray should divide by
     ``np.linalg.norm``.  ``None`` is returned if ``K`` is degenerate.
     """
+    try:
+        u = float(u)
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(u) and math.isfinite(v)):
+        return None
     K = np.asarray(K, dtype=np.float64)
     if K.shape != (3, 3):
         raise ValueError(f"K must be 3x3, got {K.shape}")
+    if not np.all(np.isfinite(K)):
+        return None
     try:
         Kinv = np.linalg.inv(K)
     except np.linalg.LinAlgError:
@@ -141,6 +185,60 @@ def intersect_ray_with_ground(
     return cam_w + t * ray_world
 
 
+def project_pixel_to_ground(
+    u: float,
+    v: float,
+    K: np.ndarray,
+    R_world_from_cam: np.ndarray,
+    camera_world: np.ndarray,
+    ground_altitude: float,
+) -> Optional[np.ndarray]:
+    """Project one pixel to the configured world-frame ground plane."""
+    ray_cam = pixel_to_ray(u, v, K)
+    if ray_cam is None:
+        return None
+    return intersect_ray_with_ground(
+        ray_cam, R_world_from_cam, camera_world, ground_altitude,
+    )
+
+
+def pixel_velocity_to_ground_velocity(
+    u: float,
+    v: float,
+    vx_pixels_s: float,
+    vy_pixels_s: float,
+    K: np.ndarray,
+    R_world_from_cam: np.ndarray,
+    camera_world: np.ndarray,
+    ground_altitude: float,
+) -> Optional[np.ndarray]:
+    """Convert an image-plane velocity to world metres per second.
+
+    ``TargetTrack.vx`` and ``vy`` are Kalman velocities in pixels/second.
+    Rotating them directly produces values with the wrong units.  Projecting
+    the one-second displaced pixel correctly captures camera height and focal
+    length while keeping the transform deterministic for a static pose.
+    """
+    try:
+        vx = float(vx_pixels_s)
+        vy = float(vy_pixels_s)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(vx) and math.isfinite(vy)):
+        return None
+    start = project_pixel_to_ground(
+        u, v, K, R_world_from_cam, camera_world, ground_altitude,
+    )
+    end = project_pixel_to_ground(
+        float(u) + vx, float(v) + vy,
+        K, R_world_from_cam, camera_world, ground_altitude,
+    )
+    if start is None or end is None:
+        return None
+    velocity = end - start
+    return velocity if np.all(np.isfinite(velocity)) else None
+
+
 def quaternion_to_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
     """Convert a unit quaternion to a 3x3 rotation matrix.
 
@@ -189,15 +287,15 @@ def camera_to_body(
 ) -> np.ndarray:
     """Apply the camera_optical → base_link mount rotation.
 
-    The default mount assumes the camera is bolted to the airframe
-    with ``camera_optical.X`` aligned with ``base_link.X`` (forward),
-    ``camera_optical.Y`` aligned with ``base_link.-Y`` (down) and
-    ``camera_optical.Z`` aligned with ``base_link.Z`` (up).  This is
-    the standard rigid-mount orientation; the three ``mount_*``
-    parameters let the user nudge the mount if the camera is tilted.
+    The default mount is nadir-facing: ``camera_optical.X`` aligns with
+    ``base_link.X``, ``camera_optical.Y`` with ``base_link.-Y``, and the
+    optical axis points along ``base_link.-Z``.  The three ``mount_*``
+    parameters are body-frame offsets for a physically mounted camera.
     """
-    R = euler_to_matrix(mount_roll, mount_pitch, mount_yaw)
-    return R @ np.array([Xc, Yc, Zc], dtype=np.float64)
+    R_offset = euler_to_matrix(mount_roll, mount_pitch, mount_yaw)
+    return R_offset @ _NADIR_CAMERA_OPTICAL_TO_BODY @ np.array(
+        [Xc, Yc, Zc], dtype=np.float64,
+    )
 
 
 def body_to_world(
@@ -253,12 +351,14 @@ class CoordTransformNode(Node):
         self.declare_parameter('input_topic', '/target_track')
         self.declare_parameter('output_topic', '/target_track_world')
         self.declare_parameter('debug_topic', '/target_track_debug')
+        self.declare_parameter('enabled', True)
+        self.declare_parameter('world_frame', 'world')
         self.declare_parameter('ground_altitude', 0.0)
         self.declare_parameter('max_pose_age_s', 0.5)
         self.declare_parameter('camera_mount_roll', 0.0)
         self.declare_parameter('camera_mount_pitch', 0.0)
         self.declare_parameter('camera_mount_yaw', 0.0)
-        self.declare_parameter('frame_id', 'world')
+        self.declare_parameter('frame_id', '')
         self.declare_parameter('publish_debug', True)
 
         camera_info_topic = self.get_parameter('camera_info_topic').value
@@ -267,13 +367,23 @@ class CoordTransformNode(Node):
         output_topic = self.get_parameter('output_topic').value
         debug_topic = self.get_parameter('debug_topic').value
 
+        self._enabled = _as_bool(self.get_parameter('enabled').value, True)
         self._ground_altitude = float(self.get_parameter('ground_altitude').value)
-        self._max_pose_age_s = float(self.get_parameter('max_pose_age_s').value)
+        self._max_pose_age_s = max(
+            0.0, float(self.get_parameter('max_pose_age_s').value),
+        )
         self._mount_roll = float(self.get_parameter('camera_mount_roll').value)
         self._mount_pitch = float(self.get_parameter('camera_mount_pitch').value)
         self._mount_yaw = float(self.get_parameter('camera_mount_yaw').value)
-        self._frame_id = self.get_parameter('frame_id').value
-        self._publish_debug = bool(self.get_parameter('publish_debug').value)
+        world_frame = str(self.get_parameter('world_frame').value).strip()
+        legacy_frame_id = str(self.get_parameter('frame_id').value).strip()
+        self._frame_id = world_frame or legacy_frame_id or 'world'
+        self._publish_debug = _as_bool(self.get_parameter('publish_debug').value)
+        if not all(math.isfinite(value) for value in (
+            self._ground_altitude, self._mount_roll,
+            self._mount_pitch, self._mount_yaw,
+        )):
+            raise ValueError('ground altitude and camera mount angles must be finite')
 
         # Cached intrinsics: (3, 3) ndarray.  None until the first
         # ``CameraInfo`` arrives.
@@ -334,7 +444,19 @@ class CoordTransformNode(Node):
     # Callbacks
     # ------------------------------------------------------------------
     def _on_camera_info(self, msg: CameraInfo) -> None:
-        K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
+        try:
+            K = np.asarray(msg.k, dtype=np.float64).reshape(3, 3)
+        except (TypeError, ValueError) as exc:
+            self.get_logger().error(f'ignoring invalid CameraInfo.k: {exc}')
+            return
+        if (
+            not np.all(np.isfinite(K))
+            or K[0, 0] <= 0.0
+            or K[1, 1] <= 0.0
+            or abs(float(np.linalg.det(K))) < 1e-12
+        ):
+            self.get_logger().error('ignoring invalid camera intrinsics matrix')
+            return
         if self._K is None:
             self.get_logger().info(
                 f'cached camera intrinsics from {msg.header.frame_id!r} '
@@ -350,8 +472,14 @@ class CoordTransformNode(Node):
             msg.pose.position.z,
         ], dtype=np.float64)
         q = msg.pose.orientation
+        values = [*t, q.x, q.y, q.z, q.w]
+        if not np.all(np.isfinite(values)) or np.linalg.norm(values[3:]) < 1e-9:
+            self.get_logger().warn('ignoring drone pose with non-finite position or orientation')
+            return
         R = quaternion_to_matrix(q.x, q.y, q.z, q.w)
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        if stamp_ns <= 0:
+            stamp_ns = self.get_clock().now().nanoseconds
         self._pose_translation = t
         self._pose_rotation = R
         self._pose_stamp_ns = stamp_ns
@@ -362,9 +490,12 @@ class CoordTransformNode(Node):
         if self._max_pose_age_s <= 0:
             return True
         age_ns = now_ns - self._pose_stamp_ns
-        return age_ns <= int(self._max_pose_age_s * 1e9)
+        max_age_ns = int(self._max_pose_age_s * 1e9)
+        return -max_age_ns <= age_ns <= max_age_ns
 
     def _on_track(self, msg: TargetTrackArray) -> None:
+        if not self._enabled:
+            return
         if self._K is None:
             self.get_logger().debug('skipping: no camera_info yet')
             return
@@ -382,7 +513,10 @@ class CoordTransformNode(Node):
 
         # Mount rotation: camera_optical -> base_link.  Combined with
         # the drone pose, this gives the full camera_optical -> world.
-        R_mount = euler_to_matrix(self._mount_roll, self._mount_pitch, self._mount_yaw)
+        R_mount = (
+            euler_to_matrix(self._mount_roll, self._mount_pitch, self._mount_yaw)
+            @ _NADIR_CAMERA_OPTICAL_TO_BODY
+        )
         R_world_from_cam = self._pose_rotation @ R_mount
 
         out = TargetTrackArray()
@@ -399,7 +533,7 @@ class CoordTransformNode(Node):
             dbg = TargetTrackArray()
             dbg.header = Header()
             dbg.header.stamp = out.header.stamp
-            dbg.header.frame_id = 'world_debug'
+            dbg.header.frame_id = f'{self._frame_id}_debug'
             dbg.frame_idx = out.frame_idx
             dbg.tracks = list(out.tracks)
             self._debug_publisher.publish(dbg)
@@ -410,36 +544,31 @@ class CoordTransformNode(Node):
         R_world_from_cam: np.ndarray,
     ) -> Optional[TargetTrack]:
         # 1) pixel -> camera ray.
-        ray_cam = pixel_to_ray(track.x, track.y, self._K)
-        if ray_cam is None:
-            return None
-
-        # 2) intersect with the ground plane in the world frame.
-        p_world = intersect_ray_with_ground(
-            ray_cam, R_world_from_cam,
+        p_world = project_pixel_to_ground(
+            track.x, track.y, self._K, R_world_from_cam,
             self._pose_translation, self._ground_altitude,
         )
         if p_world is None:
             return None
 
-        # 3) KF velocity (pixel/sec) -> world m/s.  The image axes
-        # are (X_c, Y_c) = (right, down), so we build a 2D world-frame
-        # velocity by rotating (vx, vy, 0) through the full chain.
-        v_cam = np.array([track.vx, track.vy, 0.0], dtype=np.float64)
-        v_world = rotate_vector(v_cam, R_world_from_cam)
+        # 3) KF velocity (pixel/sec) -> world m/s through the ground-plane
+        # projection.  A 5-pixel image velocity is not a 5-metre velocity.
+        v_world = pixel_velocity_to_ground_velocity(
+            track.x, track.y, track.vx, track.vy, self._K,
+            R_world_from_cam, self._pose_translation, self._ground_altitude,
+        )
+        if v_world is None:
+            return None
 
         # 4) Predicted future positions: each (px, py) -> world (X, Y).
         pred_x_world: list[float] = []
         pred_y_world: list[float] = []
-        pred_conf = list(track.pred_conf) if len(track.pred_conf) == 5 else [0.0] * 5
-        for px, py, conf in zip(track.pred_x, track.pred_y, pred_conf):
-            p_cam_pred = pixel_to_ray(float(px), float(py), self._K)
-            if p_cam_pred is None:
-                pred_x_world.append(0.0)
-                pred_y_world.append(0.0)
-                continue
-            p_world_pred = intersect_ray_with_ground(
-                p_cam_pred, R_world_from_cam,
+        pred_x = _fixed_float_list(track.pred_x, 5)
+        pred_y = _fixed_float_list(track.pred_y, 5)
+        pred_conf = [max(0.0, min(1.0, value)) for value in _fixed_float_list(track.pred_conf, 5)]
+        for px, py in zip(pred_x, pred_y):
+            p_world_pred = project_pixel_to_ground(
+                px, py, self._K, R_world_from_cam,
                 self._pose_translation, self._ground_altitude,
             )
             if p_world_pred is None:

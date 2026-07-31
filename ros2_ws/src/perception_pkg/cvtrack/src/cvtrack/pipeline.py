@@ -336,7 +336,12 @@ def run(args: argparse.Namespace) -> int:
     fps = info.fps
     total = info.total_frames
 
-    dt = 1.0 / max(float(fps), 1.0)
+    source_dt = 1.0 / max(float(fps), 1.0)
+    try:
+        configured_dt = float((merged.get("tracker", {}) or {}).get("dt", source_dt))
+    except (TypeError, ValueError):
+        configured_dt = source_dt
+    dt = configured_dt if np.isfinite(configured_dt) and configured_dt > 0.0 else source_dt
     pipe_cfg = merged.get("pipeline", {})
     max_frames_cap = int(pipe_cfg.get("max_frames", args.max_frames) or 0)
     if max_frames_cap <= 0:

@@ -86,6 +86,8 @@ class DeepSortAdaptive:
         base_std_meas: float = 0.05,
         motion_adapt_gain: float = 0.3,
         velocity_limit: float = 100.0,
+        motion_threshold_slow: float = 2.0,
+        motion_threshold_fast: float = 20.0,
         # Trajectory prediction
         enable_prediction: bool = True,
         prediction_steps: int = 10,
@@ -114,6 +116,8 @@ class DeepSortAdaptive:
         self.prediction_steps = prediction_steps
         self.prediction_confidence_decay = prediction_confidence_decay
         self.min_prediction_confidence = min_prediction_confidence
+        self.motion_threshold_slow = float(motion_threshold_slow)
+        self.motion_threshold_fast = float(motion_threshold_fast)
 
         self.tracks: List[Track] = []
         DeepSortAdaptive._id_seq += 1
@@ -181,7 +185,10 @@ class DeepSortAdaptive:
                 min_confidence=self.min_prediction_confidence,
                 confidence_decay=self.prediction_confidence_decay,
             )
-        track.detect_motion_mode()
+        track.detect_motion_mode(
+            speed_threshold_slow=self.motion_threshold_slow,
+            speed_threshold_fast=self.motion_threshold_fast,
+        )
 
     def step(
         self,
@@ -495,6 +502,8 @@ class BoTSortAdaptive:
         self.prediction_steps = prediction_steps
         self.prediction_confidence_decay = prediction_confidence_decay
         self.min_prediction_confidence = min_prediction_confidence
+        self.motion_threshold_slow = float(motion_threshold_slow)
+        self.motion_threshold_fast = float(motion_threshold_fast)
 
         self.tracks: List[Track] = []
 
@@ -564,7 +573,10 @@ class BoTSortAdaptive:
                 min_confidence=self.min_prediction_confidence,
                 confidence_decay=self.prediction_confidence_decay,
             )
-        track.detect_motion_mode(speed_threshold_slow=2.0, speed_threshold_fast=20.0)
+        track.detect_motion_mode(
+            speed_threshold_slow=self.motion_threshold_slow,
+            speed_threshold_fast=self.motion_threshold_fast,
+        )
 
     def step(
         self,

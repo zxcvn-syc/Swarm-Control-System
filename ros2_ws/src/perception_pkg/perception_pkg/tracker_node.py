@@ -54,10 +54,13 @@ Notes
 
 from __future__ import annotations
 
+import ast
 import logging
+import math
 import os
 import sys
 import threading
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -100,7 +103,7 @@ def _report_cv_bridge_state() -> None:
         'input_mode:=video still works.', _CV_BRIDGE_ERROR,
     )
 
-from std_msgs.msg import Header, UInt8
+from std_msgs.msg import Header
 
 from swarm_interfaces.msg import TargetTrack, TargetTrackArray
 from swarm_interfaces.msg import EnclosureTarget, EnclosureTargetArray
@@ -110,6 +113,99 @@ import diagnostic_msgs.msg as diag_msgs
 
 
 log = logging.getLogger(__name__)
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """Coerce ROS parameter values, including launch substitutions, to bool."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'true', '1', 'yes', 'on'}:
+            return True
+        if normalized in {'false', '0', 'no', 'off', ''}:
+            return False
+    return default
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Parse ROS list parameters that may arrive as YAML-like strings."""
+    if value is None:
+        return []
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = [item.strip() for item in text.split(',') if item.strip()]
+        if isinstance(parsed, (list, tuple)):
+            return list(parsed)
+        return [parsed]
+    return [value]
+
+
+def _class_ids(value: Any) -> list[int]:
+    """Convert a detector class parameter into validated integer IDs."""
+    result: list[int] = []
+    for item in _as_list(value):
+        try:
+            class_id = int(item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'invalid detector class ID: {item!r}') from exc
+        if class_id < 0:
+            raise ValueError(f'detector class ID must be non-negative: {class_id}')
+        result.append(class_id)
+    return result
+
+
+def _finite_float(value: Any, default: float = 0.0) -> float:
+    """Return a finite float suitable for a ROS numeric field."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if math.isfinite(numeric) else default
+
+
+def _fixed_float_list(value: Any, size: int, default: float = 0.0) -> list[float]:
+    """Coerce and pad a fixed-size ROS float array."""
+    result = [
+        _finite_float(item, default)
+        for item in _as_list(value)[:size]
+    ]
+    result.extend([default] * (size - len(result)))
+    return result
+
+
+def _copy_header(header: Optional[Header], frame_id: Optional[str] = None) -> Header:
+    """Copy a ROS header without mutating the message that supplied it."""
+    copied = Header()
+    if header is not None:
+        try:
+            copied.stamp = header.stamp
+        except AttributeError:
+            pass
+        copied.frame_id = str(getattr(header, 'frame_id', ''))
+    if frame_id is not None:
+        copied.frame_id = str(frame_id)
+    return copied
+
+
+def _ensure_vendored_cvtrack() -> None:
+    """Make the repository's vendored cvtrack importable from a source checkout."""
+    vendored_src = Path(__file__).resolve().parents[1] / 'cvtrack' / 'src'
+    if vendored_src.is_dir() and str(vendored_src) not in sys.path:
+        sys.path.insert(0, str(vendored_src))
 
 
 # Type hint for the message class used in _make_target_track
@@ -133,10 +229,19 @@ class _MetricsRecorder:
         self._motion_mode_counts = {0: 0, 1: 0, 2: 0, 3: 0}
         self._id_pool: set[int] = set()
         self._seen_ids: set[int] = set()
+        self._active_count = 0
 
-    def update(self, n_active: int, motion_modes: list[int]) -> None:
+    def update(
+        self,
+        n_active: int,
+        motion_modes: list[int],
+        track_ids: Optional[list[int]] = None,
+    ) -> None:
         self._total_updates += 1
-        self._id_pool = {i for i in self._id_pool if n_active > 0}
+        self._active_count = max(0, int(n_active))
+        if track_ids is not None:
+            self._id_pool = {int(track_id) for track_id in track_ids}
+            self._seen_ids.update(self._id_pool)
         self._id_switch_count = max(0, self._id_switch_count)
         for mm in motion_modes:
             self._motion_mode_counts[mm] = self._motion_mode_counts.get(mm, 0) + 1
@@ -149,7 +254,7 @@ class _MetricsRecorder:
 
     def snapshot(self) -> diag_msgs.KeyValue:
         """Return a DiagnosticArray payload."""
-        active = len(self._id_pool)
+        active = self._active_count
         miss_rate = self._miss_count / max(self._total_updates, 1)
         conv_time = (
             sum(self._convergence_times) / len(self._convergence_times)
@@ -170,7 +275,7 @@ class _MetricsRecorder:
             'perception/id_switch_count': str(self._id_switch_count),
             'perception/miss_rate': f'{self._miss_count / max(self._total_updates, 1):.4f}',
             'perception/convergence_time_ms': f'{sum(self._convergence_times) / max(len(self._convergence_times), 1):.1f}',
-            'perception/active_tracks': str(len(self._id_pool)),
+            'perception/active_tracks': str(self._active_count),
             'perception/motion_mode_distribution': '; '.join(
                 f'{k}={v}' for k, v in sorted(self._motion_mode_counts.items())
             ),
@@ -299,22 +404,24 @@ def _build_runner_overrides(node: Node) -> dict:
         'device': p('detector.device').value,
         'imgsz': int(p('detector.imgsz').value),
         'conf': float(p('detector.conf').value),
-        'classes': list(p('detector.classes').value),
+        'classes': _class_ids(p('detector.classes').value),
         'min_box_area': float(p('detector.min_box_area').value),
         'min_conf': float(p('detector.min_conf').value),
         'nms_iou': float(p('detector.nms_iou').value),
     }
     tr = {
-        'kind': p('tracker.kind').value,
+        'kind': str(p('tracker.kind').value).strip().lower(),
+        'dt': float(p('tracker.dt').value),
         'max_age': int(p('tracker.max_age').value),
         'n_init': int(p('tracker.n_init').value),
         'iou_thresh': float(p('tracker.iou_thresh').value),
         'high_conf': float(p('tracker.high_conf').value),
         'new_track_conf': float(p('tracker.new_track_conf').value),
         'lost_relink_frames': int(p('tracker.lost_relink_frames').value),
-        'stationary_prune': bool(p('tracker.stationary_prune').value),
+        'stationary_prune': _as_bool(p('tracker.stationary_prune').value, True),
+        'include_tentative': _as_bool(p('tracker.include_tentative').value),
     }
-    appearance_enabled = bool(p('appearance.enabled').value)
+    appearance_enabled = _as_bool(p('appearance.enabled').value)
     ap = {
         'enabled': appearance_enabled,
     }
@@ -348,7 +455,7 @@ def _build_runner_overrides(node: Node) -> dict:
         except Exception:
             v = None
         if v is not None:
-            kalman_cfg[yaml_key] = v
+            kalman_cfg[yaml_key] = float(v)
     if kalman_cfg:
         tr['kalman'] = kalman_cfg
 
@@ -365,7 +472,12 @@ def _build_runner_overrides(node: Node) -> dict:
         except Exception:
             v = None
         if v is not None:
-            tp_cfg[yaml_key] = v
+            if yaml_key == 'enabled':
+                tp_cfg[yaml_key] = _as_bool(v, True)
+            elif yaml_key == 'prediction_steps':
+                tp_cfg[yaml_key] = int(v)
+            else:
+                tp_cfg[yaml_key] = float(v)
     trajectory_prediction = tp_cfg
 
     overrides = {'detector': det, 'tracker': tr, 'appearance': ap}
@@ -404,12 +516,10 @@ class MultiSourceAggregator:
         self._pending: dict[str, TargetTrackArray] = {}
         self._last_header: Optional[Header] = None
         self._frame_seq = 0
-        self._received_any = False
-
-        requested = bool(node.get_parameter('enable_fusion').value)
-        configured_sources = node.get_parameter('fusion_sources').value or []
+        requested = _as_bool(node.get_parameter('enable_fusion').value)
+        configured_sources = _as_list(node.get_parameter('fusion_sources').value)
         if not configured_sources:
-            configured_sources = node.get_parameter('sources').value or []
+            configured_sources = _as_list(node.get_parameter('sources').value)
         sources = []
         for raw_source in configured_sources:
             source = str(raw_source).strip().strip('/')
@@ -469,8 +579,7 @@ class MultiSourceAggregator:
     def _source_callback(self, source: str, msg: TargetTrackArray) -> None:
         with self._lock:
             self._pending[source] = msg
-            self._last_header = msg.header
-            self._received_any = True
+            self._last_header = _copy_header(msg.header)
 
     def _fusion_tick(self) -> None:
         if not self._enabled or self._fusion is None:
@@ -479,8 +588,7 @@ class MultiSourceAggregator:
             pending = self._pending
             self._pending = {}
             header = self._last_header
-            received_any = self._received_any
-        if not received_any:
+        if not pending:
             return
 
         try:
@@ -499,8 +607,7 @@ class MultiSourceAggregator:
         if header is None:
             header = Header()
             header.stamp = self._node.get_clock().now().to_msg()
-        output.header = header
-        output.header.frame_id = self._frame_id
+        output.header = _copy_header(header, self._frame_id)
         output.frame_idx = self._frame_seq
         self._frame_seq += 1
         output.tracks = [self._message_from_track(track) for track in fused_tracks]
@@ -604,6 +711,7 @@ class TrackerNode(Node):
         # pre-dates them.  If the import below fails the operator will see
         # a clear warning explaining the install step, rather than us
         # silently inserting a half-broken path.
+        _ensure_vendored_cvtrack()
         try:
             from cvtrack.runner import CvtrackRunner  # noqa: F401
         except ImportError as exc:
@@ -615,23 +723,32 @@ class TrackerNode(Node):
                 'not used as a fallback (it pre-dates the optimized '
                 'tracker code).' % exc
             )
+            raise RuntimeError(
+                'cvtrack is unavailable; install the vendored package with '
+                '`pip install -e ros2_ws/src/perception_pkg/cvtrack` or '
+                'add its src directory to PYTHONPATH'
+            ) from exc
 
         overrides = _build_runner_overrides(self)
-        # dt is set from the ROS2 parameter; the runner derives fps from dt.
-        self._dt = float(self.get_parameter('tracker.dt').value)
+        # ``tracker.dt`` is part of the nested override, so the runner builds
+        # its Kalman transition matrix with the requested value.
+        self._dt = _finite_float(
+            self.get_parameter('tracker.dt').value,
+            default=0.05,
+        )
+        if self._dt <= 0.0:
+            raise ValueError('tracker.dt must be a positive finite value')
         self._runner = CvtrackRunner.from_overrides(
             preset=None, overrides=overrides, fps=1.0 / max(self._dt, 1e-3)
         )
-        # ``from_overrides`` reads ``fps`` and overwrites dt if the overrides
-        # don't explicitly pin it.  Force the dt the user asked for:
-        self._runner.settings.dt = self._dt
-        self._runner.tracker.kf.dt = self._dt
 
         self._track_topic = self.get_parameter('track_topic').value
         self._frame_id = self.get_parameter('frame_id').value
-        self._publish_rate = float(self.get_parameter('publish_rate_hz').value)
-        self._input_mode = self.get_parameter('input_mode').value.lower()
-        self._loop_video = bool(self.get_parameter('loop_video').value)
+        self._publish_rate = max(
+            0.0, float(self.get_parameter('publish_rate_hz').value)
+        )
+        self._input_mode = str(self.get_parameter('input_mode').value).strip().lower()
+        self._loop_video = _as_bool(self.get_parameter('loop_video').value)
 
         self._publisher = self.create_publisher(
             TargetTrackArray, self._track_topic,
@@ -644,7 +761,9 @@ class TrackerNode(Node):
         )
 
         # --- Debug / diagnostics publishers --------------------------------
-        self._enable_debug = bool(self.get_parameter('enable_debug_topics').value)
+        self._enable_debug = _as_bool(
+            self.get_parameter('enable_debug_topics').value,
+        )
         self._debug_pub: Optional[Any] = None
         self._metrics_pub: Optional[Any] = None
         self._metrics_recorder: Optional[_MetricsRecorder] = None
@@ -658,18 +777,20 @@ class TrackerNode(Node):
                 diag_msgs.DiagnosticArray, '/tracking_metrics',
                 QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE),
             )
-            metrics_period_s = float(
-                self.get_parameter('metrics_period_ms').value
-            ) / 1000.0
+            metrics_period_ms = int(self.get_parameter('metrics_period_ms').value)
             self._metrics_recorder = _MetricsRecorder(
-                period_ms=int(self.get_parameter('metrics_period_ms').value)
+                period_ms=max(0, metrics_period_ms)
             )
-            self._metrics_timer = self.create_timer(
-                metrics_period_s, self._publish_metrics,
-            )
+            self._metrics_timer = None
+            if metrics_period_ms > 0:
+                self._metrics_timer = self.create_timer(
+                    metrics_period_ms / 1000.0, self._publish_metrics,
+                )
 
         # Enclosure group publisher
-        self._enclosure_enabled = bool(self.get_parameter('enclosure.enabled').value)
+        self._enclosure_enabled = _as_bool(
+            self.get_parameter('enclosure.enabled').value,
+        )
         self._enclosure_publisher = None
         if self._enclosure_enabled:
             enclosure_topic = self.get_parameter('enclosure.topic').value
@@ -689,6 +810,10 @@ class TrackerNode(Node):
         self._cv_bridge = CvBridge() if _HAS_CV_BRIDGE else None
         self._latest_frame = None
         self._latest_frame_lock = threading.Lock()
+        self._latest_track_lock = threading.Lock()
+        self._latest_records: list[Any] = []
+        self._latest_records_frame_idx: Optional[int] = None
+        self._latest_records_header: Optional[Header] = None
         self._frame_seq = 0  # monotonic counter used as ``frame_idx``
         # Publish timer is created below, after input wiring.  Initialise
         # to None so ``_init_video_input`` (which runs first) can branch
@@ -738,7 +863,12 @@ class TrackerNode(Node):
                 'falling back to /dev/video0.'
             )
             source = '0'
-        cap_source = int(source) if source.isdigit() else source
+        source_text = str(source).strip()
+        cap_source = (
+            int(source_text)
+            if source_text.lstrip('-').isdigit()
+            else source_text
+        )
         self._video_cap = cv2.VideoCapture(cap_source)
         if not self._video_cap.isOpened():
             raise RuntimeError(f'cannot open video source {source!r}')
@@ -817,17 +947,17 @@ class TrackerNode(Node):
             return
         frame, src_header = latest
         try:
-            records = self._runner.step_records(frame)
+            records = list(self._runner.step_records(frame) or [])
         except Exception as exc:
             self.get_logger().error(f'cvtrack runner failed: {exc}')
             return
 
         if src_header is not None:
-            header = src_header
+            header = _copy_header(src_header, self._frame_id)
         else:
             header = Header()
             header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = self._frame_id
+            header.frame_id = self._frame_id
 
         msg = TargetTrackArray()
         msg.header = header
@@ -837,6 +967,10 @@ class TrackerNode(Node):
             self._make_target_track(rec)
             for rec in records
         ]
+        with self._latest_track_lock:
+            self._latest_records = records
+            self._latest_records_frame_idx = msg.frame_idx
+            self._latest_records_header = _copy_header(msg.header)
         self._aggregator.publish_local(msg)
         self.get_logger().debug(
             f'published frame_idx={msg.frame_idx} n_tracks={len(msg.tracks)}'
@@ -852,39 +986,35 @@ class TrackerNode(Node):
             self._metrics_recorder.update(
                 n_active=len(msg.tracks),
                 motion_modes=motion_modes,
+                track_ids=[int(track.target_id) for track in msg.tracks],
             )
 
     def _make_target_track(self, rec) -> "TargetTrack":
         """Construct a TargetTrack message from a track record."""
         msg = TargetTrack()
         msg.target_id = int(rec.target_id)
-        msg.x = float(rec.x)
-        msg.y = float(rec.y)
-        msg.vx = float(rec.vx)
-        msg.vy = float(rec.vy)
+        msg.x = _finite_float(getattr(rec, 'x', 0.0))
+        msg.y = _finite_float(getattr(rec, 'y', 0.0))
+        msg.vx = _finite_float(getattr(rec, 'vx', 0.0))
+        msg.vy = _finite_float(getattr(rec, 'vy', 0.0))
 
         # Enhanced fields with safe defaults
-        msg.confidence = float(getattr(rec, 'confidence', 1.0))
-        msg.cls = int(getattr(rec, 'cls', 0))
-        msg.is_confirmed = bool(getattr(rec, 'is_confirmed', True))
-        msg.speed = float(getattr(rec, 'speed', 0.0))
-        msg.motion_mode = int(getattr(rec, 'motion_mode', 0))
+        msg.confidence = max(
+            0.0, min(1.0, _finite_float(getattr(rec, 'confidence', 1.0), 1.0))
+        )
+        msg.cls = max(0, min(255, int(getattr(rec, 'cls', 0))))
+        msg.is_confirmed = _as_bool(
+            getattr(rec, 'is_confirmed', getattr(rec, 'confirmed', True)), True,
+        )
+        msg.speed = max(0.0, _finite_float(getattr(rec, 'speed', 0.0)))
+        msg.motion_mode = max(0, min(3, int(getattr(rec, 'motion_mode', 0))))
 
         # Prediction arrays (5 steps ahead)
-        pred_x = getattr(rec, 'pred_x', [0.0] * 5)
-        pred_y = getattr(rec, 'pred_y', [0.0] * 5)
-        pred_conf = getattr(rec, 'pred_conf', [1.0] * 5)
-
-        if len(pred_x) < 5:
-            pred_x = list(pred_x) + [0.0] * (5 - len(pred_x))
-        if len(pred_y) < 5:
-            pred_y = list(pred_y) + [0.0] * (5 - len(pred_y))
-        if len(pred_conf) < 5:
-            pred_conf = list(pred_conf) + [0.0] * (5 - len(pred_conf))
-
-        msg.pred_x = pred_x[:5]
-        msg.pred_y = pred_y[:5]
-        msg.pred_conf = pred_conf[:5]
+        msg.pred_x = _fixed_float_list(getattr(rec, 'pred_x', [0.0] * 5), 5)
+        msg.pred_y = _fixed_float_list(getattr(rec, 'pred_y', [0.0] * 5), 5)
+        msg.pred_conf = _fixed_float_list(
+            getattr(rec, 'pred_conf', [1.0] * 5), 5,
+        )
 
         return msg
 
@@ -923,22 +1053,19 @@ class TrackerNode(Node):
         if not self._enclosure_enabled or self._enclosure_publisher is None:
             return
 
-        latest = self._consume_latest_frame()
-        if latest is None:
-            return
-
-        try:
-            records = self._runner.step_records(latest[0])
-        except Exception:
-            return
-
-        header = Header()
-        header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = self._frame_id
+        # Reuse the records produced by _publish_tick.  Running the detector
+        # again here races the main publish path for the single latest-frame
+        # buffer and can silently drop /target_track frames.
+        with self._latest_track_lock:
+            if self._latest_records_frame_idx is None:
+                return
+            records = list(self._latest_records)
+            frame_idx = self._latest_records_frame_idx
+            header = _copy_header(self._latest_records_header, self._frame_id)
 
         msg = EnclosureTargetArray()
         msg.header = header
-        msg.frame_idx = self._frame_seq
+        msg.frame_idx = frame_idx
 
         msg.targets = [
             self._make_enclosure_target(rec)
@@ -946,16 +1073,28 @@ class TrackerNode(Node):
         ]
 
         # Get drone positions from parameters
-        drone_positions = self.get_parameter('enclosure.drone_positions').value
-        if drone_positions:
-            drone_x = [float(p.get('x', 0.0)) for p in drone_positions[:8]]
-            drone_y = [float(p.get('y', 0.0)) for p in drone_positions[:8]]
+        drone_positions = _as_list(
+            self.get_parameter('enclosure.drone_positions').value,
+        )
+        valid_positions = [
+            position for position in drone_positions
+            if isinstance(position, dict)
+        ]
+        if valid_positions:
+            drone_x = [
+                _finite_float(position.get('x', 0.0))
+                for position in valid_positions[:8]
+            ]
+            drone_y = [
+                _finite_float(position.get('y', 0.0))
+                for position in valid_positions[:8]
+            ]
             while len(drone_x) < 8:
                 drone_x.append(0.0)
                 drone_y.append(0.0)
             msg.drone_x = drone_x[:8]
             msg.drone_y = drone_y[:8]
-            msg.num_drones = UInt8(min(len(drone_positions), 8))
+            msg.num_drones = min(len(valid_positions), 8)
         else:
             msg.drone_x = [0.0] * 8
             msg.drone_y = [0.0] * 8
@@ -986,14 +1125,12 @@ class TrackerNode(Node):
             msg.box_x1 = msg.box_y1 = msg.box_x2 = msg.box_y2 = 0.0
 
         # Predictions
-        pred_x = getattr(rec, 'pred_x', [0.0] * 5)
-        pred_y = getattr(rec, 'pred_y', [0.0] * 5)
-        msg.pred_x = pred_x[:5]
-        msg.pred_y = pred_y[:5]
+        msg.pred_x = _fixed_float_list(getattr(rec, 'pred_x', []), 5)
+        msg.pred_y = _fixed_float_list(getattr(rec, 'pred_y', []), 5)
 
-        # History (placeholder, would need track trail data)
-        msg.history_x = [rec.x] * 10
-        msg.history_y = [rec.y] * 10
+        # History (the runner record does not expose the full trail yet).
+        msg.history_x = [_finite_float(getattr(rec, 'x', 0.0))] * 10
+        msg.history_y = [_finite_float(getattr(rec, 'y', 0.0))] * 10
 
         return msg
 

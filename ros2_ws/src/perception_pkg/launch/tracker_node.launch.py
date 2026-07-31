@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import List
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -114,17 +114,17 @@ def generate_launch_description() -> LaunchDescription:
         'tracker.kind': LaunchConfiguration('tracker_kind'),
     }
 
-    tracker_node = Node(
-        package='perception_pkg',
-        executable='tracker_node',
-        name='tracker_node',
-        output='screen',
-        parameters=[
-            # Inline launch args (lowest priority).
-            inline_overrides,
-            # Optional YAML — overrides the launch args when supplied.
-            LaunchConfiguration('config'),
-        ],
-    )
+    def make_tracker_node(context):
+        parameters = [inline_overrides]
+        config_path = LaunchConfiguration('config').perform(context).strip()
+        if config_path:
+            parameters.append(config_path)
+        return [Node(
+            package='perception_pkg',
+            executable='tracker_node',
+            name='tracker_node',
+            output='screen',
+            parameters=parameters,
+        )]
 
-    return LaunchDescription(args + [tracker_node])
+    return LaunchDescription(args + [OpaqueFunction(function=make_tracker_node)])

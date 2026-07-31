@@ -19,7 +19,7 @@ Example invocations::
     ros2 launch perception_pkg perception.launch.py \\
         input_mode:=topic \\
         image_topic:=/uav/camera/image \\
-        coord_transform.enabled:=true \\
+        coord_transform_enabled:=true \\
         camera_info_topic:=/uav/camera/camera_info
 
     # Two-source fusion (each source must publish /<name>/target_track)
@@ -39,82 +39,84 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def _make_tracker_node() -> Node:
+def _make_tracker_node(context) -> Node:
     """Build the tracker_node Node with all launch-arg-driven parameters."""
+    parameters = [
+        {
+            # Input / output
+            "input_mode": LaunchConfiguration("input_mode"),
+            "video_source": LaunchConfiguration("video_source"),
+            "image_topic": LaunchConfiguration("image_topic"),
+            "track_topic": LaunchConfiguration("track_topic"),
+            "frame_id": LaunchConfiguration("frame_id"),
+            "publish_rate_hz": LaunchConfiguration("publish_rate_hz"),
+            "loop_video": LaunchConfiguration("loop_video"),
+            "enable_debug_topics": LaunchConfiguration("enable_debug_topics"),
+            # Fusion
+            "enable_fusion": LaunchConfiguration("enable_fusion"),
+            "fusion_sources": LaunchConfiguration("fusion_sources"),
+            "sources": LaunchConfiguration("sources"),
+            # Detector
+            "detector.backend": LaunchConfiguration("detector_backend"),
+            "detector.weights": LaunchConfiguration("detector_weights"),
+            "detector.device": LaunchConfiguration("detector_device"),
+            "detector.imgsz": LaunchConfiguration("detector_imgsz"),
+            "detector.conf": LaunchConfiguration("detector_conf"),
+            "detector.classes": LaunchConfiguration("detector_classes"),
+            "detector.min_box_area": LaunchConfiguration("detector_min_box_area"),
+            "detector.min_conf": LaunchConfiguration("detector_min_conf"),
+            "detector.nms_iou": LaunchConfiguration("detector_nms_iou"),
+            # Tracker
+            "tracker.kind": LaunchConfiguration("tracker_kind"),
+            "tracker.dt": LaunchConfiguration("tracker_dt"),
+            "tracker.max_age": LaunchConfiguration("tracker_max_age"),
+            "tracker.n_init": LaunchConfiguration("tracker_n_init"),
+            "tracker.iou_thresh": LaunchConfiguration("tracker_iou_thresh"),
+            "tracker.high_conf": LaunchConfiguration("tracker_high_conf"),
+            "tracker.new_track_conf": LaunchConfiguration("tracker_new_track_conf"),
+            "tracker.lost_relink_frames": LaunchConfiguration("tracker_lost_relink_frames"),
+            "tracker.stationary_prune": LaunchConfiguration("tracker_stationary_prune"),
+            "tracker.include_tentative": LaunchConfiguration("tracker_include_tentative"),
+            # Kalman (adaptive trackers)
+            "tracker.kalman.dt": LaunchConfiguration("kalman_dt"),
+            "tracker.kalman.sigma_p": LaunchConfiguration("kalman_sigma_p"),
+            "tracker.kalman.sigma_v": LaunchConfiguration("kalman_sigma_v"),
+            "tracker.kalman.sigma_m": LaunchConfiguration("kalman_sigma_m"),
+            "tracker.kalman.acceleration_gain": LaunchConfiguration("kalman_acceleration_gain"),
+            "tracker.kalman.motion_threshold_slow": LaunchConfiguration("kalman_motion_threshold_slow"),
+            "tracker.kalman.motion_threshold_fast": LaunchConfiguration("kalman_motion_threshold_fast"),
+            "tracker.kalman.base_std_pos": LaunchConfiguration("kalman_base_std_pos"),
+            "tracker.kalman.base_std_vel": LaunchConfiguration("kalman_base_std_vel"),
+            "tracker.kalman.base_std_meas": LaunchConfiguration("kalman_base_std_meas"),
+            "tracker.kalman.motion_adapt_gain": LaunchConfiguration("kalman_motion_adapt_gain"),
+            "tracker.kalman.velocity_limit": LaunchConfiguration("kalman_velocity_limit"),
+            "tracker.kalman.innovation_gate": LaunchConfiguration("kalman_innovation_gate"),
+            # Trajectory prediction
+            "trajectory_prediction.enabled": LaunchConfiguration("tp_enabled"),
+            "trajectory_prediction.prediction_steps": LaunchConfiguration("tp_prediction_steps"),
+            "trajectory_prediction.confidence_decay": LaunchConfiguration("tp_confidence_decay"),
+            "trajectory_prediction.min_confidence": LaunchConfiguration("tp_min_confidence"),
+            # Appearance
+            "appearance.enabled": LaunchConfiguration("appearance_enabled"),
+            "appearance.weights": LaunchConfiguration("appearance_weights"),
+            # Enclosure
+            "enclosure.enabled": LaunchConfiguration("enclosure_enabled"),
+            "enclosure.topic": LaunchConfiguration("enclosure_topic"),
+            "enclosure.publish_rate_hz": LaunchConfiguration("enclosure_publish_rate_hz"),
+            "enclosure.drone_positions": LaunchConfiguration("enclosure_drone_positions"),
+            # Diagnostics
+            "metrics_period_ms": LaunchConfiguration("metrics_period_ms"),
+        }
+    ]
+    config_path = LaunchConfiguration("config").perform(context).strip()
+    if config_path:
+        parameters.append(config_path)
     return Node(
         package="perception_pkg",
         executable="tracker_node",
         name="tracker_node",
         output="screen",
-        parameters=[
-            {
-                # Input / output
-                "input_mode": LaunchConfiguration("input_mode"),
-                "video_source": LaunchConfiguration("video_source"),
-                "image_topic": LaunchConfiguration("image_topic"),
-                "track_topic": LaunchConfiguration("track_topic"),
-                "frame_id": LaunchConfiguration("frame_id"),
-                "publish_rate_hz": LaunchConfiguration("publish_rate_hz"),
-                "loop_video": LaunchConfiguration("loop_video"),
-                "enable_debug_topics": LaunchConfiguration("enable_debug_topics"),
-                # Fusion
-                "enable_fusion": LaunchConfiguration("enable_fusion"),
-                "fusion_sources": LaunchConfiguration("fusion_sources"),
-                "sources": LaunchConfiguration("sources"),
-                # Detector
-                "detector.backend": LaunchConfiguration("detector_backend"),
-                "detector.weights": LaunchConfiguration("detector_weights"),
-                "detector.device": LaunchConfiguration("detector_device"),
-                "detector.imgsz": LaunchConfiguration("detector_imgsz"),
-                "detector.conf": LaunchConfiguration("detector_conf"),
-                "detector.classes": LaunchConfiguration("detector_classes"),
-                "detector.min_box_area": LaunchConfiguration("detector_min_box_area"),
-                "detector.min_conf": LaunchConfiguration("detector_min_conf"),
-                "detector.nms_iou": LaunchConfiguration("detector_nms_iou"),
-                # Tracker
-                "tracker.kind": LaunchConfiguration("tracker_kind"),
-                "tracker.dt": LaunchConfiguration("tracker_dt"),
-                "tracker.max_age": LaunchConfiguration("tracker_max_age"),
-                "tracker.n_init": LaunchConfiguration("tracker_n_init"),
-                "tracker.iou_thresh": LaunchConfiguration("tracker_iou_thresh"),
-                "tracker.high_conf": LaunchConfiguration("tracker_high_conf"),
-                "tracker.new_track_conf": LaunchConfiguration("tracker_new_track_conf"),
-                "tracker.lost_relink_frames": LaunchConfiguration("tracker_lost_relink_frames"),
-                "tracker.stationary_prune": LaunchConfiguration("tracker_stationary_prune"),
-                "tracker.include_tentative": LaunchConfiguration("tracker_include_tentative"),
-                # Kalman (adaptive trackers)
-                "tracker.kalman.dt": LaunchConfiguration("kalman_dt"),
-                "tracker.kalman.sigma_p": LaunchConfiguration("kalman_sigma_p"),
-                "tracker.kalman.sigma_v": LaunchConfiguration("kalman_sigma_v"),
-                "tracker.kalman.sigma_m": LaunchConfiguration("kalman_sigma_m"),
-                "tracker.kalman.acceleration_gain": LaunchConfiguration("kalman_acceleration_gain"),
-                "tracker.kalman.motion_threshold_slow": LaunchConfiguration("kalman_motion_threshold_slow"),
-                "tracker.kalman.motion_threshold_fast": LaunchConfiguration("kalman_motion_threshold_fast"),
-                "tracker.kalman.base_std_pos": LaunchConfiguration("kalman_base_std_pos"),
-                "tracker.kalman.base_std_vel": LaunchConfiguration("kalman_base_std_vel"),
-                "tracker.kalman.base_std_meas": LaunchConfiguration("kalman_base_std_meas"),
-                "tracker.kalman.motion_adapt_gain": LaunchConfiguration("kalman_motion_adapt_gain"),
-                "tracker.kalman.velocity_limit": LaunchConfiguration("kalman_velocity_limit"),
-                "tracker.kalman.innovation_gate": LaunchConfiguration("kalman_innovation_gate"),
-                # Trajectory prediction
-                "trajectory_prediction.enabled": LaunchConfiguration("tp_enabled"),
-                "trajectory_prediction.prediction_steps": LaunchConfiguration("tp_prediction_steps"),
-                "trajectory_prediction.confidence_decay": LaunchConfiguration("tp_confidence_decay"),
-                "trajectory_prediction.min_confidence": LaunchConfiguration("tp_min_confidence"),
-                # Appearance
-                "appearance.enabled": LaunchConfiguration("appearance_enabled"),
-                "appearance.weights": LaunchConfiguration("appearance_weights"),
-                # Enclosure
-                "enclosure.enabled": LaunchConfiguration("enclosure_enabled"),
-                "enclosure.topic": LaunchConfiguration("enclosure_topic"),
-                "enclosure.publish_rate_hz": LaunchConfiguration("enclosure_publish_rate_hz"),
-                "enclosure.drone_positions": LaunchConfiguration("enclosure_drone_positions"),
-                # Diagnostics
-                "metrics_period_ms": LaunchConfiguration("metrics_period_ms"),
-            },
-            # Optional YAML override file (lowest priority)
-            LaunchConfiguration("config"),
-        ],
+        parameters=parameters,
     )
 
 
@@ -263,7 +265,7 @@ def generate_launch_description() -> LaunchDescription:
     ]
 
     return LaunchDescription(args + [
-        OpaqueFunction(function=lambda ctx: [_make_tracker_node()]),
+        OpaqueFunction(function=lambda ctx: [_make_tracker_node(ctx)]),
         OpaqueFunction(
             function=lambda ctx: [_make_coord_transform_node()]
             if _ctx_coord_enabled(ctx) else []

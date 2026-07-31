@@ -101,18 +101,18 @@
     # ── Coordinate transform (coord_transform_node) ──────────────────────────
     coord_transform:
       enabled: false                         # true = also publish world-frame tracks
-      output_topic: "/target_track_transformed"  # not yet implemented — placeholder
+      output_topic: "/target_track_world"
       camera_info_topic: "/camera/camera_info"
       drone_pose_topic: "/drone_pose"
       input_topic: "/target_track"
       world_frame: "world"
       ground_altitude: 0.0                  # Z height of ground plane in world frame (m)
       max_pose_age_s: 0.5                   # max age of drone pose before skipping frame
+      # Zero offsets use the built-in nadir optical-to-body transform.
       camera_mount_roll: 0.0
       camera_mount_pitch: 0.0
       camera_mount_yaw: 0.0
-      # NOTE: homography-based IPM is not yet implemented in coord_transform_node.
-      # The node uses the ray-intersection approach with camera intrinsics + drone pose.
+      # The node uses ray-ground intersection with camera intrinsics + drone pose.
 
     # ── Diagnostics ───────────────────────────────────────────────────────
     metrics_period_ms: 1000

@@ -17,6 +17,7 @@ What the tests verify
 from __future__ import annotations
 
 import sys
+import threading
 import types
 from typing import Any, List
 from unittest import mock
@@ -84,6 +85,10 @@ def _install_node_stubs(node: types.SimpleNamespace) -> None:
     node._debug_pub = None
     node._metrics_recorder = None
     node._track_topic = "/target_track"
+    node._latest_track_lock = threading.Lock()
+    node._latest_records = []
+    node._latest_records_frame_idx = None
+    node._latest_records_header = None
 
 
 class FakeRecord:
@@ -201,6 +206,15 @@ def test_build_runner_overrides_returns_detector_and_tracker_keys():
     assert overrides["tracker"]["kind"] == "deepsort_cascade"
 
 
+def test_launch_parameter_coercion_keeps_false_and_list_values():
+    """Launch substitutions must not turn string ``false`` into True."""
+    tracker_module = perception_pkg.tracker_node
+    assert tracker_module._as_bool("false") is False
+    assert tracker_module._as_bool("true") is True
+    assert tracker_module._class_ids("[0, 2, 5]") == [0, 2, 5]
+    assert tracker_module._as_list("sensor_0, sensor_1") == ["sensor_0", "sensor_1"]
+
+
 # ---------------------------------------------------------------------------
 # 2. _make_target_track — field mapping from TrackedTarget → TargetTrack
 # ---------------------------------------------------------------------------
@@ -282,6 +296,15 @@ def test_make_target_track_defaults():
     assert len(msg.pred_x) == 5
     assert len(msg.pred_y) == 5
     assert len(msg.pred_conf) == 5
+
+
+def test_make_target_track_uses_runner_confirmation_field():
+    """TrackedTarget.confirmed must survive when tentative output is enabled."""
+    rec = FakeRecord(is_confirmed=True)
+    del rec.is_confirmed
+    rec.confirmed = False
+    msg = TrackerNode._make_target_track(None, rec)
+    assert msg.is_confirmed is False
 
 
 # ---------------------------------------------------------------------------

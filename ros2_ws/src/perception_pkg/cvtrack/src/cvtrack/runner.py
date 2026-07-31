@@ -53,6 +53,7 @@ the swarm's optimized configuration.
 
 from __future__ import annotations
 
+import ast
 import logging
 import math
 import time
@@ -84,6 +85,54 @@ _MIN_FRAME_DIM = 4  # Minimum frame dimension (h, w >= 4)
 ADAPTIVE_KINDS = frozenset({"botsort_adaptive", "deepsort_adaptive"})
 LEGACY_KINDS = frozenset({"botsort", "deepsort", "deepsort_cascade"})
 ALL_KINDS = LEGACY_KINDS | ADAPTIVE_KINDS
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """Coerce config values without treating the string ``"false"`` as true."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return default
+
+
+def _class_ids(value: Any) -> List[int]:
+    """Parse list-style class IDs from YAML, CLI, or ROS launch strings."""
+    if value is None:
+        return [0, 2, 5, 7, 16]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = [item.strip() for item in text.split(",") if item.strip()]
+        value = parsed
+    if not isinstance(value, (list, tuple, np.ndarray)):
+        value = [value]
+    result: List[int] = []
+    for class_id in value:
+        numeric = int(class_id)
+        if numeric < 0:
+            raise ValueError(f"detector class IDs must be non-negative, got {numeric}")
+        result.append(numeric)
+    return result
+
+
+def _positive_float(value: Any, default: float) -> float:
+    """Return a finite positive float or a stable default."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if math.isfinite(numeric) and numeric > 0.0 else default
 
 
 @dataclass
@@ -300,6 +349,8 @@ class CvtrackRunner:
                 base_std_meas=settings.base_std_meas if settings.base_std_meas is not None else 0.05,
                 motion_adapt_gain=settings.motion_adapt_gain if settings.motion_adapt_gain is not None else 0.3,
                 velocity_limit=settings.velocity_limit if settings.velocity_limit is not None else 100.0,
+                motion_threshold_slow=settings.motion_threshold_slow if settings.motion_threshold_slow is not None else 2.0,
+                motion_threshold_fast=settings.motion_threshold_fast if settings.motion_threshold_fast is not None else 20.0,
                 enable_prediction=settings.enable_prediction,
                 prediction_steps=settings.prediction_steps,
                 prediction_confidence_decay=settings.prediction_confidence_decay,
@@ -389,8 +440,11 @@ class CvtrackRunner:
             cfg = Config(raw={})
         merged = merge_cli(cfg.raw, overrides or {})
         settings = _settings_from_config(merged)
-        # If the user didn't pass an explicit dt, derive from fps.
-        if not overrides or "dt" not in overrides:
+        tracker_cfg = merged.get("tracker", {})
+        has_explicit_dt = isinstance(tracker_cfg, dict) and tracker_cfg.get("dt") is not None
+        # Derive from fps only when neither the preset nor the overrides
+        # supplied ``tracker.dt``.  ROS sends it as a nested override.
+        if not has_explicit_dt:
             settings.dt = 1.0 / max(float(fps), 1.0)
         return cls(settings)
 
@@ -753,16 +807,11 @@ def _settings_from_config(raw: Dict[str, Any]) -> RunnerSettings:
         kal = tr.get("deepsort_kalman", {}) or {}
     tp = raw.get("trajectory_prediction", {}) or {}
 
-    classes_raw = det.get("classes")
-    if isinstance(classes_raw, str):
-        classes = [int(c) for c in classes_raw.split(",") if c.strip()]
-    elif isinstance(classes_raw, list):
-        classes = [int(c) for c in classes_raw]
-    else:
-        classes = [0, 2, 5, 7, 16]
+    classes = _class_ids(det.get("classes"))
+    source_dt = 1.0 / max(_positive_float(raw.get("fps", 20.0), 20.0), 1.0)
 
-    use_app = bool(ap.get("enabled", False))
-    kind = str(tr.get("kind", "deepsort_cascade"))
+    use_app = _as_bool(ap.get("enabled", False))
+    kind = str(tr.get("kind", "deepsort_cascade")).strip().lower()
 
     return RunnerSettings(
         tracker_kind=kind,
@@ -775,18 +824,23 @@ def _settings_from_config(raw: Dict[str, Any]) -> RunnerSettings:
         min_box_area=float(det.get("min_box_area", 200.0)),
         min_conf=float(det.get("min_conf", 0.0)),
         nms_iou=float(det.get("nms_iou", 0.50)),
-        dt=1.0 / max(float(raw.get("fps", 20.0) or 20.0), 1.0),
+        dt=_positive_float(tr.get("dt"), source_dt),
         max_age=int(tr.get("max_age", 30)),
         n_init=int(tr.get("n_init", 3)),
         iou_thresh=float(tr.get("iou_thresh", 0.30)),
         high_conf=float(tr.get("high_conf", 0.35)),
         new_track_conf=float(tr.get("new_track_conf", 0.20)),
         lost_relink_frames=int(tr.get("lost_relink_frames", 30)),
-        stationary_prune=bool(tr.get("stationary_prune", True)),
+        stationary_prune=_as_bool(tr.get("stationary_prune", True), True),
         use_appearance=use_app,
         appearance_weights=(str(ap["weights"]) if ap.get("weights") else None),
         appearance_thresh=float(ap.get("match_threshold", tr.get("appearance_thresh", 0.5))),
-        include_tentative=bool(raw.get("pipeline", {}).get("include_tentative", False)),
+        include_tentative=_as_bool(
+            tr.get(
+                "include_tentative",
+                (raw.get("pipeline", {}) or {}).get("include_tentative", False),
+            )
+        ),
         # Adaptive tracker knobs (only effective for the *_adaptive kinds).
         kalman_dt=_opt_float(kal.get("dt")),
         sigma_p=_opt_float(kal.get("sigma_p")),
@@ -802,7 +856,7 @@ def _settings_from_config(raw: Dict[str, Any]) -> RunnerSettings:
         velocity_limit=_opt_float(kal.get("velocity_limit")),
         innovation_gate=_opt_float(kal.get("innovation_gate")),
         # Trajectory prediction knobs.
-        enable_prediction=bool(tp.get("enabled", True)),
+        enable_prediction=_as_bool(tp.get("enabled", True), True),
         prediction_steps=int(tp.get("prediction_steps", 10)),
         prediction_confidence_decay=float(tp.get("confidence_decay", 0.9)),
         min_prediction_confidence=float(tp.get("min_confidence", 0.1)),

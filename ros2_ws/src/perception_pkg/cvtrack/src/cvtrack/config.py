@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -71,7 +72,13 @@ class Config:
 
 
 def _configs_dir() -> str:
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "configs")
+    packaged_configs = Path(__file__).resolve().parent / 'configs'
+    if packaged_configs.is_dir():
+        return str(packaged_configs)
+    # Editable/source checkouts keep presets next to ``src/`` rather than
+    # inside the Python package.  Normal installs receive the copied data
+    # through the package build hook above.
+    return str(Path(__file__).resolve().parents[2] / 'configs')
 
 
 def _resolve_extends(value: str, configs_dir: str, _seen: Optional[set] = None) -> str:

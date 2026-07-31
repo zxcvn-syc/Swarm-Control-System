@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cvtrack.config import _deep_merge, _validate, load_config
+from cvtrack.runner import _settings_from_config
 
 
 def test_deep_merge_overrides_scalar():
@@ -80,3 +81,23 @@ def test_bundled_presets_load_clean():
     for name in ("default", "drone", "street", "multi_sensor"):
         cfg = load_config(name, configs_dir=_configs_dir())
         assert cfg.raw.get("tracker"), f"{name} must define a tracker section"
+
+
+def test_runner_settings_honor_nested_tracker_values():
+    """ROS-style nested overrides must keep dt and boolean settings intact."""
+    settings = _settings_from_config({
+        "detector": {"classes": "[0, 2, 5]"},
+        "tracker": {
+            "dt": 0.2,
+            "stationary_prune": "false",
+            "include_tentative": "true",
+        },
+        "appearance": {"enabled": "false"},
+        "trajectory_prediction": {"enabled": "false"},
+    })
+    assert settings.dt == pytest.approx(0.2)
+    assert settings.classes == [0, 2, 5]
+    assert settings.stationary_prune is False
+    assert settings.include_tentative is True
+    assert settings.use_appearance is False
+    assert settings.enable_prediction is False

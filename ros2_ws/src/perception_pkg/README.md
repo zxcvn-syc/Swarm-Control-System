@@ -64,6 +64,9 @@ ROS2 感知与跟踪模块：YOLOv8 目标检测 + DeepSORT / BoT-SORT 跟踪，
 ### 方式 1：统一 launch（推荐）
 
 ```bash
+# 安装 vendored cvtrack 依赖（首次使用）
+python3 -m pip install -e src/perception_pkg/cvtrack
+
 # 编译
 cd ros2_ws
 colcon build --packages-select swarm_interfaces perception_pkg --merge-install
@@ -75,15 +78,15 @@ ros2 launch perception_pkg perception.launch.py
 # 完整 YOLOv8 + DeepSORT（需 YOLO 权重）
 ros2 launch perception_pkg perception.launch.py \
     video_source:=videos/test_synthetic_multi_target.mp4 \
-    detector.backend:=yolo \
-    detector.weights:=/home/hhh/Downloads/cv_tracking_demo/weights/visdrone_yolov8s.pt \
-    tracker.kind:=deepsort_cascade
+    detector_backend:=yolo \
+    detector_weights:=/path/to/weights/visdrone_yolov8s.pt \
+    tracker_kind:=deepsort_cascade
 
 # 带世界坐标转换
 ros2 launch perception_pkg perception.launch.py \
     input_mode:=topic \
     image_topic:=/uav/camera/image \
-    coord_transform.enabled:=true \
+    coord_transform_enabled:=true \
     camera_info_topic:=/uav/camera/camera_info
 ```
 

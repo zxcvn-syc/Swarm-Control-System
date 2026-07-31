@@ -47,6 +47,32 @@ _BOTSORT_SIGMA_V = 0.00625
 _BOTSORT_SIGMA_M = 0.05
 
 
+def _solve_innovation(S: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Solve an innovation system without explicitly inverting ``S``."""
+    try:
+        return np.linalg.solve(S, rhs)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(S) @ rhs
+
+
+def _kalman_gain(cov: np.ndarray, H: np.ndarray, S: np.ndarray) -> np.ndarray:
+    """Return ``P H.T S^-1`` using a numerically stable linear solve."""
+    return _solve_innovation(S, H @ cov).T
+
+
+def _joseph_covariance(
+    cov: np.ndarray,
+    gain: np.ndarray,
+    H: np.ndarray,
+    measurement_noise: np.ndarray,
+) -> np.ndarray:
+    """Preserve covariance symmetry and positive semidefiniteness on update."""
+    identity = np.eye(cov.shape[0], dtype=np.float64)
+    residual = identity - gain @ H
+    updated = residual @ cov @ residual.T + gain @ measurement_noise @ gain.T
+    return 0.5 * (updated + updated.T)
+
+
 class KalmanCV2D:
     """Constant-velocity 2D Kalman filter (cx, cy, vx, vy)."""
 
@@ -102,10 +128,13 @@ class KalmanCV2D:
         self, mean: np.ndarray, cov: np.ndarray, z: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         z_pred = self.H @ mean
-        S = self.H @ cov @ self.H.T + self._R()
-        K = cov @ self.H.T @ np.linalg.inv(S)
+        measurement_noise = self._R()
+        S = self.H @ cov @ self.H.T + measurement_noise
+        K = _kalman_gain(cov, self.H, S)
         innov = z - z_pred
-        return mean + K @ innov, (np.eye(4) - K @ self.H) @ cov
+        return mean + K @ innov, _joseph_covariance(
+            cov, K, self.H, measurement_noise,
+        )
 
     def mahalanobis(
         self, mean: np.ndarray, cov: np.ndarray, z: np.ndarray
@@ -113,7 +142,7 @@ class KalmanCV2D:
         z_pred = self.H @ mean
         S = self.H @ cov @ self.H.T + self._R()
         d = z - z_pred
-        return float(d @ np.linalg.inv(S) @ d)
+        return float(d @ _solve_innovation(S, d))
 
 
 class KalmanBoT:
@@ -185,10 +214,13 @@ class KalmanBoT:
         self, mean: np.ndarray, cov: np.ndarray, z: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         z_pred = self.H @ mean
-        S = self.H @ cov @ self.H.T + self._r(mean)
-        K = cov @ self.H.T @ np.linalg.inv(S)
+        measurement_noise = self._r(mean)
+        S = self.H @ cov @ self.H.T + measurement_noise
+        K = _kalman_gain(cov, self.H, S)
         innov = z - z_pred
-        return mean + K @ innov, (np.eye(8) - K @ self.H) @ cov
+        return mean + K @ innov, _joseph_covariance(
+            cov, K, self.H, measurement_noise,
+        )
 
     def apply_affine(
         self, mean: np.ndarray, cov: np.ndarray, A: np.ndarray
@@ -379,11 +411,12 @@ class KalmanCV2DAdaptive:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Update with measurement, using adaptive noise based on confidence."""
         z_pred = self.H @ mean
-        S = self.H @ cov @ self.H.T + self._R(confidence)
-        K = cov @ self.H.T @ np.linalg.inv(S)
+        measurement_noise = self._R(confidence)
+        S = self.H @ cov @ self.H.T + measurement_noise
+        K = _kalman_gain(cov, self.H, S)
         innov = z - z_pred
         new_mean = mean + K @ innov
-        new_cov = (np.eye(4) - K @ self.H) @ cov
+        new_cov = _joseph_covariance(cov, K, self.H, measurement_noise)
 
         self._track_history.append((new_mean.copy(), new_cov.copy()))
         if len(self._track_history) > self._max_history:
@@ -397,7 +430,7 @@ class KalmanCV2DAdaptive:
         z_pred = self.H @ mean
         S = self.H @ cov @ self.H.T + self._R()
         d = z - z_pred
-        return float(d @ np.linalg.inv(S) @ d)
+        return float(d @ _solve_innovation(S, d))
 
     def is_innovation_anomaly(
         self, mean: np.ndarray, cov: np.ndarray, z: np.ndarray
@@ -591,10 +624,13 @@ class KalmanBoTAdaptive:
         self, mean: np.ndarray, cov: np.ndarray, z: np.ndarray
     ) -> Tuple[np.ndarray, np.ndarray]:
         z_pred = self.H @ mean
-        S = self.H @ cov @ self.H.T + self._r(mean)
-        K = cov @ self.H.T @ np.linalg.inv(S)
+        measurement_noise = self._r(mean)
+        S = self.H @ cov @ self.H.T + measurement_noise
+        K = _kalman_gain(cov, self.H, S)
         innov = z - z_pred
-        return mean + K @ innov, (np.eye(8) - K @ self.H) @ cov
+        return mean + K @ innov, _joseph_covariance(
+            cov, K, self.H, measurement_noise,
+        )
 
     def apply_affine(
         self, mean: np.ndarray, cov: np.ndarray, A: np.ndarray

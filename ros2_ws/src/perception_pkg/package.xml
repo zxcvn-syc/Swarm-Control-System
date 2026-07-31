@@ -21,10 +21,10 @@
   <depend>cv_bridge</depend>
   <depend>swarm_interfaces</depend>
 
-  <!-- The tracker_node imports cvtrack (cv_tracking_demo). The user must
-       install the package via `pip install -e ~/Downloads/cv_tracking_demo`
-       (or whatever path is configured) before launching this node. -->
-  <exec_depend>cvtrack</exec_depend>
+  <!-- cvtrack is vendored and installed with this ament_python package. -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

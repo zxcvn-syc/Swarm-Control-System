@@ -13,6 +13,7 @@ import importlib.machinery
 import importlib.util
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -139,7 +140,8 @@ def _install_rclpy_stubs() -> None:
 # Meta path finder
 # ---------------------------------------------------------------------------
 
-_SRC_ROOT = "/home/hhh/Downloads/Swarm-Control-System/ros2_ws/src/perception_pkg/perception_pkg"
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_SRC_ROOT = _PACKAGE_ROOT / 'perception_pkg'
 _STUBS_INSTALLED = False
 
 
@@ -159,8 +161,8 @@ class _PerceptionPkgFinder(importlib.abc.MetaPathFinder):
             return None
         sub = fullname[len("perception_pkg."):]
         src_map = {
-            "tracker_node": f"{_SRC_ROOT}/tracker_node.py",
-            "coord_transform_node": f"{_SRC_ROOT}/coord_transform_node.py",
+            "tracker_node": str(_SRC_ROOT / 'tracker_node.py'),
+            "coord_transform_node": str(_SRC_ROOT / 'coord_transform_node.py'),
         }
         if sub not in src_map:
             return None
@@ -206,6 +208,6 @@ def pytest_configure(config) -> None:
     # Make cvtrack importable from the vendored src/ directory.
     # Without this, test_yolo_inference_speed.py can't `from cvtrack.runner import ...`
     # because pytest runs from perception_pkg/ and cvtrack/src is not on sys.path.
-    _cvtrack_src = "/home/hhh/Downloads/Swarm-Control-System/ros2_ws/src/perception_pkg/cvtrack/src"
-    if _cvtrack_src not in sys.path:
-        sys.path.insert(0, _cvtrack_src)
+    cvtrack_src = str(_PACKAGE_ROOT / 'cvtrack' / 'src')
+    if cvtrack_src not in sys.path:
+        sys.path.insert(0, cvtrack_src)
