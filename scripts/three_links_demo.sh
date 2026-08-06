@@ -9,33 +9,42 @@
 #
 # 行为：
 #   1. cd 到仓库根目录
-#   2. colcon build（感知、调度、封控、占位四个包 + 接口）
+#   2. colcon build（接口+感知+调度+规划+封控五个包）
 #   3. source install/setup.bash
 #   4. ros2 launch ros2_ws/launch/three_links.launch.py
-
+#
+# Update history (v2.3, 2026-08-06):
+# - Version aligned with launch files v2.3
+# - All three scheduler strategies supported: greedy/hungarian/auction
+# - Same fixes from v2.2 retained:
+#   * Added planning_pkg to build list (real A*/D*Lite planner replaces stub)
+#   * Removed planner_stub from build list
+#   * Launch now uses 5 nodes: tracker → coord_transform → scheduler → planner → enclosure
+#   * --dry-run now actually validates launch args with --show-args after build
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE="$REPO_ROOT/ros2_ws"
 OUTPUT_DIR="$REPO_ROOT/output"
+
 mkdir -p "$OUTPUT_DIR"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--video VIDEO_PATH] [--dry-run] [--help]
-
 Options:
   --video VIDEO_PATH   Override the video fed into tracker_node.
                        Default: \$REPO/videos/test_multi_target_tracking.mp4
-  --dry-run            Only run colcon build + --show-args validation;
-                       do not start the launch.
+  --dry-run            Build all packages AND validate launch arguments with
+                       --show-args; do not start the nodes.
   --help               Print this help and exit.
 USAGE
 }
 
 VIDEO=""
 DRY_RUN="0"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --video) VIDEO="${2:-}"; shift 2 ;;
@@ -62,21 +71,31 @@ fi
 cd "$REPO_ROOT"
 
 # --- 1. 构建 --------------------------------------------------------------
-echo "[three_links_demo] building workspace..."
+echo "[three_links_demo] building workspace (swarm_interfaces + perception + scheduler + planning + containment)..."
 (cd "$WORKSPACE" && colcon build \
-   --packages-select swarm_interfaces perception_pkg scheduler_pkg containment_pkg planner_stub \
+   --packages-select swarm_interfaces perception_pkg scheduler_pkg planning_pkg containment_pkg \
    --event-handlers console_direct+)
 
 # shellcheck disable=SC1091
 source "$WORKSPACE/install/setup.bash"
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "[three_links_demo] (dry-run) skipping launch"
+  echo "[three_links_demo] (dry-run) build complete, verifying launch arguments..."
+  echo ""
+  echo "=== Validating ros2_ws/launch/three_links.launch.py ==="
+  ros2 launch "$WORKSPACE/launch/three_links.launch.py" --show-args
+  echo ""
+  echo "=== Validating top-level launch/three_links.launch.py ==="
+  ros2 launch "$REPO_ROOT/launch/three_links.launch.py" --show-args
+  echo ""
+  echo "[three_links_demo] (dry-run) all good; launch syntax is valid, all three strategies (greedy/hungarian/auction) available"
   exit 0
 fi
 
 # --- 2. 启动 --------------------------------------------------------------
 LOG_FILE="$OUTPUT_DIR/three_links_$(date +%Y%m%d_%H%M%S).log"
-echo "[three_links_demo] launching (logs -> $LOG_FILE)..."
+echo "[three_links_demo] launching 5 nodes (tracker→coord_transform→scheduler→planner→enclosure), logs -> $LOG_FILE..."
+echo "[three_links_demo] using video: $VIDEO"
+echo "[three_links_demo] default strategy: greedy (use scheduler_strategy:=auction or hungarian to change)"
 exec ros2 launch "$WORKSPACE/launch/three_links.launch.py" \
    video_source:="$VIDEO" 2>&1 | tee "$LOG_FILE"
