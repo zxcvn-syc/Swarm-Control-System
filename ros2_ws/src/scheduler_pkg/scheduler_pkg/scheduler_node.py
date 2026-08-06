@@ -1,4 +1,3 @@
-1803093340: 08-05 23:41:55
 #!/usr/bin/env python3
 from __future__ import annotations
 import time
@@ -62,11 +61,12 @@ def parse_drones(msg: DroneStateArray) -> Dict[int, Tuple[float, float]]:
         if bool(drone.available)
     }
 
-1803093340: 08-05 23:42:04
+
 class SchedulerNode(Node):
     def __init__(self) -> None:
         super().__init__("scheduler_node")
 
+        # --- parameters ---
         self.declare_parameter("num_drones", 8)
         self.declare_parameter("assignment_strategy", "greedy")
         self.declare_parameter("max_per_drone", 2)
@@ -87,12 +87,15 @@ class SchedulerNode(Node):
         self.output_topic = str(self.get_parameter("output_topic").value)
         self.default_task_type = str(self.get_parameter("default_task_type").value)
 
+        # --- state caches ---
         self._targets: Dict[int, Tuple[float, float, float]] = {}
         self._drones: Dict[int, Tuple[float, float]] = {}
 
+        # --- QoS ---
         qos = QoSProfile(depth=10)
         qos.reliability = QoSReliabilityPolicy.RELIABLE
 
+        # --- subscriptions ---
         self.sub_target = self.create_subscription(
             TargetTrackArray,
             self.target_topic,
@@ -106,7 +109,10 @@ class SchedulerNode(Node):
             qos
         )
 
+        # --- publisher ---
         self.pub_task = self.create_publisher(TaskAssignment, self.output_topic, 10)
+
+        # --- timer ---
         self.timer = self.create_timer(self.tick_period, self.tick)
 
         self._last_log_t: float = 0.0
@@ -153,112 +159,111 @@ class SchedulerNode(Node):
                 f"latency.ms={period * 1000:.0f}"
             )
 
-1803093340: 08-05 23:42:15
-def _run_greedy_assign(self, drone_ids, drone_xy, target_ids, target_xy, target_priorities):
-    return greedy_assign(
-        drone_xy,
-        target_xy,
-        target_priorities,
-        max_per_drone=self.max_per_drone,
-    )
-
-def _run_auction_assign(self, drone_ids, drone_xy, target_ids, target_xy, target_priorities):
-    tasks = []
-    for t_id, (x, y, priority) in self._targets.items():
-        task = Task(
-            tid=f"T{t_id:03d}",
-            pos=[x, y],
-            reward=50,
-            priority=int(priority * 5),
-            release_time=0,
-            deadline=60,
-            service_time=10
+    def _run_greedy_assign(self, drone_ids, drone_xy, target_ids, target_xy, target_priorities):
+        return greedy_assign(
+            drone_xy,
+            target_xy,
+            target_priorities,
+            max_per_drone=self.max_per_drone,
         )
-        tasks.append(task)
 
-    agents = []
-    for d_id, (x, y) in self._drones.items():
-        agent = Agent(
-            aid=f"UAV{d_id}",
-            category="UAV",
-            pos=[x, y],
-            battery=100,
-            max_load=self.max_per_drone,
-            unit_cost=1.0,
-            speed=2.0
-        )
-        agents.append(agent)
-
-    engine = AuctionEngine(agents, tasks)
-    result = engine.bid_allocation()
-
-    pairs = []
-    for task_id, agent_id in result.items():
-        target_id = int(task_id[1:])
-        drone_id = int(agent_id[3:])
-        if target_id in target_ids and drone_id in drone_ids:
-            d_idx = drone_ids.index(drone_id)
-            t_idx = target_ids.index(target_id)
-            pairs.append((d_idx, t_idx))
-
-    return pairs
-
-def tick(self) -> None:
-    now = time.monotonic()
-    period = max(self.tick_period, 1e-3)
-    self._last_tick_wallclock = now
-
-    if not self._targets:
-        if not self._empty_target_logged:
-            self.get_logger().info("scheduler_node: no targets received yet, waiting...")
-            self._empty_target_logged = True
-        self._maybe_log_summary(now, 0, period)
-        return
-
-    self._empty_target_logged = False
-
-    if not self._drones:
-        self._seed_default_drones()
-
-    drone_ids = sorted(self._drones.keys())[:self.num_drones]
-    drone_xy = np.array([self._drones[d] for d in drone_ids], dtype=float)
-    target_ids = sorted(self._targets.keys())
-    target_xy = np.array([self._targets[t][:2] for t in target_ids], dtype=float)
-    target_priorities = np.array([self._targets[t][2] for t in target_ids], dtype=float)
-
-    if self.strategy == "auction":
-        try:
-            pairs = self._run_auction_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
-        except Exception as e:
-            self.get_logger().warn(f"auction_assign failed ({e}); falling back to greedy.")
-            pairs = self._run_greedy_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
-    elif self.strategy == "hungarian":
-        try:
-            from .assign import hungarian_assign
-            pairs = hungarian_assign(
-                drone_xy,
-                target_xy,
-                target_priorities,
-                max_per_drone=self.max_per_drone,
+    def _run_auction_assign(self, drone_ids, drone_xy, target_ids, target_xy, target_priorities):
+        tasks = []
+        for t_id, (x, y, priority) in self._targets.items():
+            task = Task(
+                tid=f"T{t_id:03d}",
+                pos=[x, y],
+                reward=50,
+                priority=int(priority * 5),
+                release_time=0,
+                deadline=60,
+                service_time=10
             )
-        except RuntimeError as e:
-            self.get_logger().warn(f"hungarian_assign failed ({e}); falling back to greedy.")
+            tasks.append(task)
+
+        agents = []
+        for d_id, (x, y) in self._drones.items():
+            agent = Agent(
+                aid=f"UAV{d_id}",
+                category="UAV",
+                pos=[x, y],
+                battery=100,
+                max_load=self.max_per_drone,
+                unit_cost=1.0,
+                speed=2.0
+            )
+            agents.append(agent)
+
+        engine = AuctionEngine(agents, tasks)
+        result = engine.bid_allocation()
+
+        pairs = []
+        for task_id, agent_id in result.items():
+            target_id = int(task_id[1:])
+            drone_id = int(agent_id[3:])
+            if target_id in target_ids and drone_id in drone_ids:
+                d_idx = drone_ids.index(drone_id)
+                t_idx = target_ids.index(target_id)
+                pairs.append((d_idx, t_idx))
+
+        return pairs
+
+    def tick(self) -> None:
+        now = time.monotonic()
+        period = max(self.tick_period, 1e-3)
+        self._last_tick_wallclock = now
+
+        if not self._targets:
+            if not self._empty_target_logged:
+                self.get_logger().info("scheduler_node: no targets received yet, waiting...")
+                self._empty_target_logged = True
+            self._maybe_log_summary(now, 0, period)
+            return
+
+        self._empty_target_logged = False
+
+        if not self._drones:
+            self._seed_default_drones()
+
+        drone_ids = sorted(self._drones.keys())[:self.num_drones]
+        drone_xy = np.array([self._drones[d] for d in drone_ids], dtype=float)
+        target_ids = sorted(self._targets.keys())
+        target_xy = np.array([self._targets[t][:2] for t in target_ids], dtype=float)
+        target_priorities = np.array([self._targets[t][2] for t in target_ids], dtype=float)
+
+        if self.strategy == "auction":
+            try:
+                pairs = self._run_auction_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
+            except Exception as e:
+                self.get_logger().warn(f"auction_assign failed ({e}); falling back to greedy.")
+                pairs = self._run_greedy_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
+        elif self.strategy == "hungarian":
+            try:
+                from .assign import hungarian_assign
+                pairs = hungarian_assign(
+                    drone_xy,
+                    target_xy,
+                    target_priorities,
+                    max_per_drone=self.max_per_drone,
+                )
+            except RuntimeError as e:
+                self.get_logger().warn(f"hungarian_assign failed ({e}); falling back to greedy.")
+                pairs = self._run_greedy_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
+        else:
             pairs = self._run_greedy_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
-    else:
-        pairs = self._run_greedy_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)
 
-    task_type = self.default_task_type
-    for d_idx, t_idx in pairs:
-        msg = TaskAssignment()
-        msg.drone_id = uint32(drone_ids[d_idx])
-        msg.target_id = uint32(target_ids[t_idx])
-        msg.task_type = task_type
-        self.pub_task.publish(msg)
+        task_type = self.default_task_type
+        for d_idx, t_idx in pairs:
+            msg = TaskAssignment()
+            msg.drone_id = uint32(drone_ids[d_idx])
+            msg.target_id = uint32(target_ids[t_idx])
+            msg.task_type = task_type
+            self.pub_task.publish(msg)
 
-    self._last_assign_count = len(pairs)
-    self._maybe_log_summary(now, len(pairs), period)
+        self._last_assign_count = len(pairs)
+        self._maybe_log_summary(now, len(pairs), period)
 
-1803093340: 08-05 23:42:22
+
 def main(args: Optional[List[str]] = None) -> None:
     if not _HAS_ROS:
         print("ERROR: rclpy not available. Please source ROS2 setup.bash first.")
