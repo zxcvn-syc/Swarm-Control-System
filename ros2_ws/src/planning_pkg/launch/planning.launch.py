@@ -78,4 +78,13 @@ from launch_ros.actions import Node
         ],
     )
 
-    return LaunchDescription(args + [node])
+    ugv_node = Node(
+        package="planning_pkg",
+        executable="ugv_state_pub",
+        name="ugv_state_publisher",
+        namespace=LaunchConfiguration("namespace"),
+        output="screen",
+        parameters=[{"num_ugv": 2}],
+    )
+
+    return LaunchDescription(args + [node, ugv_node])

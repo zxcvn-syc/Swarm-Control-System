@@ -7,3 +7,5 @@ float64 vx
 float64 vy
 float64 vz
 bool available
+# Platform classification: 0 = aerial UAV, 1 = ground UGV.
+uint8 platform_type

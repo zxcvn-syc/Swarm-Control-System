@@ -88,12 +88,18 @@ def astar(
     goal: Tuple[int, int],
     diagonal: bool = True,
     return_stats: bool = False,
+    platform_type: int = 0,
+    min_turn_radius: float = 1.0,
 ):
-    """Run A* on ``grid`` from ``start`` to ``goal``.
-    
-    If `return_stats` is True, returns: (path, expanded_nodes, total_grid_cost)
-    Otherwise, strictly returns `path` (List of Tuples) to maintain legacy ROS 2 compatibility.
+    """Run A* with platform-specific motion constraints.
+
+    UAVs retain 8-connected motion. UGVs are constrained to the ground-plane
+    4-connected lattice; ``min_turn_radius`` rejects immediate reversals and
+    adds a turn penalty so differential-drive vehicles do not zig-zag.
     """
+    if int(platform_type) == 1:
+        diagonal = False
+        min_turn_radius = max(float(min_turn_radius), 1.0)
     grid = np.asarray(grid)
     if grid.ndim != 2 or grid.shape[0] == 0 or grid.shape[1] == 0:
         raise ValueError(f"grid must be a non-empty 2D array, got shape {grid.shape}")
@@ -151,9 +157,18 @@ def astar(
             if not _is_passable(grid, nx, ny):
                 continue
             neighbour = (nx, ny)
+            if int(platform_type) == 1 and current in came_from:
+                previous = came_from[current]
+                incoming = (current[0] - previous[0], current[1] - previous[1])
+                outgoing = (nx - current[0], ny - current[1])
+                if outgoing == (-incoming[0], -incoming[1]):
+                    continue
+                turn_penalty = float(min_turn_radius) if outgoing != incoming else 0.0
+            else:
+                turn_penalty = 0.0
             if neighbour in closed:
                 continue
-            tentative_g = cur_g + step
+            tentative_g = cur_g + step + turn_penalty
             if tentative_g < g_score.get(neighbour, float("inf")):
                 came_from[neighbour] = current
                 g_score[neighbour] = tentative_g

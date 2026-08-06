@@ -93,6 +93,7 @@ class PlannerNode(Node):
         self.declare_parameter("log_interval_sec", 5.0)
         self.declare_parameter("publish_path", True)
         self.declare_parameter("sim_tick_speed", 1.0)       # cells per tick
+        self.declare_parameter("ugv_min_turn_radius", 1.0)
 
         # Topics
         self.declare_parameter("task_topic", "/task_assignment")
@@ -118,6 +119,9 @@ class PlannerNode(Node):
         self.publish_path: bool = bool(self.get_parameter("publish_path").value)
         self.sim_tick_speed: float = max(
             float(self.get_parameter("sim_tick_speed").value), 0.0
+        )
+        self.ugv_min_turn_radius: float = max(
+            float(self.get_parameter("ugv_min_turn_radius").value), 1.0
         )
 
         self.task_topic: str = str(self.get_parameter("task_topic").value)
@@ -164,6 +168,7 @@ class PlannerNode(Node):
                 self._drone_xy[did] = self._default_initial_position(i)
 
         self._drone_target: Dict[int, Tuple[int, int]] = {}
+        self._platform_type: Dict[int, int] = {did: 0 for did in self._drone_order}
         explicit_targets = list(
             self.get_parameter("explicit_target_cells").value or []
         )
@@ -355,7 +360,14 @@ class PlannerNode(Node):
                 self._dstar[did] = planner
                 self._drone_path[did] = path
             else:
-                path = _astar(self._grid, (gx, gy), (tx, ty), diagonal=True)
+                path = _astar(
+                    self._grid,
+                    (gx, gy),
+                    (tx, ty),
+                    diagonal=self._platform_type.get(did, 0) == 0,
+                    platform_type=self._platform_type.get(did, 0),
+                    min_turn_radius=self.ugv_min_turn_radius,
+                )
                 self._drone_path[did] = path
         duration_ms = (time.monotonic() - plan_start) * 1000.0
 
@@ -528,6 +540,7 @@ class PlannerNode(Node):
         for d in msg.drones:
             did = int(d.drone_id)
             self._ensure_drone(did)
+            self._platform_type[did] = int(getattr(d, "platform_type", 0))
             self._drone_xy[did] = (float(d.x), float(d.y))
             if did not in self._drone_path or not self._drone_path[did]:
                 # No path yet; one will be planned the next task arrives.
@@ -626,6 +639,7 @@ class PlannerNode(Node):
                 ds.vy = 0.0
                 ds.vz = 0.0
             ds.available = True
+            ds.platform_type = int(self._platform_type.get(did, 0))
             msg.drones.append(ds)
 
         self.pub_states.publish(msg)

@@ -196,10 +196,39 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    # ---------- UGV platform (P2 ground layer) -----------------------------
+    ugv_state_pub = Node(
+        package="planning_pkg",
+        executable="ugv_state_pub",
+        name="ugv_state_publisher",
+        output="screen",
+        parameters=[{"num_ugv": 2}],
+    )
+
+    # ---------- PX4 SITL bridges (P3) -------------------------------------
+    px4_offboard_bridge = Node(
+        package="planning_pkg",
+        executable="px4_offboard_bridge",
+        name="px4_offboard_bridge",
+        output="screen",
+        parameters=[{}],
+    )
+
+    sitl_pose_bridge = Node(
+        package="planning_pkg",
+        executable="sitl_pose_bridge",
+        name="sitl_pose_bridge",
+        output="screen",
+        parameters=[{"platform_type": 0}],
+    )
+
     return LaunchDescription(args + [
         tracker_node,
         coord_transform_node,
         scheduler_node,
         planner_node,
         enclosure_node,
+        ugv_state_pub,
+        px4_offboard_bridge,
+        sitl_pose_bridge,
     ])
