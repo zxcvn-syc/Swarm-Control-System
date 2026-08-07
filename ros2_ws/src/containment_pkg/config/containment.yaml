@@ -1,5 +1,7 @@
 enclosure_node:
   ros__parameters:
     enclosure_radius: 25.0
+    ugv_enclosure_radius: 12.0
     min_dist: 5.0
     update_period: 1.0
+    target_track_topic: /target_track_world
