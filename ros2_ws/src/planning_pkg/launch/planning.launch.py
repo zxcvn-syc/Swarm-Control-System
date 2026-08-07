@@ -14,6 +14,11 @@ Typical invocations::
     # With PX4 SITL (Gazebo + PX4 + MAVROS + bridges) wired in:
     PX4_SITL_ROOT=$HOME/src/PX4-Autopilot \\
         ros2 launch planning_pkg planning.launch.py include_sitl:=true
+
+    # P1-B: load the simulation grid (map / start / goal / planner)
+    # from a YAML file rather than relying only on inline overrides.
+    ros2 launch planning_pkg planning.launch.py \\
+        grid_config:=/abs/path/to/grid_config.yaml
 """
 
 from __future__ import annotations
@@ -34,6 +39,15 @@ def generate_launch_description() -> LaunchDescription:
             "config",
             default_value="",
             description="Optional path to a planning.yaml override file.",
+        ),
+        DeclareLaunchArgument(
+            "grid_config",
+            default_value=_default_grid_config_path(),
+            description=(
+                "Path to the simulation grid YAML (map.width/height/resolution, "
+                "start, goal, planner.connectivity/heuristic). Resolved relative "
+                "to this launch file when AMENT_PREFIX_PATH has not been set."
+            ),
         ),
         DeclareLaunchArgument(
             "namespace",
@@ -95,8 +109,13 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             inline_overrides,
-            # Optional YAML override.
+            # Optional YAML override (legacy, higher priority than grid_config).
             LaunchConfiguration("config"),
+            # P1-B: load the simulation grid YAML (map / start / goal /
+            # planner).  When ``grid_config`` is the empty string ROS2
+            # treats it as "no YAML" and the inline overrides remain
+            # the sole source of parameters.
+            LaunchConfiguration("grid_config"),
         ],
     )
 
@@ -161,6 +180,44 @@ def generate_launch_description() -> LaunchDescription:
         actions.append(sitl_include)
 
     return LaunchDescription(actions)
+
+
+def _default_grid_config_path() -> str:
+    """Resolve the default ``grid_config`` path (P1-B).
+
+    Layout assumption (matches the current repo)::
+
+        <repo_root>/
+            simulation/maps/grid_config.yaml
+            ros2_ws/src/planning_pkg/launch/planning.launch.py
+
+    We prefer ``AMENT_PREFIX_PATH`` (post ``colcon build``) so the YAML
+    can be copied into the package share, but fall back to a
+    repo-relative path (via ``__file__``) so the launch still works
+    on a fresh checkout.  Both branches use ``os.path.join`` so the
+    lookup is portable across ``catkin_pkg`` / ``ament_index`` /
+    ``ros2 pkg`` discovery mechanisms.
+    """
+    # 1) Post-build: <prefix>/share/planning_pkg/grid_config.yaml
+    prefix_path = os.environ.get("AMENT_PREFIX_PATH", "")
+    for prefix in prefix_path.split(":"):
+        candidate = os.path.join(
+            prefix, "share", "planning_pkg", "grid_config.yaml"
+        )
+        if os.path.exists(candidate):
+            return candidate
+
+    # 2) Repo-relative fallback: simulation/maps/grid_config.yaml
+    #    planning.launch.py lives at
+    #    <repo>/ros2_ws/src/planning_pkg/launch/planning.launch.py
+    #    so 4 ".." levels up gets us to the repo root.
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(
+        os.path.join(here, "..", "..", "..", "..")
+    )
+    return os.path.join(
+        repo_root, "simulation", "maps", "grid_config.yaml"
+    )
 
 
 def _sitl_launch_available() -> bool:
