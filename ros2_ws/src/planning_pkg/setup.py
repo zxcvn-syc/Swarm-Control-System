@@ -10,7 +10,14 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/config", ["config/planning.yaml"]),
-        ("share/" + package_name + "/launch", ["launch/planning.launch.py"]),
+        (
+            "share/" + package_name + "/launch",
+            [
+                "launch/planning.launch.py",
+                "launch/px4_sitl.launch.py",
+                "launch/sitl_test.launch.py",
+            ],
+        ),
     ],
     zip_safe=True,
     maintainer="Swarm Control System Team",

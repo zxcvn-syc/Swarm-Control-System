@@ -1,0 +1,257 @@
+<?xml version="1.0" ?>
+<!--
+  swarm_field.world — open-field Gazebo world for PX4 SITL swarm tests.
+
+  Scope:
+    * 50m x 50m flat ground at z=0 with a subtle grid texture so vision
+      estimators can lock onto the surface.
+    * A handful of low obstacles (boxes / pillars) arranged on the
+      periphery of the swarm test area so the planner has something to
+      route around without blocking the central corridor.
+    * Origin at (0, 0, 0); ENU x=east, y=north, z=up.
+    * "world" frame matches the convention used by planning_pkg.
+
+  Compatible with:
+    * PX4-Autopilot (gazebo-classic) gz_iris vehicle.
+    * Gazebo Garden (gz) via the gz_bridge if used with gz_sim — the
+      SDF here is plain Gazebo Classic / Garden compatible.
+
+  Load with (replace /path/to/Firmware with your firmware path):
+
+      PX4_SITL_ROOT=/path/to/Firmware
+      gazebo -v simulation/worlds/swarm_field.world
+
+  Or with PX4 SITL directly via PX4_SITL_WORLD (see run_px4_sitl.sh).
+-->
+<sdf version="1.6">
+  <world name="swarm_field">
+    <!-- Coordinate convention: ENU (x=east, y=north, z=up) -->
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>5.5648e-6 2.0878e-5 -4.0243e-5</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <physics type="ode">
+      <real_time_update_rate>1000</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Scene defaults -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1.0</ambient>
+      <background>0.6 0.7 0.8 1.0</background>
+      <shadows>true</shadows>
+      <grid>false</grid>
+    </scene>
+
+    <!-- Ground plane (50m x 50m, centered at origin) -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="ground_link">
+        <collision name="ground_collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="ground_visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.3 0.5 0.3 1.0</ambient>
+            <diffuse>0.3 0.5 0.3 1.0</diffuse>
+            <specular>0.1 0.1 0.1 1.0</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Grid marker: thin lines every 5m so the camera/operator can
+         visually estimate positions.  Implemented as a single textured
+         ground plane (kept simple to avoid plugin dependencies). -->
+    <model name="grid_marker">
+      <static>true</static>
+      <pose>0 0 0.005 0 0 0</pose>
+      <link name="grid_link">
+        <visual name="grid_visual">
+          <geometry>
+            <box>
+              <size>50 50 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Grid</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacles: four low pillars + a central wall segment.
+         These are deliberately on the periphery so the swarm test
+         corridor (the central 30m square) stays clear. -->
+    <model name="pillar_nw">
+      <static>true</static>
+      <pose>-12 12 1.0 0 0 0</pose>
+      <link name="pillar_link">
+        <visual name="pillar_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.6 0.4 0.2 1.0</ambient>
+            <diffuse>0.6 0.4 0.2 1.0</diffuse>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <model name="pillar_ne">
+      <static>true</static>
+      <pose>12 12 1.0 0 0 0</pose>
+      <link name="pillar_link">
+        <visual name="pillar_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.6 0.4 0.2 1.0</ambient>
+            <diffuse>0.6 0.4 0.2 1.0</diffuse>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <model name="pillar_sw">
+      <static>true</static>
+      <pose>-12 -12 1.0 0 0 0</pose>
+      <link name="pillar_link">
+        <visual name="pillar_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.6 0.4 0.2 1.0</ambient>
+            <diffuse>0.6 0.4 0.2 1.0</diffuse>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <model name="pillar_se">
+      <static>true</static>
+      <pose>12 -12 1.0 0 0 0</pose>
+      <link name="pillar_link">
+        <visual name="pillar_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.6 0.4 0.2 1.0</ambient>
+            <diffuse>0.6 0.4 0.2 1.0</diffuse>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <geometry>
+            <cylinder>
+              <radius>0.5</radius>
+              <length>2.0</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Low wall at the south edge of the test area -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -20 0.5 0 0 0</pose>
+      <link name="wall_link">
+        <visual name="wall_visual">
+          <geometry>
+            <box>
+              <size>10 0.4 1.0</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.4 0.6 1.0</ambient>
+            <diffuse>0.4 0.4 0.6 1.0</diffuse>
+          </material>
+        </visual>
+        <collision name="wall_collision">
+          <geometry>
+            <box>
+              <size>10 0.4 1.0</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Sun + ambient light -->
+    <light name="sun" type="directional">
+      <pose>0 0 30 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1.0</diffuse>
+      <specular>0.2 0.2 0.2 1.0</specular>
+      <direction>0.1 0.1 -1.0</direction>
+      <cast_shadows>true</cast_shadows>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+    </light>
+  </world>
+</sdf>

@@ -7,22 +7,28 @@ DeclareLaunchArgument + Node with a YAML config overlay).
 Typical invocations::
 
     ros2 launch planning_pkg planning.launch.py                       # default YAML
-    ros2 launch planning_pkg planning.launch.py \
+    ros2 launch planning_pkg planning.launch.py \\
         planner:=dstar_lite grid_size:=120 num_drones:=12
     ros2 launch planning_pkg planning.launch.py config:=/abs/override.yaml
+
+    # With PX4 SITL (Gazebo + PX4 + MAVROS + bridges) wired in:
+    PX4_SITL_ROOT=$HOME/src/PX4-Autopilot \\
+        ros2 launch planning_pkg planning.launch.py include_sitl:=true
 """
 
 from __future__ import annotations
 
+import os
 from typing import List
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-    def generate_launch_description() -> LaunchDescription:
+def generate_launch_description() -> LaunchDescription:
     args: List[DeclareLaunchArgument] = [
         DeclareLaunchArgument(
             "config",
@@ -56,6 +62,22 @@ from launch_ros.actions import Node
             default_value="0.5",
             description="Seconds between planner ticks.",
         ),
+        DeclareLaunchArgument(
+            "include_sitl",
+            default_value="false",
+            choices=["true", "false"],
+            description="If true, also launch px4_sitl.launch.py (Gazebo + PX4 + MAVROS + bridges).",
+        ),
+        DeclareLaunchArgument(
+            "sitl_num_uav",
+            default_value=LaunchConfiguration("num_drones"),
+            description="Number of PX4 SITL instances to launch when include_sitl is true (capped 1..3).",
+        ),
+        DeclareLaunchArgument(
+            "sitl_headless",
+            default_value="false",
+            description="Run SITL Gazebo headless (used when include_sitl is true).",
+        ),
     ]
 
     inline_overrides = {
@@ -87,4 +109,97 @@ from launch_ros.actions import Node
         parameters=[{"num_ugv": 2}],
     )
 
-    return LaunchDescription(args + [node, ugv_node])
+    # PX4 SITL bridge nodes are launched here unconditionally so the
+    # ``/planned_path`` -> ``/mavros/setpoint_raw/local`` plumbing and
+    # the ``/mavros/mocap/pose`` -> ``/drone_pose_external`` path are
+    # always wired up.  When ``include_sitl:=false`` we still start the
+    # bridges so they can be tested with a fake MAVROS / mocap feed;
+    # they no-op when no messages arrive (see ``px4_offboard_bridge``).
+    px4_offboard_bridge_node = Node(
+        package="planning_pkg",
+        executable="px4_offboard_bridge",
+        name="px4_offboard_bridge",
+        namespace=LaunchConfiguration("namespace"),
+        output="screen",
+        parameters=[{}],
+    )
+
+    sitl_pose_bridge_node = Node(
+        package="planning_pkg",
+        executable="sitl_pose_bridge",
+        name="sitl_pose_bridge",
+        namespace=LaunchConfiguration("namespace"),
+        output="screen",
+        parameters=[{"platform_type": 1}],
+    )
+
+    actions: List[object] = args + [
+        node,
+        ugv_node,
+        px4_offboard_bridge_node,
+        sitl_pose_bridge_node,
+    ]
+
+    # Conditionally include the SITL launch (Gazebo + PX4 + MAVROS).
+    # We do this via IncludeLaunchDescription so the SITL group has its
+    # own PX4 process tree and lifecycle that can be torn down without
+    # killing the planner.
+    if _sitl_launch_available():
+        sitl_include = IncludeLaunchDescription(
+            # Use the package share path so the include works regardless
+            # of the caller's working directory.  We resolve at runtime
+            # via a shell command because we cannot import the package
+            # here without coupling the launch to colcon_build order.
+            launch_description_source=_get_sitl_launch_source(),
+            launch_arguments=[
+                ("num_uav", LaunchConfiguration("sitl_num_uav")),
+                ("headless", LaunchConfiguration("sitl_headless")),
+                ("namespace", LaunchConfiguration("namespace")),
+            ],
+            condition=IfCondition(LaunchConfiguration("include_sitl")),
+        )
+        actions.append(sitl_include)
+
+    return LaunchDescription(actions)
+
+
+def _sitl_launch_available() -> bool:
+    """Check whether ``px4_sitl.launch.py`` is in the package share.
+
+    The check is purely a hint for the no-SITL fallback.  When the
+    package hasn't been built yet (e.g. running ``colcon build`` on a
+    fresh checkout) we silently skip the include; once ``colcon build
+    --packages-select planning_pkg`` runs, the share directory is
+    populated and the include becomes active.
+    """
+    # AMENT_PREFIX_PATH is set by setup.bash after a successful build.
+    prefix_path = os.environ.get("AMENT_PREFIX_PATH", "")
+    for prefix in prefix_path.split(":"):
+        candidate = os.path.join(prefix, "share", "planning_pkg", "launch", "px4_sitl.launch.py")
+        if os.path.exists(candidate):
+            return True
+    return False
+
+
+def _get_sitl_launch_source():
+    """Return the package-relative launch description source for SITL."""
+    # Prefer a package-relative path (works after `colcon build`); fall
+    # back to a direct file path for `ros2 launch <file>` users.
+    from launch.launch_description_sources import (
+        PythonLaunchDescriptionSource,
+    )
+
+    prefix_path = os.environ.get("AMENT_PREFIX_PATH", "")
+    for prefix in prefix_path.split(":"):
+        candidate = os.path.join(prefix, "share", "planning_pkg", "launch", "px4_sitl.launch.py")
+        if os.path.exists(candidate):
+            return PythonLaunchDescriptionSource(candidate)
+
+    # Fallback: assume the repo layout (works for `ros2 launch` from
+    # the workspace root even before colcon install).
+    return PythonLaunchDescriptionSource(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "px4_sitl.launch.py",
+        )
+    )
