@@ -37,6 +37,12 @@ groups:
   CPU pipelines).
 * ``frame_id`` -- the ``header.frame_id`` stamped on outgoing messages
   (typically the UAV body frame the camera is rigidly mounted to).
+* ``drone_states_topic`` -- the ``swarm_interfaces/DroneStateArray``
+  topic subscribed for closed-loop time synchronization (default
+  ``/drone_states``).  When a message arrives the cached
+  ``header.stamp`` overrides the outgoing ``TargetTrackArray``
+  timestamp so the downstream ``enclosure_node`` can reason about
+  UAV/perception freshness without clock-skew assumptions.
 
 Notes
 -----
@@ -108,6 +114,7 @@ from std_msgs.msg import Header
 from swarm_interfaces.msg import TargetTrack, TargetTrackArray
 from swarm_interfaces.msg import EnclosureTarget, EnclosureTargetArray
 from swarm_interfaces.msg import TargetTrackDebug
+from swarm_interfaces.msg import DroneStateArray
 
 import diagnostic_msgs.msg as diag_msgs
 
@@ -381,6 +388,16 @@ def _declare_parameters(node: Node) -> None:
     # Debug / diagnostics topics
     node.declare_parameter('enable_debug_topics', True)
     node.declare_parameter('metrics_period_ms', 1000)
+
+    # UAV state synchronization (P1-C)
+    #
+    # Subscribing to /drone_states lets tracker_node align the
+    # ``header.stamp`` on outgoing ``TargetTrackArray`` with the latest
+    # UAV state timestamp, which enclosure_node uses to gate the
+    # closed-loop control.  The topic name is exposed as a parameter so
+    # a launch file or YAML config can repoint it (e.g. when running in
+    # simulation with a different UAV namespace).
+    node.declare_parameter('drone_states_topic', '/drone_states')
 
 
 def _build_runner_overrides(node: Node) -> dict:
@@ -805,6 +822,36 @@ class TrackerNode(Node):
                 )
             self.get_logger().info(f'Enclosure publisher enabled on {enclosure_topic}')
 
+        # --- UAV state synchronization -------------------------------------
+        # Subscribe to /drone_states so we can stamp the outgoing
+        # TargetTrackArray header with the same time the UAV state was
+        # produced.  enclosure_node consumes this stamp to decide whether
+        # the perception output is fresh enough for the closed-loop
+        # control.  The subscription is always created (even when fusion
+        # is active) because the stamp override is just as valuable when
+        # we are republishing fused tracks.
+        self._drone_states_topic = self.get_parameter('drone_states_topic').value
+        # Lock guards the _latest_drone_state dict so the publish tick
+        # and the subscription callback do not race on swap-out.  The
+        # state itself is small (one DroneState per UAV, typically < 8)
+        # so copying it on each read is cheap.
+        self._drone_state_lock = threading.Lock()
+        self._latest_drone_state: dict[int, dict[str, Any]] = {}
+        # Cache the most recent DroneStateArray header so _publish_tick
+        # can stamp outgoing messages even when the drones[] vector is
+        # empty (e.g. during pre-takeoff) — the timestamp still tells
+        # the enclosure_node when the swarm last published state.
+        self._latest_drone_state_header: Optional[Header] = None
+        self._drone_state_sub = self.create_subscription(
+            DroneStateArray,
+            self._drone_states_topic,
+            self._on_drone_state,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
+        )
+        self.get_logger().info(
+            f'UAV state subscription enabled on {self._drone_states_topic}'
+        )
+
         # Input wiring -----------------------------------------------------
         self._video_cap = None
         self._cv_bridge = CvBridge() if _HAS_CV_BRIDGE else None
@@ -939,6 +986,62 @@ class TrackerNode(Node):
         return frame, src_header
 
     # ------------------------------------------------------------------
+    # UAV state synchronization
+    # ------------------------------------------------------------------
+    def _on_drone_state(self, msg: DroneStateArray) -> None:
+        """Cache the latest UAV states so ``_publish_tick`` can stamp messages.
+
+        ``enclosure_node`` requires ``TargetTrackArray.header.stamp`` to
+        align with the UAV state timestamp so the closed-loop can reject
+        stale perception output.  We snapshot every drone into a
+        ``{drone_id: state_dict}`` dictionary keyed by ``drone_id`` so
+        callers can also query individual UAV positions without scanning
+        the message repeatedly.
+
+        The dictionary form (instead of stashing the raw ROS message)
+        keeps the cache independent of ``swarm_interfaces`` at the point
+        of use and lets unit tests inject a precomputed cache without
+        needing to construct a full ``DroneStateArray``.
+        """
+        snapshot: dict[int, dict[str, Any]] = {}
+        for state in getattr(msg, 'drones', []) or []:
+            snapshot[int(state.drone_id)] = {
+                'drone_id': int(state.drone_id),
+                'x': float(state.x),
+                'y': float(state.y),
+                'z': float(state.z),
+                'vx': float(state.vx),
+                'vy': float(state.vy),
+                'vz': float(state.vz),
+                'available': bool(state.available),
+                'platform_type': int(state.platform_type),
+                'stamp': _copy_header(getattr(msg, 'header', None)).stamp,
+            }
+        with self._drone_state_lock:
+            self._latest_drone_state = snapshot
+            header = getattr(msg, 'header', None)
+            self._latest_drone_state_header = (
+                _copy_header(header) if header is not None else None
+            )
+
+    def _drone_state_snapshot(self) -> tuple[
+        dict[int, dict[str, Any]], Optional[Header]
+    ]:
+        """Return ``(drone_state_dict, drone_state_header)`` atomically.
+
+        Both pieces travel together — the snapshot is the
+        ``DroneStateArray.header`` plus the ``drones[]`` array.  The
+        header is cached separately so ``_publish_tick`` can fall back to
+        it even if ``drones[]`` was empty (e.g. all UAVs disarmed).
+        """
+        with self._drone_state_lock:
+            return (
+                dict(self._latest_drone_state),
+                _copy_header(self._latest_drone_state_header)
+                if self._latest_drone_state_header is not None else None,
+            )
+
+    # ------------------------------------------------------------------
     # Publishing
     # ------------------------------------------------------------------
     def _publish_tick(self) -> None:
@@ -952,12 +1055,27 @@ class TrackerNode(Node):
             self.get_logger().error(f'cvtrack runner failed: {exc}')
             return
 
+        # Resolve the outgoing header.  The priority is:
+        #   1. ``DroneStateArray.header.stamp`` when /drone_states is
+        #      active (this is the synchronization point for the
+        #      enclosure_node closed loop).
+        #   2. The source ``sensor_msgs/Image`` header when running in
+        #      ``input_mode=topic``.
+        #   3. The local ROS2 clock otherwise (video / replay modes
+        #      where no upstream stamp is available).
+        _, drone_state_header = self._drone_state_snapshot()
         if src_header is not None:
             header = _copy_header(src_header, self._frame_id)
         else:
             header = Header()
             header.stamp = self.get_clock().now().to_msg()
             header.frame_id = self._frame_id
+        if drone_state_header is not None:
+            # Override only the timestamp — ``frame_id`` is owned by the
+            # camera body and should stay as set above.  Cloning the
+            # header first avoids mutating the cached value if other
+            # call paths read it concurrently.
+            header.stamp = drone_state_header.stamp
 
         msg = TargetTrackArray()
         msg.header = header

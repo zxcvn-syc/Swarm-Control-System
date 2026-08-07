@@ -94,6 +94,11 @@ def generate_launch_description() -> LaunchDescription:
             'detector_conf', default_value='0.15',
             description='YOLOv8 confidence threshold.',
         ),
+        DeclareLaunchArgument(
+            'drone_states_topic', default_value='/drone_states',
+            description='swarm_interfaces/DroneStateArray topic for UAV '
+                        'state synchronization (header.stamp alignment).',
+        ),
     ]
 
     inline_overrides = {
@@ -112,6 +117,8 @@ def generate_launch_description() -> LaunchDescription:
         'detector.imgsz': LaunchConfiguration('detector_imgsz'),
         'detector.conf': LaunchConfiguration('detector_conf'),
         'tracker.kind': LaunchConfiguration('tracker_kind'),
+        # UAV state synchronization (P1-C)
+        'drone_states_topic': LaunchConfiguration('drone_states_topic'),
     }
 
     def make_tracker_node(context):

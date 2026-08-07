@@ -59,9 +59,18 @@ def _make_swarm_stub() -> None:
         num_drones: int = 0; enclosure_radius: float = 50.0
         min_enclosure_dist: float = 20.0
 
+    class _DS:
+        drone_id: int = 0; x: float = 0.0; y: float = 0.0; z: float = 0.0
+        vx: float = 0.0; vy: float = 0.0; vz: float = 0.0
+        available: bool = True; platform_type: int = 0
+
+    class _DSA:
+        header: object = None; drones: list = []; num_drones: int = 0
+
     msg.TargetTrack = _TT; msg.TargetTrackArray = _TTA
     msg.TargetTrackDebug = _TTD; msg.EnclosureTarget = _ET
     msg.EnclosureTargetArray = _ETA
+    msg.DroneState = _DS; msg.DroneStateArray = _DSA
     swarm.msg = msg
     sys.modules["swarm_interfaces"] = swarm
     sys.modules["swarm_interfaces.msg"] = msg
