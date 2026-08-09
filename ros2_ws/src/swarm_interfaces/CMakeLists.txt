@@ -14,7 +14,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TargetTrackArray.msg"
   "msg/TaskAssignment.msg"
   "msg/DroneState.msg"
+  "msg/DroneStateArray.msg"
   DEPENDENCIES std_msgs
 )
 
 ament_package()
+
