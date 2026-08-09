@@ -1,30 +1,8 @@
 """planner_stub_node — integration shim for the empty planning_pkg slot.
 
 This node stands in for the path-planner that 程维好 will eventually
-ship.  It exists for one purpose: let the three-link integration test
+ship. It exists for one purpose: let the three-link integration test
 run **today** without waiting for the real planner implementation.
-
-What it does
-------------
-
-* Subscribes to ``/task_assignment`` (from ``scheduler_node``) and the
-  same ``/target_track`` topic ``scheduler_node`` consumes (needed
-  because ``TaskAssignment`` carries no coordinates).
-* For each assigned ``(drone_id, target_id)`` pair it drives a
-  lightweight kinematic state: each drone moves toward its assigned
-  target at ``max_speed`` meters / second, with a small repulsion from
-  other drones (``min_sep``).
-* Publishes a ``DroneStateArray`` snapshot on ``/drone_states`` and a
-  per-drone ``DroneState`` on ``/drone_state`` (the latter is the
-  single-drone equivalent for downstream consumers that prefer it).
-* Logs every planning event under the ``[planner_stub]`` tag using the
-  format specified in ``docs/integration/logging.md``.
-
-This is *not* a path planner.  The output is a streaming
-``DroneStateArray`` suitable for the second/third link of the
-integration, not a ``PathPlan.msg``.  When the real planner_node lands
-this stub should be retired and the real node should publish the same
-``/drone_states`` topic.
 """
 
 from __future__ import annotations
@@ -62,14 +40,9 @@ def _step_towards(
     return (pos[0] + dx * scale, pos[1] + dy * scale)
 
 
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-
 class PlannerStubNode(Node):
     """Drone-state simulator that follows the latest ``TaskAssignment``."""
 
-    # Tags used in every log line — see docs/integration/logging.md
     LOG_TAG = "[planner_stub]"
 
     def __init__(self) -> None:
@@ -97,24 +70,18 @@ class PlannerStubNode(Node):
         spacing = float(self.get_parameter("seed_grid_spacing").value)
 
         # ----- state -----
-        # drone_id -> (x, y).  Seeded in a square grid so multiple
-        # planner_stub_node processes / replays start from a known
-        # layout.
         side = max(1, math.ceil(math.sqrt(self.num_drones)))
         self._drones: Dict[int, Tuple[float, float, float, float]] = {}
         for i in range(self.num_drones):
             row, col = divmod(i, side)
             self._drones[i] = (
-                col * spacing,
-                row * spacing,
+                (col + 1) * spacing,  # 非零初始坐标 (x)
+                (row + 1) * spacing,  # 非零初始坐标 (y)
                 0.0,
                 0.0,  # vx, vy
             )
 
-        # target_id -> (x, y).  Populated from /target_track.  Old
-        # entries are pruned if they fall out of the latest frame.
         self._targets: Dict[int, Tuple[float, float]] = {}
-        # drone_id -> target_id from the latest TaskAssignment batch.
         self._assignment: Dict[int, int] = {}
         self._last_log_t = 0.0
         self._last_assign_event = ""
@@ -124,20 +91,28 @@ class PlannerStubNode(Node):
 
         # ----- subscriptions -----
         self.create_subscription(
-            TaskAssignment, self.get_parameter("assignment_topic").value,
-            self._on_assignment, qos,
+            TaskAssignment,
+            self.get_parameter("assignment_topic").value,
+            self._on_assignment,
+            qos,
         )
         self.create_subscription(
-            TargetTrackArray, self.get_parameter("target_topic").value,
-            self._on_target_track, qos,
+            TargetTrackArray,
+            self.get_parameter("target_topic").value,
+            self._on_target_track,
+            qos,
         )
 
         # ----- publishers -----
         self._drone_states_pub = self.create_publisher(
-            DroneStateArray, self.get_parameter("drone_states_topic").value, qos,
+            DroneStateArray,
+            self.get_parameter("drone_states_topic").value,
+            qos,
         )
         self._drone_state_pub = self.create_publisher(
-            DroneState, self.get_parameter("drone_state_topic").value, qos,
+            DroneState,
+            self.get_parameter("drone_state_topic").value,
+            qos,
         )
 
         # ----- timer -----
@@ -152,11 +127,6 @@ class PlannerStubNode(Node):
     # Callbacks
     # ----------------------------------------------------------------
     def _on_assignment(self, msg: TaskAssignment) -> None:
-        # ``TaskAssignment`` carries no (x, y) for the target, so we
-        # only stash the id pair here.  Position is pulled from
-        # ``/target_track`` in ``_on_target_track`` and consumed in
-        # ``_tick``.  This is the agreed split documented in
-        # ``docs/integration/interface_alignment.md`` decision D-3.
         self._assignment[int(msg.drone_id)] = int(msg.target_id)
         if self._last_assign_event != (msg.drone_id, msg.target_id, msg.task_type):
             self._last_assign_event = (msg.drone_id, msg.target_id, msg.task_type)
@@ -170,7 +140,6 @@ class PlannerStubNode(Node):
         new_targets: Dict[int, Tuple[float, float]] = {}
         for t in msg.tracks:
             new_targets[int(t.target_id)] = (float(t.x), float(t.y))
-        # Replace atomically so a tick never sees a half-updated map.
         self._targets = new_targets
 
     # ----------------------------------------------------------------
@@ -190,16 +159,17 @@ class PlannerStubNode(Node):
                 continue
             new_x, new_y = _step_towards((x, y), goal, self.max_speed * dt)
             next_positions[did] = (
-                new_x, new_y,
-                (new_x - x) / dt, (new_y - y) / dt,
+                new_x,
+                new_y,
+                (new_x - x) / dt,
+                (new_y - y) / dt,
             )
 
-        # 2. pairwise repulsion (single pass, O(N^2) which is fine for
-        #    N <= 16 demo swarms).  Skip the loop entirely for N=1.
+        # 2. pairwise repulsion
         ids = sorted(next_positions.keys())
         for i, ida in enumerate(ids):
             xa, ya, vxa, vya = next_positions[ida]
-            for idb in ids[i + 1:]:
+            for idb in ids[i + 1 :]:
                 xb, yb, vxb, vyb = next_positions[idb]
                 dx = xa - xb
                 dy = ya - yb
@@ -218,13 +188,11 @@ class PlannerStubNode(Node):
         self._drones = next_positions
 
         # 3. publish
-        now_msg = self.get_clock().now().to_msg()
         arr = DroneStateArray()
-        arr.num_drones = len(ids)
         for did in ids:
             x, y, vx, vy = self._drones[did]
             st = DroneState()
-            st.drone_id = uint32(did)
+            st.drone_id = int(did)
             st.x = float(x)
             st.y = float(y)
             st.z = float(self.altitude)
@@ -232,35 +200,24 @@ class PlannerStubNode(Node):
             st.vy = float(vy)
             st.vz = 0.0
             st.available = True
+            
+            # 兼容新增的 platform_type 字段
+            if hasattr(st, 'platform_type'):
+                st.platform_type = getattr(DroneState, 'PLATFORM_DRONE', 0)
+
             arr.drones.append(st)
 
-            # Per-drone topic (DroneState.msg has no header; we just
-            # stamp the position with the current time below for any
-            # downstream consumer that introspects publication time).
-            single = DroneState()
-            single.drone_id = st.drone_id
-            single.x = st.x
-            single.y = st.y
-            single.z = st.z
-            single.vx = st.vx
-            single.vy = st.vy
-            single.vz = st.vz
-            single.available = st.available
-            self._drone_state_pub.publish(single)
+            # Per-drone topic
+            self._drone_state_pub.publish(st)
 
         self._drone_states_pub.publish(arr)
 
-        # Throttled summary
         if now - self._last_log_t >= 5.0:
             self._last_log_t = now
             self.get_logger().info(
                 f"{self.LOG_TAG} drone_states: n={len(ids)} "
                 f"n_assigned={len(self._assignment)} n_targets={len(self._targets)}"
             )
-
-
-def uint32(x: int) -> int:
-    return int(x) & 0xFFFFFFFF
 
 
 def main(args: Optional[List[str]] = None) -> None:
