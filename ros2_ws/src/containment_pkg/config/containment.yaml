@@ -3,3 +3,6 @@ enclosure_node:
     enclosure_radius: 25.0
     min_dist: 5.0
     update_period: 1.0
+    # Real-time pose subscription (from planning_pkg/uav_pose_pub)
+    pose_topic: "/uav1/current_pose"
+    pose_drone_id: 1
