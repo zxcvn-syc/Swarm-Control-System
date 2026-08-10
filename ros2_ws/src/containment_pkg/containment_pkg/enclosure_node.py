@@ -91,7 +91,10 @@ class EnclosureNode(Node):
         state.vy = 0.0
         state.vz = 0.0
         state.available = True
-        state.platform_type = 0  # PLATFORM_DRONE
+        # platform_type is optional; set only if the running DroneState msg
+        # supports it (older builds of swarm_interfaces may lack the field).
+        if hasattr(state, "platform_type"):
+            state.platform_type = 0  # PLATFORM_DRONE
         self._pose_drones[drone_id] = state
         self._dirty = True
 
