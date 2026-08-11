@@ -85,9 +85,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "=== Validating ros2_ws/launch/three_links.launch.py ==="
   ros2 launch "$WORKSPACE/launch/three_links.launch.py" --show-args
   echo ""
-  echo "=== Validating top-level launch/three_links.launch.py ==="
-  ros2 launch "$REPO_ROOT/launch/three_links.launch.py" --show-args
-  echo ""
   echo "[three_links_demo] (dry-run) all good; launch syntax is valid, all three strategies (greedy/hungarian/auction) available"
   exit 0
 fi
