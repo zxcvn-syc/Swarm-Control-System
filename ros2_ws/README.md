@@ -51,8 +51,8 @@ cd /home/hhh/Downloads/Swarm-Control-System
 
 | 文件 | 用途 |
 |------|------|
-| `launch/three_links.launch.py` | 启动四节点（不录制） |
-| `launch/integration_test.launch.py` | 启动四节点 + 集成 watchdog 脚本 |
+| `ros2_ws/launch/three_links.launch.py` | 启动四节点（不录制） |
+| `ros2_ws/launch/integration_test.launch.py` | 启动四节点 + 集成 watchdog 脚本 |
 
 各子包自带的 launch：
 

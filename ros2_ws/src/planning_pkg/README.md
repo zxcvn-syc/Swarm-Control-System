@@ -37,9 +37,9 @@ planning_pkg/
     └── planning_pkg       # ament_index 标记
 ```
 
-外层仓库根目录还有一个 `launch/three_links.launch.py`，它同时启动
+顶层启动入口位于 `ros2_ws/launch/three_links.launch.py`，它同时启动
 `tracker_node + scheduler_node + planner_node + enclosure_node`，
-用于联调。
+用于联调（早期版本曾放在仓库根目录 `launch/` 下，现已统一收敛到 `ros2_ws/launch/`）。
 
 ---
 
@@ -250,7 +250,7 @@ ros2 launch planning_pkg planning.launch.py \
     planner:=dstar_lite grid_size:=120
 
 # 三节点联调（tracker + scheduler + planner + enclosure）
-ros2 launch /path/to/Swarm-Control-System/launch/three_links.launch.py
+ros2 launch /path/to/Swarm-Control-System/ros2_ws/launch/three_links.launch.py
 ```
 
 `colcon build --packages-select planning_pkg` 是验收标准之一。
