@@ -1,5 +1,5 @@
 import numpy as np
-from logger_config import logger
+from .logger_config import logger
 
 class AuctionEngine:
     def __init__(self, agent_list, task_list):

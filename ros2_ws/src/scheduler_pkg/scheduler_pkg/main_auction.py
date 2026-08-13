@@ -1,6 +1,11 @@
-from agent import Agent
-from task import Task
-from logger_config import logger
+try:
+    from .agent import Agent
+    from .task import Task
+    from .logger_config import logger
+except ImportError:  # pragma: no cover - supports direct script execution
+    from agent import Agent
+    from task import Task
+    from logger_config import logger
 
 # ---------- 任务配置 ----------
 task_info = [

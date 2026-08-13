@@ -1,6 +1,6 @@
-from agent import Agent
-from task import Task
-from logger_config import logger
+from .agent import Agent
+from .task import Task
+from .logger_config import logger
 
 class GreedyScheduler:
     def __init__(self, agent_list: list[Agent], task_list: list[Task], sim_time: int = 0):

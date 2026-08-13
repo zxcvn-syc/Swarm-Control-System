@@ -1,8 +1,14 @@
 # main_greedy.py 贪心基准对照组入口
-from agent import Agent
-from task import Task
-from scheduler import GreedyScheduler
-from logger_config import logger
+try:
+    from .agent import Agent
+    from .task import Task
+    from .scheduler import GreedyScheduler
+    from .logger_config import logger
+except ImportError:  # pragma: no cover - supports direct script execution
+    from agent import Agent
+    from task import Task
+    from scheduler import GreedyScheduler
+    from logger_config import logger
 
 if __name__ == "__main__":
     # 和拍卖用完全相同的载体、任务参数，保证实验公平对比
