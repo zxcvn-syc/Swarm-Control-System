@@ -25,7 +25,7 @@ from __future__ import annotations
 import copy
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -62,6 +62,9 @@ class Config:
 
 
 def _configs_dir() -> str:
+    package_dir = os.path.join(os.path.dirname(__file__), "configs")
+    if os.path.isdir(package_dir):
+        return package_dir
     return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "configs")
 
 

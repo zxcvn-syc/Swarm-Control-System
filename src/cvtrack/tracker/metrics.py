@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, Sequence, Tuple
 
 import numpy as np
 

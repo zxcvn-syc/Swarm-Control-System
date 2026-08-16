@@ -2,10 +2,10 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)]()
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-yellow.svg)]()
-[![Trackers: deepsort | deepsort_cascade | botsort](https://img.shields.io/badge/trackers-deepsort%20%7C%20deepsort__cascade%20%7C%20botsort-blue.svg)()
+[![Trackers: deepsort | deepsort_cascade | botsort](https://img.shields.io/badge/trackers-deepsort%20%7C%20deepsort__cascade%20%7C%20botsort-blue.svg)]()
 
 > **关于本仓库。** 包名是 **cvtrack**，只提供计算机视觉跟踪流水线 —— **不包含 ROS / launch 文件 / ROS 话题**。
-> 仓库目录原先叫 `<owner>/ROS`，现已改名为 `<owner>/cvtrack`；如果你从 "ROS" 搜索结果点到这里，那来对地方了。
+> 仓库地址为 `hehong5/cvtrack`；如果你从旧的 "ROS" 搜索结果点到这里，当前仓库只保留视觉跟踪工程。
 
 > ⚠️ **`configs/drone.yaml` 默认的检测器是 MOG2，不是 YOLO**。
 > 这是有意为之：为了保留 v4 的兼容性基线（`pexels_aerial_2034115` 上 798 个 ID / 平均长度 23.2），
@@ -32,16 +32,17 @@ Drone 预设（低 min-conf，8 个 VisDrone 类别，IoU 门控 0.20，4 自由
 以巨大优势给出最长的轨迹 —— 中位数轨迹长度 54 vs BoT-SORT 的 4。
 Cascade 行通过 torchreid 使用 OSNet 512 维嵌入（`weights/osnet_x0_25_msmt17.pth.tar`，
 `loaded_pretrained=True`）；raw 行跑级联但不应用预设调整，可以看到 ID 爆炸警告如何触发
-（比率 0.565 > 0.5）。保留的运行产物位于 `weights/run_deepsort_cascade_drone/`、
-`weights/run_deepsort_cascade/`、`weights/run_botsort/` 和 `weights/run_deepsort_legacy/`。
+（比率 0.565 > 0.5）。运行产物已从 Git 历史的最新快照中清理；按下方命令可在本地重新生成，
+且 `weights/` 已被 `.gitignore` 排除。
 
 ## v6 新特性
 
 * **真正的 DeepSORT 级联匹配器** —— `cvtrack.tracker.deepsort.DeepSortCascade`
-  按原 DeepSORT 论文实现匹配级联：已确认的轨迹按 age 顺序匹配（刚丢失的最先），
+  按原 DeepSORT 论文实现匹配级联：已确认的轨迹按 age 顺序匹配（上一帧刚更新的最先），
   每一层内做 Mahalanobis 距离的卡方门控，门控内的代价是到该轨迹 ReID gallery 均值的余弦距离。
   级联未匹配的进入 IoU 兜底。新构造参数：`use_appearance=True`、
-  `appearance_thresh=0.5`、`max_age=30`、`n_init=3`。
+  `appearance_thresh=0.5`、`max_age=30`、`n_init=3`。每次成功关联都按真实 detection index
+  更新对应 gallery，避免交叉目标场景中用最近中心近似造成 ReID 污染。
 
 * **通过 torchreid 使用 OSNet** —— `cvtrack.appearance.osnet.OsNetExtractor` 是 v6 中唯一的外观后端。
   它通过 torchreid（或其内置的 OSNet 参考实现）加载 `osnet_x0_25`，并使用 MSMT17 微调的 checkpoint。
@@ -67,6 +68,7 @@ Cascade 行通过 torchreid 使用 OSNet 512 维嵌入（`weights/osnet_x0_25_ms
   （会回退到与 `default.yaml` 相同的默认）。
 
 * **新的 CLI flag**：
+  - `--source <video>` 为必填输入，流水线不再依赖已删除的合成视频脚本
   - `--tracker {deepsort, deepsort_cascade, botsort}`（默认未变）
   - `--predict-horizon <int>`（默认 15）控制 KF 未来帧水平
   - `--write-future-csv` 开启带 sigma 标注的 future CSV
@@ -75,7 +77,7 @@ Cascade 行通过 torchreid 使用 OSNet 512 维嵌入（`weights/osnet_x0_25_ms
 ## 快速上手
 
 ```bash
-git clone <repo>
+git clone https://github.com/hehong5/cvtrack.git
 cd cvtrack
 python3 -m pip install -e .
 
@@ -280,7 +282,7 @@ python eval/mot17_mini/run_eval.py \
 * `Dockerfile` 基于 `python:3.11-slim`，以 editable 方式拷贝源码安装，默认 `--help`。
 * `Makefile` 暴露 `install`、`lint`、`typecheck`、`test`、`test-slow`、`run-drone`、`docker-build`、`clean`。
 * CI：ruff check、mypy（尽力而为）、跨 Python 3.10/3.11 的快速 pytest。
-* 测试套件在 Python 3.10 上 53 通过 + 1 跳过（torchreid-only）。
+* 快速测试覆盖配置、级联关联、Kalman 预测、指标、传感器和输出开关；ReID 权重相关用例按环境自动跳过。
 
 ## 未来工作（下一版）
 

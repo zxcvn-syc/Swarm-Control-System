@@ -8,7 +8,6 @@ tracker (one Gallery per Track).  The tests below mirror that.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from cvtrack.appearance.gallery import Gallery
 

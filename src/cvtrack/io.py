@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import os
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np

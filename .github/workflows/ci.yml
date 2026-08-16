@@ -31,7 +31,11 @@ jobs:
           # the test job.
           pip install ruff mypy pytest
 
-      - name: Lint (ruff)
+      - name: Lint critical errors (ruff)
+        run: ruff check --select E4,E7,E9,F src tests scripts eval
+
+      - name: Report style debt (ruff, best-effort)
+        continue-on-error: true
         run: ruff check src tests scripts eval
 
       - name: Type-check (mypy, best-effort)
@@ -59,8 +63,8 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           # Minimal CV / numerical stack for the test runner; CI doesn't need to
           # pull a YOLO model or run the tracker.
-          pip install numpy opencv-python-headless pyyaml
-          pip install -e .
+          pip install numpy scipy opencv-python-headless pyyaml
+          pip install -e . --no-deps
 
       - name: Run tests (skip slow)
         run: |

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cvtrack.config import _deep_merge, _validate, load_config
+from cvtrack.config import _configs_dir, _deep_merge, _validate, load_config
 
 
 def test_deep_merge_overrides_scalar():
@@ -75,8 +75,14 @@ def test_validate_rejects_non_string_weights():
 
 def test_bundled_presets_load_clean():
     """Smoke test: the configs bundled with the repo load without raising."""
-    from cvtrack.config import _configs_dir
-
     for name in ("default", "drone", "street", "multi_sensor"):
         cfg = load_config(name, configs_dir=_configs_dir())
         assert cfg.raw.get("tracker"), f"{name} must define a tracker section"
+
+
+def test_packaged_presets_match_repo_mirrors():
+    package_dir = Path(_configs_dir())
+    repo_dir = Path(__file__).resolve().parents[1] / "configs"
+
+    for name in ("default.yaml", "drone.yaml", "street.yaml", "multi_sensor.yaml"):
+        assert (package_dir / name).read_text().rstrip() == (repo_dir / name).read_text().rstrip()
