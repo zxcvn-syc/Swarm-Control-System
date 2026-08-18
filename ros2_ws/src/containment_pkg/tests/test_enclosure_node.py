@@ -298,3 +298,37 @@ def test_command_layer_reserved_standby(node):
     assert cmds[1].enclosure_radius == pytest.approx(25.0)
     assert cmds[200].layer == LAYER_COMMAND
     assert cmds[200].enclosure_radius == 0.0
+
+
+# ---------------------------------------------------------------------------
+# UGV block-layer dynamic containment (target moves -> block recomputes)
+# ---------------------------------------------------------------------------
+
+def test_ugv_block_layer_tracks_moving_target(node):
+    """When the target moves, the UGV block-layer point follows it."""
+    car = make_car(15.0, 0.0, 101)  # UGV on the block layer
+    drones = DroneStateArray()
+    drones.drones = [car]
+    published = []
+    node._publisher = type("Publisher", (), {"publish": published.append})()
+
+    # Target at origin -> UGV block point at (15, 0)
+    t1 = TargetTrackArray()
+    t1.tracks = [make_track(0.0, 0.0, 1)]
+    node.on_target_track(t1)
+    node.on_drone(drones)
+    assert node.tick()
+    first = {int(c.drone_id): c for c in published[-1].commands}[101]
+    assert first.layer == LAYER_BLOCK
+    assert first.target_x == pytest.approx(15.0)
+    assert first.enclosure_radius == pytest.approx(15.0)
+
+    # Target moves to (10, 0) -> block point should follow to (25, 0)
+    t2 = TargetTrackArray()
+    t2.tracks = [make_track(10.0, 0.0, 1)]
+    node.on_target_track(t2)
+    assert node.tick()
+    second = {int(c.drone_id): c for c in published[-1].commands}[101]
+    assert second.layer == LAYER_BLOCK
+    assert second.target_x == pytest.approx(25.0)
+    assert second.enclosure_radius == pytest.approx(15.0)
