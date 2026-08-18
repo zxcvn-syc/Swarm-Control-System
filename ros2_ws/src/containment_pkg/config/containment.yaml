@@ -1,6 +1,11 @@
 enclosure_node:
   ros__parameters:
+    # Legacy single-radius parameter (used as monitor radius when
+    # monitor_radius is 0, for backward compatibility)
     enclosure_radius: 25.0
+    # Three-layer containment radii
+    monitor_radius: 25.0   # UAV monitor layer (outer ring)
+    block_radius: 15.0     # UGV block layer (inner ring)
     min_dist: 5.0
     update_period: 1.0
     # Real-time pose subscription (from planning_pkg/uav_pose_pub)
