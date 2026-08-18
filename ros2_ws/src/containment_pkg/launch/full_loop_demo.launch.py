@@ -30,11 +30,11 @@ def generate_launch_description():
         name="target_pub",
         output="screen",
         parameters=[{
-            "publish_rate": 1.0,
+            "period": 1.0,
             "center_x": 50.0,
             "center_y": 50.0,
-            "radius": 15.0,
-            "speed": 0.3,
+            "orbit_radius": 3.0,
+            "orbit_speed": 0.3,
         }],
     )
 
@@ -44,11 +44,13 @@ def generate_launch_description():
         name="mock_platform_pub",
         output="screen",
         parameters=[{
-            "publish_rate": 1.0,
-            "center_x": 50.0,
-            "center_y": 50.0,
-            "drone_radius": 30.0,
-            "car_radius": 15.0,
+            "period": 1.0,
+            "target_x": 50.0,
+            "target_y": 50.0,
+            "monitor_orbit": 25.0,
+            "block_orbit": 15.0,
+            "num_drones": 3,
+            "num_cars": 2,
         }],
     )
 
