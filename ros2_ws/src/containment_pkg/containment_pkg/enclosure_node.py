@@ -171,13 +171,12 @@ class EnclosureNode(Node):
             return []
         drone_xy = np.array([[state.x, state.y] for state in states], dtype=float)
         points, radii = voronoi_enclose(target_xy, drone_xy, radius, min_dist)
-        active_count = min(len(states), len(target_xy))
+        # All platforms in a containment layer are active: they form a
+        # cooperative ring around the target(s).  Standby is only used for
+        # command-layer platforms awaiting manual override.
         results = []
         for index, state in enumerate(states):
-            if index < active_count:
-                results.append((state, points[index], radii[index]))
-            else:
-                results.append((state, None, 0.0))
+            results.append((state, points[index], radii[index]))
         return results
 
     def _recalculate(self, states):

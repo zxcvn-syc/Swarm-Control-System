@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 rclpy = pytest.importorskip("rclpy")
@@ -94,7 +96,8 @@ def test_tick_publishes_once_until_next_input(node):
     assert published[-1].commands[0].target_x == 8.0 + 25.0
 
 
-def test_multiple_targets_and_drones_publish_standby_for_extra_drone(node):
+def test_multiple_targets_and_drones_all_active(node):
+    """All platforms in a containment layer should be assigned a ring point."""
     tracks = TargetTrackArray()
     tracks.tracks = [make_track(0.0, 0.0, 1), make_track(50.0, 0.0, 2)]
     drones = DroneStateArray()
@@ -105,7 +108,10 @@ def test_multiple_targets_and_drones_publish_standby_for_extra_drone(node):
     node.on_drone(drones)
     assert node.tick()
     assert len(published[-1].commands) == 3
-    assert published[-1].commands[-1].enclosure_radius == 0.0
+    for cmd in published[-1].commands:
+        assert cmd.enclosure_radius > 0.0
+        assert math.isfinite(cmd.target_x)
+        assert math.isfinite(cmd.target_y)
 
 
 # ---------------------------------------------------------------------------
