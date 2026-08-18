@@ -123,3 +123,65 @@ pipeline:
     assert (out / "tracks_smoothed.csv").exists()
     assert (out / "tracks_trails.json").exists()
     assert (out / "tracks_future.csv").exists()
+
+
+@pytest.mark.slow
+def test_pipeline_writes_calibrated_world_csv(tmp_path):
+    src = tmp_path / "synth.mp4"
+    out = tmp_path / "out"
+    calibration = tmp_path / "ground_plane.yaml"
+    _make_synthetic_video(src, n_frames=20)
+    calibration.write_text(
+        """frame_id: test_map
+units: m
+image_points_px:
+  - [0, 0]
+  - [320, 0]
+  - [320, 240]
+  - [0, 240]
+world_points_m:
+  - [0, 0]
+  - [32, 0]
+  - [32, 24]
+  - [0, 24]
+"""
+    )
+
+    repo = Path(__file__).resolve().parents[1]
+    import sys as _sys
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(repo / "src"), env.get("PYTHONPATH", "")])
+    cmd = [
+        _sys.executable,
+        "-m",
+        "cvtrack",
+        "--source",
+        str(src),
+        "--out-dir",
+        str(out),
+        "--detector",
+        "mog2",
+        "--max-frames",
+        "12",
+        "--world-calibration",
+        str(calibration),
+        "--log-level",
+        "WARNING",
+    ]
+
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=str(repo))
+    assert res.returncode == 0, "stderr=" + res.stderr + " stdout=" + res.stdout
+    world_csv = out / "tracks_world.csv"
+    assert world_csv.exists()
+    with world_csv.open() as f:
+        reader = csv.DictReader(f)
+        assert reader.fieldnames is not None
+        assert "world_x_m" in reader.fieldnames
+        assert "world_valid" in reader.fieldnames
+        for row in reader:
+            assert row["units"] == "m"
+            assert row["frame_id"] == "test_map"
+            if row["world_valid"] == "1":
+                assert row["world_x_m"]
+                assert row["world_y_m"]

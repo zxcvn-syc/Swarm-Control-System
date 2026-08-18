@@ -40,6 +40,11 @@ output:
   write_reid_json: false
   write_trails_json: false
   write_future_csv: false
+  write_world_csv: true
+
+world_projection:
+  enabled: false
+  calibration_file: null
 
 pipeline:
   max_frames: 0       # 0 = full video

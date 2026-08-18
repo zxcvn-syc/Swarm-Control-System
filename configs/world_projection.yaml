@@ -1,0 +1,13 @@
+extends: street
+
+# Deployment template.  Supply a camera-specific YAML file through either
+# world_projection.calibration_file or --world-calibration before running.
+detector:
+  backend: yolo
+
+world_projection:
+  enabled: false
+  calibration_file: null
+
+output:
+  write_world_csv: true

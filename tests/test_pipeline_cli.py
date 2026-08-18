@@ -41,6 +41,8 @@ def test_explicit_cli_values_become_overrides() -> None:
             "--predict-horizon",
             "7",
             "--write-future-csv",
+            "--world-calibration",
+            "site_camera.yaml",
         ]
     )
     overrides = _args_to_overrides(args)
@@ -51,3 +53,7 @@ def test_explicit_cli_values_become_overrides() -> None:
     assert overrides["tracker"]["stationary_prune"] is False
     assert overrides["pipeline"]["predict_horizon"] == 7
     assert overrides["output"]["write_future_csv"] is True
+    assert overrides["world_projection"] == {
+        "enabled": True,
+        "calibration_file": "site_camera.yaml",
+    }

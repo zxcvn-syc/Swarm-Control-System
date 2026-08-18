@@ -73,6 +73,26 @@ Cascade 行通过 torchreid 使用 OSNet 512 维嵌入（`weights/osnet_x0_25_ms
   - `--predict-horizon <int>`（默认 15）控制 KF 未来帧水平
   - `--write-future-csv` 开启带 sigma 标注的 future CSV
   - `--reid` 现在在 `--tracker deepsort_cascade` 时自动启用
+  - `--world-calibration <path>` 启用经标定的地面平面投影，并输出米制
+    `tracks_world.csv`；缺少或无效标定会直接失败，绝不把像素当作世界坐标
+
+## 世界坐标与 ROS
+
+跟踪器内部和兼容的 `tracks.csv` 均保持像素坐标。要把目标送入规划或围捕节点，
+必须提供固定相机、已测量地面上的至少四个非共线对应点，使用
+`calibrations/ground_plane.example.yaml` 创建站点标定，并通过：
+
+```bash
+python -m cvtrack --config world_projection \
+    --source /data/camera.mp4 --out-dir /data/run_001 \
+    --world-calibration /data/calibration/site_camera_01.yaml
+```
+
+这会从每个目标框的**底部中心**推断地面接触点，写入带 `frame_id`、`m` 单位、
+速度和有效位的 `tracks_world.csv`。ROS 适配器只可消费 `world_valid=1`、单位为
+`m` 且坐标系已对齐的行；`tracks.csv` 的 `cx/cy` 永远不能直接给规划器使用。
+完整字段定义、校验规则和移动无人机的额外姿态要求见
+[`docs/world_coordinate_contract.md`](docs/world_coordinate_contract.md)。
 
 ## 快速上手
 

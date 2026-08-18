@@ -32,7 +32,14 @@ import numpy as np
 from cvtrack.appearance.gallery import Gallery
 from cvtrack.config import Config, load_config, merge_cli
 from cvtrack.detector.factory import make_detector
-from cvtrack.io import FutureTrailCsvWriter, TrackCsvWriter, VideoReader, VideoWriter
+from cvtrack.geometry import CalibrationError, GroundPlaneProjector
+from cvtrack.io import (
+    FutureTrailCsvWriter,
+    TrackCsvWriter,
+    VideoReader,
+    VideoWriter,
+    WorldTrackCsvWriter,
+)
 from cvtrack.tracker.botsort import BoTSortTracker
 from cvtrack.tracker.deepsort import DeepSortCascade, DeepSortLite
 from cvtrack.tracker.kalman import (
@@ -108,6 +115,11 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="number of frames to project each track's KF into the future")
     ap.add_argument("--write-future-csv", action="store_true",
                     help="enable per-step future projection CSV with sigma_x/sigma_y columns")
+    ap.add_argument(
+        "--world-calibration",
+        default=None,
+        help="YAML ground-plane calibration; writes tracks_world.csv in metres",
+    )
     ap.add_argument("--no-cmc", action="store_true")
     ap.add_argument("--high-conf", type=float, default=None)
     ap.add_argument("--new-track-conf", type=float, default=None)
@@ -246,6 +258,12 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if output:
         out["output"] = output
 
+    if args.world_calibration is not None:
+        out["world_projection"] = {
+            "enabled": True,
+            "calibration_file": args.world_calibration,
+        }
+
     pipeline: Dict[str, Any] = {}
     if args.max_frames:
         pipeline["max_frames"] = args.max_frames
@@ -331,6 +349,25 @@ def run(args: argparse.Namespace) -> int:
     total = info.total_frames
 
     dt = 1.0 / max(float(fps), 1.0)
+    world_cfg = merged.get("world_projection", {})
+    world_projector: Optional[GroundPlaneProjector] = None
+    if world_cfg.get("enabled", False):
+        calibration_file = world_cfg.get("calibration_file")
+        if not calibration_file:
+            raise SystemExit(
+                "world_projection is enabled but no calibration_file was supplied; "
+                "refusing to treat pixels as metres"
+            )
+        try:
+            world_projector = GroundPlaneProjector.from_file(calibration_file)
+        except CalibrationError as exc:
+            raise SystemExit(f"invalid world calibration: {exc}") from exc
+        log.info(
+            "world projection enabled: frame_id=%s calibration=%s rmse=%.3f m",
+            world_projector.frame_id,
+            world_projector.source,
+            world_projector.reprojection_rmse_m,
+        )
     pipe_cfg = merged.get("pipeline", {})
     max_frames_cap = int(pipe_cfg.get("max_frames", args.max_frames) or 0)
     if max_frames_cap <= 0:
@@ -468,6 +505,13 @@ def run(args: argparse.Namespace) -> int:
     future_csv_path = os.path.join(args.out_dir, "tracks_future.csv")
     write_future_csv = bool(out_cfg.get("write_future_csv", False))
     future_csv_w = FutureTrailCsvWriter(future_csv_path) if write_future_csv else None
+    world_csv_path = os.path.join(args.out_dir, "tracks_world.csv")
+    write_world_csv = bool(out_cfg.get("write_world_csv", True))
+    world_csv_w = (
+        WorldTrackCsvWriter(world_csv_path)
+        if world_projector is not None and write_world_csv
+        else None
+    )
     future_steps = max(0, int(pipe_cfg.get("predict_horizon", 15) or 0))
 
     writer: Optional[VideoWriter] = None
@@ -484,6 +528,8 @@ def run(args: argparse.Namespace) -> int:
     n_frames = 0
     vx_idx = 4 if isinstance(tracker, BoTSortTracker) else 2
     vy_idx = 5 if isinstance(tracker, BoTSortTracker) else 3
+    last_world_positions: Dict[int, tuple[int, float, float]] = {}
+    invalid_world_projection_logged = False
 
     # -------- main loop ------------------------------------------------
     if start_frame > 0:
@@ -597,6 +643,42 @@ def run(args: argparse.Namespace) -> int:
                         float(t.mean[vx_idx]), float(t.mean[vy_idx]),
                         t.confirmed,
                     )
+                if world_csv_w is not None and world_projector is not None:
+                    image_x_px = t.box.cx
+                    image_y_px = t.box.y2
+                    world_x_m: Optional[float] = None
+                    world_y_m: Optional[float] = None
+                    world_vx_mps: Optional[float] = None
+                    world_vy_mps: Optional[float] = None
+                    world_valid = False
+                    try:
+                        projected = world_projector.project(image_x_px, image_y_px)
+                        world_x_m, world_y_m = projected.x_m, projected.y_m
+                        previous = last_world_positions.get(t.track_id)
+                        if previous is not None and frame_idx > previous[0]:
+                            elapsed_s = (frame_idx - previous[0]) / fps
+                            world_vx_mps = (world_x_m - previous[1]) / elapsed_s
+                            world_vy_mps = (world_y_m - previous[2]) / elapsed_s
+                        last_world_positions[t.track_id] = (frame_idx, world_x_m, world_y_m)
+                        world_valid = True
+                    except CalibrationError as exc:
+                        if not invalid_world_projection_logged:
+                            log.warning("world projection rejected a target: %s", exc)
+                            invalid_world_projection_logged = True
+                    world_csv_w.write_row(
+                        frame=frame_idx,
+                        timestamp_s=frame_idx / fps,
+                        track_id=t.track_id,
+                        label=t.label,
+                        image_x_px=image_x_px,
+                        image_y_px=image_y_px,
+                        world_x_m=world_x_m,
+                        world_y_m=world_y_m,
+                        world_vx_mps=world_vx_mps,
+                        world_vy_mps=world_vy_mps,
+                        world_valid=world_valid,
+                        frame_id=world_projector.frame_id,
+                    )
 
             if fps_overlay:
                 add_overlay(frame, fps_avg, len(visible), model_name)
@@ -612,6 +694,8 @@ def run(args: argparse.Namespace) -> int:
             csv_w.close()
         if future_csv_w is not None:
             future_csv_w.close()
+        if world_csv_w is not None:
+            world_csv_w.close()
         if writer is not None:
             writer.close()
 
@@ -624,6 +708,8 @@ def run(args: argparse.Namespace) -> int:
         log.info("tracks -> %s", csv_path)
     if future_csv_w is not None:
         log.info("future tracks -> %s", future_csv_path)
+    if world_csv_w is not None:
+        log.info("world tracks -> %s", world_csv_path)
 
     # -------- warning / optional exports ------------------------------
     n_ids = len(seen_track_ids)
