@@ -31,7 +31,8 @@ jobs:
             -v "$PWD":/workspace \
             -w /workspace \
             swarm-ci:humble \
-            bash -c "source /opt/ros/humble/setup.bash && \
+            bash -c "set -o pipefail && \
+                     source /opt/ros/humble/setup.bash && \
                      cd ros2_ws && \
                      colcon build --packages-select planning_pkg scheduler_pkg containment_pkg perception_pkg swarm_interfaces 2>&1 | tail -20"
 

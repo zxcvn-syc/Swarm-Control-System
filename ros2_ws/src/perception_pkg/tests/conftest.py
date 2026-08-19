@@ -23,6 +23,15 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _make_swarm_stub() -> None:
+    # If the real swarm_interfaces.msg is already importable (e.g. CI
+    # sourced install/setup.bash), use it instead of the stub.
+    try:
+        import swarm_interfaces.msg as _real  # noqa: F401
+        if hasattr(_real, "DroneState"):
+            return
+    except ImportError:
+        pass
+
     if "swarm_interfaces" in sys.modules and "swarm_interfaces.msg" in sys.modules:
         return
     swarm = types.ModuleType("swarm_interfaces")
@@ -59,9 +68,41 @@ def _make_swarm_stub() -> None:
         num_drones: int = 0; enclosure_radius: float = 50.0
         min_enclosure_dist: float = 20.0
 
+    # --- types needed by containment_pkg / planning_pkg tests ---
+    class _DroneState:
+        PLATFORM_DRONE: int = 0
+        PLATFORM_CAR: int = 1
+        drone_id: int = 0
+        x: float = 0.0; y: float = 0.0; z: float = 0.0
+        vx: float = 0.0; vy: float = 0.0; vz: float = 0.0
+        available: bool = True
+        platform_type: int = 0
+
+    class _DroneStateArray:
+        drones: list = []; num_drones: int = 0
+
+    class _TaskAssignment:
+        drone_id: int = 0; target_id: int = 0; task_type: str = ""
+
+    class _EnclosureCommand:
+        LAYER_MONITOR: int = 0
+        LAYER_BLOCK: int = 1
+        LAYER_COMMAND: int = 2
+        drone_id: int = 0
+        target_x: float = 0.0; target_y: float = 0.0; target_z: float = 0.0
+        enclosure_radius: float = 0.0
+        layer: int = 0
+
+    class _EnclosureCommandArray:
+        commands: list = []; num_drones: int = 0
+
     msg.TargetTrack = _TT; msg.TargetTrackArray = _TTA
     msg.TargetTrackDebug = _TTD; msg.EnclosureTarget = _ET
     msg.EnclosureTargetArray = _ETA
+    msg.DroneState = _DroneState; msg.DroneStateArray = _DroneStateArray
+    msg.TaskAssignment = _TaskAssignment
+    msg.EnclosureCommand = _EnclosureCommand
+    msg.EnclosureCommandArray = _EnclosureCommandArray
     swarm.msg = msg
     sys.modules["swarm_interfaces"] = swarm
     sys.modules["swarm_interfaces.msg"] = msg
