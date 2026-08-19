@@ -28,6 +28,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pytest \
         python3-numpy \
         ros-humble-ros-base \
+        ros-humble-rosidl-default-generators \
+        ros-humble-rosidl-default-runtime \
+        ros-humble-builtin-interfaces \
         ros-humble-nav-msgs \
         ros-humble-geometry-msgs \
         ros-humble-std-msgs \
