@@ -248,9 +248,9 @@ def test_make_target_track_maps_all_fields():
     assert msg.is_confirmed is True
     assert msg.speed == pytest.approx(3.32)
     assert msg.motion_mode == 3
-    assert msg.pred_x == [110.0, 120.0, 130.0, 140.0, 150.0]
-    assert msg.pred_y == [205.0, 210.0, 215.0, 220.0, 225.0]
-    assert msg.pred_conf == [0.9, 0.8, 0.7, 0.6, 0.5]
+    np.testing.assert_allclose(msg.pred_x, [110.0, 120.0, 130.0, 140.0, 150.0])
+    np.testing.assert_allclose(msg.pred_y, [205.0, 210.0, 215.0, 220.0, 225.0])
+    np.testing.assert_allclose(msg.pred_conf, [0.9, 0.8, 0.7, 0.6, 0.5])
 
 
 def test_make_target_track_pads_short_predictions():
@@ -269,8 +269,8 @@ def test_make_target_track_pads_short_predictions():
     assert len(msg.pred_x) == 5
     assert len(msg.pred_y) == 5
     assert len(msg.pred_conf) == 5
-    assert msg.pred_x[:2] == [100.0, 110.0]
-    assert msg.pred_x[2:] == [0.0, 0.0, 0.0]
+    np.testing.assert_allclose(msg.pred_x[:2], [100.0, 110.0])
+    np.testing.assert_allclose(msg.pred_x[2:], [0.0, 0.0, 0.0])
 
 
 def test_make_target_track_defaults():
@@ -476,9 +476,9 @@ def test_predicted_trajectories_preserved():
         pred_x=pred_x, pred_y=pred_y, pred_conf=pred_conf,
     )
     msg = TrackerNode._make_target_track(None, rec)
-    assert msg.pred_x == pred_x
-    assert msg.pred_y == pred_y
-    assert msg.pred_conf == pred_conf
+    np.testing.assert_allclose(msg.pred_x, pred_x)
+    np.testing.assert_allclose(msg.pred_y, pred_y)
+    np.testing.assert_allclose(msg.pred_conf, pred_conf)
 
 
 # ---------------------------------------------------------------------------

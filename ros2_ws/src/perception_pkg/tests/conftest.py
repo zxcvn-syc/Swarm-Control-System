@@ -8,6 +8,7 @@ stubs are in sys.modules when tracker_node.py tries to import them.
 
 from __future__ import annotations
 
+import importlib
 import importlib.abc
 import importlib.machinery
 import importlib.util
@@ -187,6 +188,42 @@ def _install_rclpy_stubs() -> None:
             pass
 
 
+def _prefer_real_message_modules() -> None:
+    """Restore generated ROS message modules when launch-testing preloads stubs."""
+    try:
+        import rclpy
+    except ImportError:
+        return
+    if str(getattr(rclpy, "__file__", "")).startswith("<stub:"):
+        return
+
+    for package, message_name in (
+        ("std_msgs", "Header"),
+        ("diagnostic_msgs", "DiagnosticArray"),
+        ("builtin_interfaces", "Time"),
+    ):
+        module_name = f"{package}.msg"
+        message_module = sys.modules.get(module_name)
+        message_type = getattr(message_module, message_name, None)
+        if hasattr(getattr(message_type, "__class__", None), "_TYPE_SUPPORT"):
+            continue
+
+        saved_modules = {
+            name: sys.modules[name]
+            for name in (package, module_name)
+            if name in sys.modules
+        }
+        sys.modules.pop(module_name, None)
+        sys.modules.pop(package, None)
+        try:
+            message_module = importlib.import_module(module_name)
+            message_type = getattr(message_module, message_name)
+            if not hasattr(message_type.__class__, "_TYPE_SUPPORT"):
+                raise ImportError(f"{module_name}.{message_name} lacks type support")
+        except (ImportError, AttributeError):
+            sys.modules.update(saved_modules)
+
+
 # ---------------------------------------------------------------------------
 # Meta path finder
 # ---------------------------------------------------------------------------
@@ -202,6 +239,7 @@ def _ensure_stubs() -> None:
         _STUBS_INSTALLED = True
         _install_rclpy_stubs()
         _make_swarm_stub()
+        _prefer_real_message_modules()
 
 
 class _PerceptionPkgFinder(importlib.abc.MetaPathFinder):
