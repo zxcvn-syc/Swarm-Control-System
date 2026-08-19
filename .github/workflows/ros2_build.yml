@@ -59,7 +59,7 @@ jobs:
             bash -c "set -o pipefail && \
                      source /opt/ros/humble/setup.bash && \
                      source ros2_ws/install/setup.bash && \
-                     python3 -m pytest ros2_ws/src/planning_pkg/tests/ ros2_ws/src/scheduler_pkg/tests/ ros2_ws/src/containment_pkg/tests/ ros2_ws/src/perception_pkg/tests/ -v 2>&1 | tail -40"
+                     python3 -m pytest ros2_ws/src/planning_pkg/tests/ ros2_ws/src/scheduler_pkg/tests/ ros2_ws/src/containment_pkg/tests/ ros2_ws/src/perception_pkg/tests/ -v 2>&1 | tail -200"
 
       # ----- Bare-metal fallback ------------------------------------
       # If Docker is unavailable in the runner, fall back to the
