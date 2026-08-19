@@ -109,6 +109,16 @@ def _make_swarm_stub() -> None:
 
 
 def _install_rclpy_stubs() -> None:
+    # If the real rclpy is already importable (e.g. CI sourced
+    # install/setup.bash), use it instead of the stubs.
+    try:
+        import rclpy  # noqa: F401
+        import rclpy.node  # noqa: F401
+        if hasattr(rclpy.node, "Node"):
+            return
+    except ImportError:
+        pass
+
     if "rclpy" in sys.modules:
         return
 
