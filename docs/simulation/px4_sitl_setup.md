@@ -211,10 +211,17 @@ ros2 topic pub /planned_path nav_msgs/Path '{header: {stamp: {sec: 0, nanosec: 0
 ]}' -1
 ```
 
-The drone should take off to z=5 and move toward x=5 in the Gazebo
-window.  Arming is automatic once PX4 receives the offboard setpoint
-stream; if it stays in `AUTO_LOITER` for >5 s, check the MAVROS log for
-"OFFBOARD rejected".
+The bridge keeps publishing at 20 Hz and performs this state sequence:
+
+1. Wait for `/uav0/mavros/state` to report `connected: true`.
+2. Pre-stream the first path point (or the configured hold point) for 3 seconds.
+3. Call `/uav0/mavros/cmd/arming` and wait for `armed: true`.
+4. Call `/uav0/mavros/set_mode` and wait for `mode: OFFBOARD`.
+5. Advance through the planned waypoints while the setpoint stream remains active.
+
+Automatic arming is opt-in.  The SITL launches pass `auto_arm:=true`; the
+standalone bridge default is `false` so a normal ROS2 launch cannot
+unexpectedly arm a connected real vehicle.
 
 ### 4.4 End-to-end with the planner
 
@@ -266,9 +273,11 @@ instead of the bare binary — the script exports it for you.
 ### 5.5 SITL connects but drone never arms
 
 `px4_offboard_bridge` must publish setpoints at >= 2 Hz **before** the
-drone can enter OFFBOARD mode.  If you publish a path of length 1, the
-bridge will publish the same waypoint forever (good); if you publish an
-empty path, the bridge stops publishing (bad).
+drone can enter OFFBOARD mode.  The bridge now publishes a configurable
+hold point even when `/planned_path` is empty, pre-streams for 3 seconds,
+then retries ARM and OFFBOARD service calls until `/mavros/state`
+confirms both transitions.  Check that the launch passes the MAVROS
+state and service names for its namespace.
 
 ---
 

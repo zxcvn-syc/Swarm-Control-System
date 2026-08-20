@@ -8,6 +8,7 @@
 |---|---|---|---|
 | P0-lite launch/demo 替换 stub | 真实 `planner_node` 接入 `three_links.launch.py` 与 demo build | 已完成 | 现有 launch/script 改动 |
 | P3 SITL bridge nodes | `px4_offboard_bridge.py`、`sitl_pose_bridge.py`、UGV publisher | 已完成/已修正 | 反馈 topic 统一为 `/uav0/mavros/local_position/pose` |
+| P1 ARM + OFFBOARD 控制 | 订阅 `/mavros/state`，连接后预发 setpoint 3 秒，调用 ARM，确认解锁后切换 `OFFBOARD`，持续输出路径 setpoint | 已实现/待SITL复验 | `px4_offboard_bridge.py` 状态机；SITL launch 显式设置 `auto_arm:=true` |
 | coord_transform 常驻 | 集成 launch 保持常驻坐标转换节点 | 已完成 | `three_links.launch.py` |
 | Tracker NumPy 断言 | 修复数组 `==` 比较 | 已验证 | VM perception/fusion `28 passed, 10 skipped, 1 warning` |
 | Follower QoS | 传感器位姿订阅使用 `qos_profile_sensor_data` | 已验证 | `rflysim_follower.py` 与 SITL bridge |
