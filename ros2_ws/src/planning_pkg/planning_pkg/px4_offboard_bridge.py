@@ -21,6 +21,7 @@ class PX4OffboardBridge(Node):
         "mode_service": "/mavros/set_mode", "publish_period": 0.05,
         "prestream_seconds": 3.0, "command_retry_seconds": 1.0,
         "offboard_mode": "OFFBOARD", "auto_arm": False,
+        "enable_setpoint_streaming": False, "drone_id": -1,
         "hold_x": 0.0, "hold_y": 0.0, "hold_z": 2.0,
         "coordinate_frame": PositionTarget.FRAME_LOCAL_NED,
     }
@@ -35,7 +36,12 @@ class PX4OffboardBridge(Node):
         for name, default in self.PARAMS.items():
             self.declare_parameter(name, default)
 
-        self.auto_arm = bool(self.get_parameter("auto_arm").value)
+        self.enable_setpoint_streaming = bool(
+            self.get_parameter("enable_setpoint_streaming").value
+        )
+        requested_auto_arm = bool(self.get_parameter("auto_arm").value)
+        self.auto_arm = requested_auto_arm and self.enable_setpoint_streaming
+        self.drone_id = int(self.get_parameter("drone_id").value)
         self.offboard_mode = str(self.get_parameter("offboard_mode").value)
         self.prestream_seconds = max(1.0, self._float_param("prestream_seconds"))
         self.retry_seconds = max(0.2, self._float_param("command_retry_seconds"))
@@ -45,11 +51,14 @@ class PX4OffboardBridge(Node):
         self._waypoints: list[tuple[float, float, float]] = []
         self._state: State | None = None
         self._index = 0
-        self._phase = "manual" if not self.auto_arm else "wait_fcu"
+        self._phase = "disabled" if not self.enable_setpoint_streaming else (
+            "manual" if not self.auto_arm else "wait_fcu"
+        )
         self._stream_started_at: float | None = None
         self._next_command_at = 0.0
         self._arm_future = None
         self._offboard_future = None
+        self._warned_path_scope = False
 
         self.create_subscription(Path, self._str_param("path_topic"), self.on_path, 10)
         self.create_subscription(State, self._str_param("state_topic"), self.on_state, 10)
@@ -57,8 +66,14 @@ class PX4OffboardBridge(Node):
         self.arm_client = self.create_client(CommandBool, self._str_param("arm_service"))
         self.mode_client = self.create_client(SetMode, self._str_param("mode_service"))
         self.create_timer(max(0.01, self._float_param("publish_period")), self.tick)
+        if requested_auto_arm and not self.enable_setpoint_streaming:
+            self.get_logger().warning(
+                "auto_arm ignored because enable_setpoint_streaming is false"
+            )
         self.get_logger().info(
-            f"offboard bridge ready: auto_arm={self.auto_arm}, "
+            "offboard bridge ready: "
+            f"streaming={self.enable_setpoint_streaming}, "
+            f"drone_id={self.drone_id}, auto_arm={self.auto_arm}, "
             f"prestream={self.prestream_seconds:.1f}s"
         )
 
@@ -69,11 +84,33 @@ class PX4OffboardBridge(Node):
         return float(self.get_parameter(name).value)
 
     def on_path(self, message: Path) -> None:
+        if self.drone_id < 0:
+            self._waypoints = []
+            self._index = 0
+            if message.poses and not self._warned_path_scope:
+                self._warned_path_scope = True
+                self.get_logger().warning(
+                    "ignoring /planned_path until a non-negative drone_id is set"
+                )
+            return
+        expected_frame = f"drone_{self.drone_id}"
         self._waypoints = [
-            (float(pose.pose.position.x), float(pose.pose.position.y), float(pose.pose.position.z))
+            (
+                float(pose.pose.position.x),
+                float(pose.pose.position.y),
+                float(pose.pose.position.z),
+            )
             for pose in message.poses
+            if str(getattr(pose.header, "frame_id", "")) == expected_frame
         ]
         self._index = 0
+        if message.poses and not self._waypoints and not self._warned_path_scope:
+            self._warned_path_scope = True
+            self.get_logger().warning(
+                f"ignoring /planned_path with no poses for {expected_frame}"
+            )
+        elif self._waypoints:
+            self._warned_path_scope = False
 
     def on_state(self, message: State) -> None:
         self._state = message
@@ -133,6 +170,8 @@ class PX4OffboardBridge(Node):
             self.get_logger().warning(f"PX4 rejected {command}; retrying")
 
     def tick(self) -> None:
+        if not self.enable_setpoint_streaming:
+            return
         self._publish_setpoint()
         if not self.auto_arm:
             return

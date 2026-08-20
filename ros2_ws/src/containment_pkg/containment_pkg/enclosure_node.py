@@ -49,6 +49,8 @@ class EnclosureNode(Node):
         self.declare_parameter("update_period", 1.0)
         self.declare_parameter("pose_topic", "/uav1/current_pose")
         self.declare_parameter("pose_drone_id", 1)
+        self.declare_parameter("target_track_topic", "/target_track")
+        self.declare_parameter("enclosure_target_topic", "/enclosure_targets")
 
         self._targets = []
         self._batch_drones = []      # from DroneStateArray
@@ -57,12 +59,25 @@ class EnclosureNode(Node):
         self._last_update_time = None
         self._update_count = 0
 
-        self._target_track_sub = self.create_subscription(
-            TargetTrackArray, "/target_track", self.on_target_track, 10
-        )
-        self._enclosure_target_sub = self.create_subscription(
-            EnclosureTargetArray, "/enclosure_targets", self.on_enclosure_targets, 10
-        )
+        target_track_topic = str(
+            self.get_parameter("target_track_topic").value
+        ).strip()
+        enclosure_target_topic = str(
+            self.get_parameter("enclosure_target_topic").value
+        ).strip()
+        self._target_track_sub = None
+        self._enclosure_target_sub = None
+        if target_track_topic:
+            self._target_track_sub = self.create_subscription(
+                TargetTrackArray, target_track_topic, self.on_target_track, 10
+            )
+        if enclosure_target_topic:
+            self._enclosure_target_sub = self.create_subscription(
+                EnclosureTargetArray,
+                enclosure_target_topic,
+                self.on_enclosure_targets,
+                10,
+            )
         self._drone_sub = self.create_subscription(
             DroneStateArray, "/drone_states", self.on_drone, 10
         )

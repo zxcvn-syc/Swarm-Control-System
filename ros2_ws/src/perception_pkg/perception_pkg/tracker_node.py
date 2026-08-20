@@ -122,6 +122,17 @@ import diagnostic_msgs.msg as diag_msgs
 log = logging.getLogger(__name__)
 
 
+def _publish_if_active(publisher: Any, message: Any) -> bool:
+    """Publish unless shutdown has invalidated the ROS context."""
+    try:
+        publisher.publish(message)
+        return True
+    except Exception:
+        if rclpy.ok():
+            raise
+        return False
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     """Coerce ROS parameter values, including launch substitutions, to bool."""
     if value is None:
@@ -593,8 +604,12 @@ class MultiSourceAggregator:
         if not self._enabled:
             try:
                 self._publisher.publish(msg)
-            except rclpy.exceptions.RCLError:
-                pass
+            except Exception:
+                # SIGINT can invalidate the rclpy context between a timer
+                # callback and publish(). Do not hide genuine publish errors
+                # while the node is otherwise still active.
+                if rclpy.ok():
+                    raise
 
     def _source_callback(self, source: str, msg: TargetTrackArray) -> None:
         with self._lock:
@@ -865,10 +880,10 @@ class TrackerNode(Node):
         self._latest_records_frame_idx: Optional[int] = None
         self._latest_records_header: Optional[Header] = None
         self._frame_seq = 0  # monotonic counter used as ``frame_idx``
-        # Publish timer is created below, after input wiring.  Initialise
-        # to None so ``_init_video_input`` (which runs first) can branch
-        # on whether to drive the capture off the publish timer or its
-        # own timer.
+        # Input and inference are driven by paired timers below.  Keeping
+        # capture to one source frame per inference tick is essential for
+        # replay: a zero-period capture timer drains a file before the
+        # publish timer can consume its frames.
         self._timer: Optional[Any] = None
         self._video_timer: Optional[Any] = None
 
@@ -887,7 +902,13 @@ class TrackerNode(Node):
 
             if self._publish_rate > 0.0:
                 period = 1.0 / self._publish_rate
-                self._timer = self.create_timer(period, self._publish_tick)
+            elif self._input_mode == 'video':
+                period = 1.0 / max(self._video_fps, 1.0)
+            else:
+                period = 0.01
+            if self._input_mode == 'video':
+                self._video_timer = self.create_timer(period, self._video_tick)
+            self._timer = self.create_timer(period, self._publish_tick)
         else:
             self.get_logger().info(
                 'local detector input disabled while multi-source fusion is active'
@@ -927,12 +948,6 @@ class TrackerNode(Node):
         self._video_fps = fps
         self.get_logger().info(f'video source opened at {fps:.1f} FPS')
 
-        # Drive the capture off the same publish timer (or a fast timer
-        # if publishing is rate-limited to 0).
-        if self._timer is None:
-            self._video_timer = self.create_timer(0.0, self._video_tick)
-        else:
-            self._video_timer = None
 
     def _init_topic_input(self) -> None:
         if not _HAS_CV_BRIDGE:
@@ -1159,7 +1174,7 @@ class TrackerNode(Node):
         dbg.kf_covariance = kf_cov
         dbg.motion_mode_reasons = mm_reasons
         dbg.appearance_scores = app_scores
-        self._debug_pub.publish(dbg)
+        _publish_if_active(self._debug_pub, dbg)
 
     def _publish_metrics(self) -> None:
         """Publish /tracking_metrics DiagnosticArray at the metrics period."""
@@ -1167,7 +1182,7 @@ class TrackerNode(Node):
             return
         arr = self._metrics_recorder.diagnostic_array()
         arr.header.stamp = self.get_clock().now().to_msg()
-        self._metrics_pub.publish(arr)
+        _publish_if_active(self._metrics_pub, arr)
 
     def _publish_enclosure(self) -> None:
         """Publish targets for enclosure control group."""
@@ -1224,7 +1239,7 @@ class TrackerNode(Node):
         msg.enclosure_radius = 50.0  # Default, can be made configurable
         msg.min_enclosure_dist = 20.0
 
-        self._enclosure_publisher.publish(msg)
+        _publish_if_active(self._enclosure_publisher, msg)
 
     def _make_enclosure_target(self, rec) -> "EnclosureTarget":
         """Create an EnclosureTarget message from a track record."""

@@ -130,7 +130,7 @@ Swarm-Control-System/
 
 目前项目处于系统设计与开发环境搭建阶段。
 
-后续将逐步完成 ROS2 节点开发、PX4 飞控接入、RflySim 仿真验证以及异构无人集群协同封控算法实现。
+后续将逐步完成 ROS2 节点开发、PX4 飞控接入、RflySim 仿真验证以及异构无人集群协同封控算法实现。真机部署采用分阶段、人工在环的方式，具体边界与验收步骤见 [真机部署方案](docs/deployment/real_uav_deployment.md)。
 
 ---
 
