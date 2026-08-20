@@ -17,13 +17,14 @@
 | `/target_track` | `swarm_interfaces/msg/TargetTrackArray` | `tracker_node` | `scheduler_node` / `planner_stub_node` | RELIABLE depth=10 | `camera_optical_frame`（像素） | 字段定义见 §2.1 |
 | `/enclosure_targets` | `swarm_interfaces/msg/EnclosureTargetArray` | `tracker_node`（仅当 `enclosure.enabled:=true`） | `enclosure_node` | RELIABLE depth=5 | `camera_optical_frame` | 字段定义见 §2.2 |
 | `/task_assignment` | `swarm_interfaces/msg/TaskAssignment` | `scheduler_node` | `planner_stub_node`（规划) / 仿真器 | RELIABLE depth=10 | 不带 header；坐标系约定为`world` (下游消费时按 ENU 解释) | 每对（drone, target）一条；scheduler tick 全量重发 |
-| `/drone_states` | `swarm_interfaces/msg/DroneStateArray` | `planner_stub_node`（规划侧占位）| `scheduler_node` / `enclosure_node` | RELIABLE depth=10 | n/a (`DroneStateArray` 无 header) | ENU 局部坐标米 |
+| `/drone_states` | `swarm_interfaces/msg/DroneStateArray` | `planner_node` | `scheduler_node` / `enclosure_node` / `tracker_node` | RELIABLE depth=10 | `world`（ENU） | 头部时间戳用于感知与平台状态对齐 |
 | `/drone_state` | `swarm_interfaces/msg/DroneState` | `planner_stub_node` | （预留订阅） | RELIABLE depth=10 | n/a | 单机版本；`DroneStateArray` 的 per-drone split |
 | `/enclosure_command` | `swarm_interfaces/msg/EnclosureCommandArray` | `enclosure_node` | 控制组 / 仿真器 | RELIABLE depth=10 | n/a | 空闲态输出 `target_x=NaN`, `enclosure_radius=0.0` |
 | `/target_track_debug` | `swarm_interfaces/msg/TargetTrackDebug` | `tracker_node` | 调试面板 | RELIABLE depth=10 | `camera_optical_frame` | KF 协方差、motion_mode 原因、appearance score |
 | `/tracking_metrics` | `diagnostic_msgs/DiagnosticArray` | `tracker_node` | 调试面板 | RELIABLE depth=5 | n/a | 5 项指标 |
 | `/target_track_world` | `swarm_interfaces/msg/TargetTrackArray` | `coord_transform_node` | 世界坐标系消费者 | RELIABLE depth=10 | `world` (ENU) | 选配；`coord_transform_node` 上线后再启用 |
 | `/camera/image` | `sensor_msgs/Image` | Camera driver / synthetic | `tracker_node`（`input_mode:=topic`） | BEST_EFFORT depth=1 | `camera_optical_frame` | 仅感知用 |
+| `/uav0/mavros/local_position/pose` | `geometry_msgs/msg/PoseStamped` | MAVROS | `sitl_pose_bridge` | BEST_EFFORT-compatible sensor QoS | local frame | 单机 SITL feedback；桥接为 `/drone_pose_external` |
 
 > **QoS 约定**：所有 ROS2 Topic（除 raw image）使用 **RELIABLE depth=10**；raw image 用 BEST_EFFORT depth=1。修改需在这里更新，并同步对应 `create_publisher`/`create_subscription` 的 QoS 参数。
 
@@ -97,7 +98,7 @@ string task_type
 > 每条决议有 ID 与最终拍板时间。推翻一条决议需要新建一条带 `REPLACES D-N` 的新决议。
 
 ### D-1（时间戳）
-**`header.stamp` 使用发布当时的节点 wallclock（rclpy `node.get_clock().now()`）。**
+**`TargetTrackArray.header.stamp` 使用最新 `/drone_states.header.stamp`；在状态尚未到达时使用输入图像时间戳或节点时钟。**
 
 bag 回放测试时使用 `ros2 bag play --clock` 注入 sim time。
 
@@ -107,7 +108,8 @@ bag 回放测试时使用 `ros2 bag play --clock` 注入 sim time。
 | `/target_track` | 像素（图像平面），`frame_id="camera_optical_frame"`（默认） |
 | `/enclosure_targets` | 像素，`frame_id="camera_optical_frame"` |
 | `/target_track_world`（如果启用）| ENU 局部，`frame_id="world"` |
-| `/drone_states`, `/drone_state` | ENU 局部米，`frame_id="world"`（`DroneStateArray` 自身无 header，约定以"world"理解） |
+| `/drone_states` | ENU 局部米，`header.frame_id="world"` |
+| `/drone_state` | ENU 局部米，按 `world` 解释 |
 | `/task_assignment`, `/enclosure_command` | 坐标以 `world` (ENU) 解释，没有 header.stamp |
 
 **上游（`tracker_node`）默认发布像素坐标**；下游（`scheduler_node`、`enclosure_node`）当前也消费像素坐标。如果未来 scheduler/enclosure 切到世界坐标，**不修改 `tracker_node`**，而是在中间加 `coord_transform_node` 并把 launch / 配置改成订阅 `/target_track_world`。

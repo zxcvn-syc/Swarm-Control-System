@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 import rclpy
 from nav_msgs.msg import Path
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 from mavros_msgs.msg import PositionTarget
 
 
@@ -52,7 +53,7 @@ def main(args: Optional[List[str]] = None) -> None:
     node = PX4OffboardBridge()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

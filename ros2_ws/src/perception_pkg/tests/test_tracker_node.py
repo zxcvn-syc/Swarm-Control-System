@@ -89,6 +89,10 @@ def _install_node_stubs(node: types.SimpleNamespace) -> None:
     node._latest_records = []
     node._latest_records_frame_idx = None
     node._latest_records_header = None
+    # P1-C: drone-state cache (default empty so _publish_tick falls back to clock).
+    node._drone_state_lock = threading.Lock()
+    node._latest_drone_state = {}
+    node._latest_drone_state_header = None
 
 
 class FakeRecord:
@@ -505,3 +509,171 @@ def test_aggregator_direct_publish():
     fake_msg = types.SimpleNamespace()
     agg.publish_local(fake_msg)
     mock_pub.publish.assert_called_once_with(fake_msg)
+
+
+# ---------------------------------------------------------------------------
+# 7. UAV state synchronization (P1-C)
+# ---------------------------------------------------------------------------
+
+def _install_drone_state_stubs(node):
+    """Add the drone-state cache attributes required by _publish_tick."""
+    node._drone_state_lock = threading.Lock()
+    node._latest_drone_state = {}
+    node._latest_drone_state_header = None
+
+
+def _make_ros_time(sec=0, nanosec=0):
+    """Return a real builtin_interfaces.msg.Time for header assignments."""
+    from builtin_interfaces.msg import Time as _BuiltinTime
+    return _BuiltinTime(sec=sec, nanosec=nanosec)
+
+
+def _make_ros_header(sec=0, nanosec=0, frame_id="world"):
+    """Return a real std_msgs.msg.Header with the given stamp / frame_id."""
+    from std_msgs.msg import Header as _Header
+    header = _Header()
+    header.stamp = _make_ros_time(sec, nanosec)
+    header.frame_id = frame_id
+    return header
+
+
+def test_publish_tick_uses_drone_state_stamp_when_available():
+    """When /drone_states provides a header.stamp, outgoing message must mirror it."""
+    node = TrackerNode.__new__(TrackerNode)
+    node._frame_seq = 0
+    node._frame_id = "camera_optical_frame"
+    node._runner = _build_mock_runner([FakeRecord(target_id=1)])
+    node._aggregator = mock.MagicMock()
+    _install_node_stubs(node)
+    _install_drone_state_stubs(node)
+
+    drone_header = _make_ros_header(
+        sec=1234, nanosec=567000000, frame_id="world",
+    )
+    state = types.SimpleNamespace(
+        drone_id=1, x=1.0, y=2.0, z=3.0,
+        vx=0.0, vy=0.0, vz=0.0,
+        available=True, platform_type=0,
+    )
+    node._on_drone_state(types.SimpleNamespace(
+        header=drone_header, drones=[state], num_drones=1,
+    ))
+
+    cached_states, cached_header = node._drone_state_snapshot()
+    assert 1 in cached_states
+    assert cached_states[1]["x"] == pytest.approx(1.0)
+    assert cached_header.stamp.sec == 1234
+    assert cached_header.stamp.nanosec == 567000000
+
+    with mock.patch.object(
+        node, "_consume_latest_frame",
+        return_value=(np.zeros((480, 640, 3), dtype=np.uint8), None)
+    ):
+        node._publish_tick()
+        msg = node._aggregator.publish_local.call_args[0][0]
+
+    assert msg.header.stamp.sec == 1234
+    assert msg.header.stamp.nanosec == 567000000
+    assert msg.header.frame_id == "camera_optical_frame"
+
+
+def test_publish_tick_falls_back_to_local_clock_without_drone_state():
+    """With no /drone_states yet, the local clock stamp is preserved."""
+    node = TrackerNode.__new__(TrackerNode)
+    node._frame_seq = 0
+    node._frame_id = "camera_optical_frame"
+    node._runner = _build_mock_runner([FakeRecord(target_id=1)])
+    node._aggregator = mock.MagicMock()
+    _install_node_stubs(node)
+    _install_drone_state_stubs(node)
+
+    with mock.patch.object(
+        node, "_consume_latest_frame",
+        return_value=(np.zeros((480, 640, 3), dtype=np.uint8), None)
+    ):
+        node._publish_tick()
+        msg = node._aggregator.publish_local.call_args[0][0]
+
+    assert msg.header.stamp.sec == 1
+    assert msg.header.stamp.nanosec == 0
+
+
+def test_publish_tick_uses_drone_state_stamp_but_keeps_node_frame_id():
+    """Drone-state stamp overrides the source stamp; node.frame_id wins over drone-state frame_id."""
+    node = TrackerNode.__new__(TrackerNode)
+    node._frame_seq = 0
+    node._frame_id = "uav/camera_optical"
+    node._runner = _build_mock_runner([FakeRecord(target_id=1)])
+    node._aggregator = mock.MagicMock()
+    _install_node_stubs(node)
+    _install_drone_state_stubs(node)
+
+    drone_header = _make_ros_header(
+        sec=9999, nanosec=42, frame_id="world",
+    )
+    node._on_drone_state(types.SimpleNamespace(
+        header=drone_header, drones=[], num_drones=0,
+    ))
+
+    image_header = _make_ros_header(
+        sec=10, nanosec=0, frame_id="<unused>",
+    )
+
+    with mock.patch.object(
+        node, "_consume_latest_frame",
+        return_value=(np.zeros((480, 640, 3), dtype=np.uint8), image_header)
+    ):
+        node._publish_tick()
+        msg = node._aggregator.publish_local.call_args[0][0]
+
+    # stamp comes from /drone_states, frame_id comes from node config
+    assert msg.header.stamp.sec == 9999
+    assert msg.header.frame_id == "uav/camera_optical"
+
+
+def test_on_drone_state_replaces_cache_atomically():
+    """A new /drone_states message fully replaces the prior snapshot."""
+    node = TrackerNode.__new__(TrackerNode)
+    _install_drone_state_stubs(node)
+
+    older_header = _make_ros_header(sec=1, nanosec=0)
+    older = types.SimpleNamespace(
+        header=older_header,
+        drones=[types.SimpleNamespace(
+            drone_id=7, x=0.0, y=0.0, z=0.0,
+            vx=0.0, vy=0.0, vz=0.0,
+            available=True, platform_type=0,
+        )],
+        num_drones=1,
+    )
+    newer_header = _make_ros_header(sec=2, nanosec=0)
+    newer = types.SimpleNamespace(
+        header=newer_header,
+        drones=[types.SimpleNamespace(
+            drone_id=8, x=9.0, y=8.0, z=7.0,
+            vx=0.0, vy=0.0, vz=0.0,
+            available=True, platform_type=0,
+        )],
+        num_drones=1,
+    )
+
+    node._on_drone_state(older)
+    node._on_drone_state(newer)
+
+    cached_states, cached_header = node._drone_state_snapshot()
+    assert list(cached_states.keys()) == [8]
+    assert cached_states[8]["x"] == pytest.approx(9.0)
+    assert cached_header.stamp.sec == 2
+
+
+def test_declare_parameters_includes_drone_states_topic():
+    """``_declare_parameters`` must register ``drone_states_topic``."""
+    mock_node = mock.MagicMock()
+    declared_keys = []
+
+    def _declare(name, *args, **kwargs):
+        declared_keys.append(name)
+
+    mock_node.declare_parameter = _declare
+    _declare_parameters(mock_node)
+    assert "drone_states_topic" in declared_keys

@@ -98,6 +98,12 @@
       publish_rate_hz: 5.0
       drone_positions: []                    # e.g. [{x: 0.0, y: 0.0}, ...]
 
+    # ── UAV state synchronization (P1-C) ─────────────────────────────────
+    # tracker_node subscribes to this topic and overrides the
+    # TargetTrackArray.header.stamp with DroneStateArray.header.stamp
+    # so the downstream enclosure_node closed loop stays consistent.
+    drone_states_topic: "/drone_states"
+
     # ── Coordinate transform (coord_transform_node) ──────────────────────────
     coord_transform:
       enabled: false                         # true = also publish world-frame tracks

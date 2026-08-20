@@ -1,4 +1,4 @@
-"""three_links.launch.py — bring up the full five-node integration.
+"""three_links.launch.py — bring up the full eight-node integration.
 Launches:
 * ``tracker_node``           (perception_pkg)    → /target_track + /enclosure_targets
 * ``coord_transform_node``   (perception_pkg)    → /target_track_world (pixel→world)
@@ -8,6 +8,11 @@ Launches:
                                                      → /drone_states + /planned_path
 * ``enclosure_node``         (containment_pkg)   ← /enclosure_targets + /drone_states
                                                      → /enclosure_command
+* ``ugv_state_publisher``    (planning_pkg)      → /ugv_states
+* ``px4_offboard_bridge``    (planning_pkg)      ← /planned_path
+                                                     → /uav0/mavros/setpoint_raw/local
+* ``sitl_pose_bridge``       (planning_pkg)      ← /uav0/mavros/local_position/pose
+                                                     → /drone_pose_external
 The integration test (``ros2_ws/test_three_links.py``) consumes the
 same topic map; the values in this file are the binding truth and are
 duplicated in ``docs/integration/interface_alignment.md`` (table
@@ -200,6 +205,30 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    ugv_state_pub = Node(
+        package="planning_pkg",
+        executable="ugv_state_pub",
+        name="ugv_state_publisher",
+        output="screen",
+        parameters=[{"num_ugv": 2}],
+    )
+
+    px4_offboard_bridge = Node(
+        package="planning_pkg",
+        executable="px4_offboard_bridge",
+        name="px4_offboard_bridge",
+        output="screen",
+        parameters=[{}],
+    )
+
+    sitl_pose_bridge = Node(
+        package="planning_pkg",
+        executable="sitl_pose_bridge",
+        name="sitl_pose_bridge",
+        output="screen",
+        parameters=[{"platform_type": 0}],
+    )
+
     return LaunchDescription(
         args + [
             tracker_node,
@@ -207,5 +236,8 @@ def generate_launch_description() -> LaunchDescription:
             scheduler_node,
             planner_node,
             enclosure_node,
+            ugv_state_pub,
+            px4_offboard_bridge,
+            sitl_pose_bridge,
         ]
     )
