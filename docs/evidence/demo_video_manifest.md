@@ -7,7 +7,7 @@
 | 坐标转换与多源融合 | 45 秒 | ROS topic / 可视化录制 | `/target_track_world`、fusion pytest 日志 | 测试已通过，演示画面待采集 |
 | 调度与路径规划 | 60 秒 | ROS 图与路径叠加 | `/task_assignment`、`/planned_path` 录制 | headless 三链路已运行；桌面可视化待采集 |
 | 空地协同封控 | 90 秒 | Gazebo 场景录制 | `/enclosure_command`、场景配置 | 待 Gazebo 完整运行 |
-| 三场景剪辑 | 90 秒 | 园区、赛事、应急三段真实录制 | 每段原始视频、时间戳、场景参数 | 待采集 |
+| 三场景剪辑 | 90 秒 | Gazebo 仿真 + 两段视频输入回放 | 每段原始视频、时间戳、场景参数 | 已完成；来源边界写入画面 |
 | 指标结尾 | 30 秒 | PPT/可视化 | 七项指标原始 CSV/JSON | 两小时 headless 数据已归档；其余指标待采集 |
 
 `record_three_links.sh --mode ffmpeg` 才生成真实 MP4；`pseudo` 与 `ros2bag` 模式只产生日志或 bag，不能作为演示视频交付。

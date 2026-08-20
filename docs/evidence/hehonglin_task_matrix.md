@@ -16,9 +16,9 @@
 | 最小 Gazebo/PX4 SITL | 单机 world、launch、Docker/bootstrap | 已验证 | Ubuntu 22.04 VM 实际启动 PX4 v1.14、Gazebo Classic 和 MAVROS；见 `sitl_vm_smoke_20260820.md` |
 | SITL 与 ROS2 桥接 | planner path -> offboard；pose -> `/drone_pose_external` | 已验证 | 隔离 ROS domain 中采到 heartbeat、MAVROS pose、`DroneStateArray` 与 `(2,-1,3)` setpoint 原始样本 |
 | 连续运行 >= 2h | soak log、CSV、JSON | 已验证 | Ubuntu 22.04 VM、`ROS_DOMAIN_ID=60`，`PASS`，实际 `7256 s`；见 `three_links_soak_20260820.md` 与 `soak_20260820_004344_*` |
-| 三场景/封控视频素材 | Gazebo 画面、真机素材（如有）、字幕文案 | 历史感知素材已留存，Gazebo待采集 | `demo_video_manifest.md`、captions template |
+| 三场景/封控视频素材 | Gazebo 画面、高质量跟踪回放素材、字幕文案 | 已完成 | `videos/gazebo_gui_final_20260820.mp4`、`videos/three_scene_system_demo_20260820.mp4`、`data/demo_inputs/`；仅 Gazebo 段为实际 PX4/Gazebo GUI 仿真 |
 | 报告第 4 章感知内容 | DeepSORT、坐标变换、多源融合、态势感知 | 已完成初稿 | `docs/report/何泓林_感知与风险章节.md` |
-| 演示视频精剪/定稿 | 5-10 min、字幕、1080p MP4 | 部分完成 | 已有 `tracked.mp4`；完整系统桌面 MP4 与三场景精剪待采集，headless soak 不替代视频 |
+| 演示视频精剪/定稿 | 5-10 min、字幕、1080p MP4 | 已完成本轮 90 秒精剪 | 一个 1080p 三场景成片与一个 720p Gazebo 原始录制已归档；输入回放不是实地部署，也未声称真实飞行 |
 | 接口/测试/CI 归档 | D-1~D-12、测试报告、CI 说明 | 已完成 | `docs/interface/`、`docs/integration/`、`docs/evidence/` |
 | 架构与仿真 PPT | 可编辑 deck，P5 原样实测图 | 已完成并校验 | `docs/report/何泓林_完整汇报_可编辑.pptx`；15 页 PDF/JPG 渲染检查通过 |
 | 风险与安全章节 | 技术、合规、运行安全 | 已完成初稿 | `docs/report/何泓林_感知与风险章节.md` |
