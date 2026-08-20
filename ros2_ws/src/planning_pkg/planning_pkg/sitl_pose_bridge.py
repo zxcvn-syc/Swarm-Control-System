@@ -7,6 +7,8 @@ from typing import List, Optional
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+from rclpy.qos import qos_profile_sensor_data
 from swarm_interfaces.msg import DroneState, DroneStateArray
 
 
@@ -15,13 +17,18 @@ class SITLPoseBridge(Node):
 
     def __init__(self) -> None:
         super().__init__("sitl_pose_bridge")
-        self.declare_parameter("pose_topic", "/mavros/mocap/pose")
+        self.declare_parameter("pose_topic", "/mavros/local_position/pose")
         self.declare_parameter("state_topic", "/drone_pose_external")
         self.declare_parameter("drone_id", 0)
         self.declare_parameter("platform_type", 0)
         self.declare_parameter("frame_id", "world")
         self.pub = self.create_publisher(DroneStateArray, str(self.get_parameter("state_topic").value), 10)
-        self.sub = self.create_subscription(PoseStamped, str(self.get_parameter("pose_topic").value), self.on_pose, 10)
+        self.sub = self.create_subscription(
+            PoseStamped,
+            str(self.get_parameter("pose_topic").value),
+            self.on_pose,
+            qos_profile_sensor_data,
+        )
         self._last_pose = None
 
     def on_pose(self, message: PoseStamped) -> None:
@@ -54,7 +61,7 @@ def main(args: Optional[List[str]] = None) -> None:
     node = SITLPoseBridge()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

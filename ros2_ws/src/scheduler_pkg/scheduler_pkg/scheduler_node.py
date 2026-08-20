@@ -7,6 +7,7 @@ import numpy as np
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.executors import ExternalShutdownException
     from rclpy.qos import QoSProfile, QoSReliabilityPolicy
     from swarm_interfaces.msg import DroneStateArray, TargetTrackArray, TaskAssignment
     _HAS_ROS = True
@@ -14,6 +15,7 @@ except ImportError:
     _HAS_ROS = False
     rclpy = None
     Node = object
+    ExternalShutdownException = Exception
     QoSProfile = object
     QoSReliabilityPolicy = object
     DroneStateArray = object
@@ -272,7 +274,7 @@ def main(args: Optional[List[str]] = None) -> None:
     node = SchedulerNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

@@ -11,11 +11,12 @@
 #       pseudo  : 伪录屏 → 仅写 tee 日志到 output/*.log（**默认**，无 ROS2 GUI 的环境）
 #
 # 默认是 pseudo：环境里通常没有 ROS2 GUI / X11 / ffmpeg 桌面录制，因此默认只产
-# 出命令行日志与 ROS2 bag 到 video_output。同名 .mp4 是占位，并不真的是视频。
+# 出命令行日志和 JSON 验证报告。pseudo 与 ros2bag 模式不会生成 MP4；仅 ffmpeg
+# 模式可作为演示视频素材。
 #
 # 在有 GUI 的机器上请显式 --mode ffmpeg。
 
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -54,6 +55,9 @@ done
 
 if [[ -z "$VIDEO" ]]; then
   VIDEO="$REPO_ROOT/videos/test_multi_target_tracking.mp4"
+  if [[ ! -f "$VIDEO" ]]; then
+    VIDEO="$WORKSPACE/src/perception_pkg/test_videos/pexels_pedestrian_crossing.mp4"
+  fi
 fi
 DATE_STR="$(date +%Y%m%d_%H%M%S)"
 if [[ -z "$OUTFILE" ]]; then
@@ -84,13 +88,7 @@ case "$MODE" in
         window_sec:="$WINDOW" \
         report_path:="$OUTPUT_DIR/integration_test_${DATE_STR}.json"
     ) 2>&1 | tee "$LOG_FILE"
-    # 占位 mp4（仅文件存在性凭证）
-    if [[ ! -f "$OUTFILE" ]]; then
-      echo "[record_three_links] (pseudo) creating placeholder $OUTFILE"
-      mkdir -p "$(dirname "$OUTFILE")"
-      echo "# Placeholder; pseudo-mode recording.  See $LOG_FILE and integration_test_${DATE_STR}.json" > "$OUTFILE"
-    fi
-    echo "[record_three_links] DONE -> $LOG_FILE and $OUTFILE"
+    echo "[record_three_links] DONE -> $LOG_FILE (no MP4 in pseudo mode)"
     ;;
 
   ros2bag)
@@ -115,12 +113,7 @@ case "$MODE" in
     BAG_PID=$!
     wait $LAUNCH_PID
     kill -INT $BAG_PID 2>/dev/null || true
-    # 写占位 mp4
-    if [[ ! -f "$OUTFILE" ]]; then
-      mkdir -p "$(dirname "$OUTFILE")"
-      echo "# ros2 bag recording at $BAG_DIR" > "$OUTFILE"
-    fi
-    echo "[record_three_links] DONE -> bag: $BAG_DIR  log: $LOG_FILE"
+    echo "[record_three_links] DONE -> bag: $BAG_DIR  log: $LOG_FILE (no MP4 in ros2bag mode)"
     ;;
 
   ffmpeg)

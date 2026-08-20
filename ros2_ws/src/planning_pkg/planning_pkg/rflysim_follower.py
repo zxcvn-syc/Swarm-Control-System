@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 import math
@@ -11,7 +12,12 @@ class RflySimFollower(Node):
         # 订阅规划好的路径
         self.path_sub = self.create_subscription(Path, '/planned_path', self.path_callback, 10)
         # 订阅无人机当前实际位置 (来自 RflySim/MAVROS)
-        self.pose_sub = self.create_subscription(PoseStamped, '/mavros/local_position/pose', self.pose_callback, 10)
+        self.pose_sub = self.create_subscription(
+            PoseStamped,
+            '/mavros/local_position/pose',
+            self.pose_callback,
+            qos_profile_sensor_data,
+        )
         
         # 发布给 RflySim 的控制指令点
         self.target_pub = self.create_publisher(PoseStamped, '/mavros/setpoint_position/local', 10)

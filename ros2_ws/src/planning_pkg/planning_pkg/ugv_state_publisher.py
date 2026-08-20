@@ -6,6 +6,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from swarm_interfaces.msg import DroneState, DroneStateArray, TaskAssignment
 
@@ -93,7 +94,7 @@ def main(args: Optional[List[str]] = None) -> None:
     node = UGVStatePublisher()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

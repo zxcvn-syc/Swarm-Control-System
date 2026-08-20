@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "requested_duration_s": 7200,
+  "elapsed_duration_s": 7256,
+  "sample_interval_s": 60,
+  "video_source": "/home/hhh/codex-swarm-validation-v2/ros2_ws/src/perception_pkg/test_videos/pexels_pedestrian_crossing.mp4",
+  "log_file": "/home/hhh/codex-swarm-validation-v2/output/soak/soak_20260820_004344.log",
+  "memory_samples_csv": "/home/hhh/codex-swarm-validation-v2/output/soak/soak_20260820_004344_samples.csv",
+  "failure_reason": ""
+}

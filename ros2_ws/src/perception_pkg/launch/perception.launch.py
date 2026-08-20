@@ -104,6 +104,8 @@ def _make_tracker_node(context) -> Node:
             "enclosure.topic": LaunchConfiguration("enclosure_topic"),
             "enclosure.publish_rate_hz": LaunchConfiguration("enclosure_publish_rate_hz"),
             "enclosure.drone_positions": LaunchConfiguration("enclosure_drone_positions"),
+            # UAV state synchronization (P1-C)
+            "drone_states_topic": LaunchConfiguration("drone_states_topic"),
             # Diagnostics
             "metrics_period_ms": LaunchConfiguration("metrics_period_ms"),
         }
@@ -245,6 +247,10 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("enclosure_topic", default_value="/enclosure_targets"),
         DeclareLaunchArgument("enclosure_publish_rate_hz", default_value="5.0"),
         DeclareLaunchArgument("enclosure_drone_positions", default_value="[]"),
+        # UAV state synchronization (P1-C)
+        DeclareLaunchArgument("drone_states_topic", default_value="/drone_states",
+                             description="swarm_interfaces/DroneStateArray topic "
+                                         "for closed-loop time synchronization"),
         # Diagnostics
         DeclareLaunchArgument("metrics_period_ms", default_value="1000"),
         # Coordinate transform

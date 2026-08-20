@@ -21,7 +21,7 @@
 #   * Removed planner_stub from build list
 #   * Launch now uses 5 nodes: tracker → coord_transform → scheduler → planner → enclosure
 #   * --dry-run now actually validates launch args with --show-args after build
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -56,6 +56,9 @@ done
 
 if [[ -z "$VIDEO" ]]; then
   VIDEO="$REPO_ROOT/videos/test_multi_target_tracking.mp4"
+  if [[ ! -f "$VIDEO" ]]; then
+    VIDEO="$WORKSPACE/src/perception_pkg/test_videos/pexels_pedestrian_crossing.mp4"
+  fi
 fi
 
 # --- 0. 准备环境 ----------------------------------------------------------

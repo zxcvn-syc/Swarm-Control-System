@@ -258,7 +258,14 @@ def run_e2e_test(
     if not _RCLPY_OK:
         return {"status": "SKIP", "reason": "rclpy not available"}
 
-    rclpy.init()
+    owns_rclpy_context = False
+    if not rclpy.ok():
+        rclpy.init()
+        owns_rclpy_context = True
+
+    publisher = None
+    bridge = None
+    executor = None
     try:
         publisher = TestPublisherNode(
             target_id, pos_a, pos_b, conf_a, conf_b,
@@ -273,24 +280,21 @@ def run_e2e_test(
             QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
         )
 
-        import concurrent.futures
-        executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
+        executor = rclpy.executors.SingleThreadedExecutor()
         executor.add_node(publisher)
         executor.add_node(bridge)
 
         publish_start = time.monotonic()
-        spin_thread = threading.Thread(
-            target=executor.spin, daemon=True,
-        )
-        spin_thread.start()
-
-        ok = result.wait(timeout=wait_seconds)
+        deadline = publish_start + wait_seconds
+        while not result.wait(timeout=0.0) and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+        ok = result.wait(timeout=0.0)
         elapsed = time.monotonic() - publish_start
 
         # Let a few more messages accumulate
-        time.sleep(0.5)
-        executor.shutdown()
-
+        settle_deadline = time.monotonic() + 0.5
+        while time.monotonic() < settle_deadline:
+            executor.spin_once(timeout_sec=0.05)
         if not ok or not result.received:
             return {
                 "status": "FAIL",
@@ -302,31 +306,20 @@ def run_e2e_test(
         last_msg = result.received[-1]
         tracks = list(last_msg.tracks)
 
-        if len(tracks) == 0:
+        if len(tracks) != 1:
             return {
                 "status": "FAIL",
-                "reason": "fused output has 0 tracks",
+                "reason": "fused output does not contain exactly one track",
                 "elapsed_s": elapsed,
                 "messages_received": len(result.received),
+                "track_ids": [track.target_id for track in tracks],
             }
 
-        # Find the target
-        target = None
-        for t in tracks:
-            if t.target_id == target_id:
-                target = t
-                break
-
-        if target is None:
-            return {
-                "status": "FAIL",
-                "reason": f"target_id {target_id} not found in fused output",
-                "track_ids": [t.target_id for t in tracks],
-                "elapsed_s": elapsed,
-            }
-
-        fused_x = target.x
-        fused_y = target.y
+        # TrackFusion assigns a global ID, so the output need not retain the
+        # source-local ``target_id`` supplied by the test publisher.
+        fused_track = tracks[0]
+        fused_x = fused_track.x
+        fused_y = fused_track.y
 
         # Weighted average expectation
         w_a = conf_a / (conf_a + conf_b)
@@ -338,21 +331,26 @@ def run_e2e_test(
         x_between = min(pos_a[0], pos_b[0]) - 1.0 <= fused_x <= max(pos_a[0], pos_b[0]) + 1.0
         y_between = min(pos_a[1], pos_b[1]) - 1.0 <= fused_y <= max(pos_a[1], pos_b[1]) + 1.0
 
-        # Check it's closer to the higher-confidence source
+        # Check that the fused position follows the confidence weighting.
         dist_a = math.hypot(fused_x - pos_a[0], fused_y - pos_a[1])
         dist_b = math.hypot(fused_x - pos_b[0], fused_y - pos_b[1])
-        closer_to_a = dist_a < dist_b  # conf_a > conf_b
+        if math.isclose(conf_a, conf_b):
+            confidence_weight_ok = math.isclose(dist_a, dist_b, abs_tol=1e-6)
+        elif conf_a > conf_b:
+            confidence_weight_ok = dist_a < dist_b
+        else:
+            confidence_weight_ok = dist_b < dist_a
 
-        # Check deduplication: should have exactly 1 track for this target_id
-        same_id_count = sum(1 for t in tracks if t.target_id == target_id)
+        # Check deduplication: both source observations resolve to one track.
+        deduplicated = len(tracks) == 1
 
         # Latency check
         latency_ok = elapsed < 0.5  # 500ms threshold
 
         all_pass = (
             x_between and y_between
-            and closer_to_a
-            and same_id_count == 1
+            and confidence_weight_ok
+            and deduplicated
             and latency_ok
         )
 
@@ -366,15 +364,23 @@ def run_e2e_test(
             "source_b": {"pos": pos_b, "confidence": conf_b},
             "x_between_sources": x_between,
             "y_between_sources": y_between,
-            "closer_to_higher_conf": closer_to_a,
-            "dedup_ok": same_id_count == 1,
+            "confidence_weight_ok": confidence_weight_ok,
+            "dedup_ok": deduplicated,
+            "fused_track_id": fused_track.target_id,
             "track_count": len(tracks),
             "messages_received": len(result.received),
             "latency_ms": round(elapsed * 1000, 1),
             "latency_ok": latency_ok,
         }
     finally:
-        rclpy.try_shutdown()
+        if executor is not None:
+            executor.shutdown()
+        if bridge is not None:
+            bridge.destroy_node()
+        if publisher is not None:
+            publisher.destroy_node()
+        if owns_rclpy_context:
+            rclpy.try_shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +417,25 @@ def test_fusion_e2e_equal_confidence():
         wait_seconds=3.0,
     )
     assert result["status"] == "PASS", f"E2E equal-confidence test failed: {result}"
+
+
+def test_fusion_e2e_reuses_existing_context():
+    """The test must not reinitialize or shut down a shared ROS context."""
+    if not _RCLPY_OK:
+        import pytest
+        pytest.skip("rclpy / swarm_interfaces not available")
+
+    owns_rclpy_context = False
+    if not rclpy.ok():
+        rclpy.init()
+        owns_rclpy_context = True
+    try:
+        result = run_e2e_test(wait_seconds=3.0)
+        assert result["status"] == "PASS", f"shared-context E2E test failed: {result}"
+        assert rclpy.ok()
+    finally:
+        if owns_rclpy_context:
+            rclpy.try_shutdown()
 
 
 # ---------------------------------------------------------------------------

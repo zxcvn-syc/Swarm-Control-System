@@ -21,6 +21,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from rclpy.executors import ExternalShutdownException
 
 import rclpy
 from rclpy.node import Node
@@ -700,7 +701,7 @@ def main(args: Optional[List[str]] = None) -> None:
     node = PlannerNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

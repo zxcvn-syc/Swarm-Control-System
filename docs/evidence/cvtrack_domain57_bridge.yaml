@@ -1,0 +1,17 @@
+header:
+  stamp:
+    sec: 1787190479
+    nanosec: 429583800
+  frame_id: world
+drones:
+- drone_id: 0
+  x: 0.010033019818365574
+  y: -0.013611332513391972
+  z: -0.19541171193122864
+  vx: 0.0011701986913856004
+  vy: -1.449054991397144e-05
+  vz: -0.0023061769238239558
+  available: true
+  platform_type: 0
+num_drones: 1
+---
