@@ -12,7 +12,23 @@ _PKG_PARENT = Path(__file__).resolve().parents[1]
 if str(_PKG_PARENT) not in sys.path:
     sys.path.insert(0, str(_PKG_PARENT))
 
+import rclpy
+
 from scheduler_pkg.scheduler_node import SchedulerNode, normalize_strategy, uint32
+
+
+# ============================================================
+# rclpy fixture — initializes ROS2 before any test runs
+# ============================================================
+@pytest.fixture(autouse=True)
+def rclpy_fixture():
+    """Ensure rclpy is initialized before each test and shutdown after."""
+    if rclpy.ok():
+        rclpy.shutdown()
+    rclpy.init()
+    yield
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
 def track(target_id, x, y, confidence=0.5, is_confirmed=False):
