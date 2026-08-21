@@ -94,6 +94,10 @@ python -m cvtrack --config world_projection \
 完整字段定义、校验规则和移动无人机的额外姿态要求见
 [`docs/world_coordinate_contract.md`](docs/world_coordinate_contract.md)。
 
+RflySim 单 RGB 搜索、视觉触发跟踪和 ROS2 空地封控示例见
+[`examples/rfly_ros2/README.md`](examples/rfly_ros2/README.md)。该示例明确区分图像检测、
+单目投影审计和仿真真值辅助控制，不能作为未经辅助的纯视觉世界坐标证明。
+
 ## 快速上手
 
 ```bash
