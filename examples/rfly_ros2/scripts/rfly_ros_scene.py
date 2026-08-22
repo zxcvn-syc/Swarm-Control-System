@@ -42,6 +42,7 @@ CAMERA_ALTITUDE_M = 58.0
 CAMERA_MIN_ALTITUDE_M = 50.0
 CAMERA_MAX_ALTITUDE_M = 72.0
 CAMERA_SEARCH_MAX_ALTITUDE_M = 92.0
+RFLY_CAMERA_COMMAND_PERIOD_S = 0.10
 SEGMENT_SECONDS = 5.0
 WEATHER_CONTROLLER_ID = 100
 SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
@@ -95,6 +96,7 @@ class RflyRosScene(Node):
         self.dynamic_obstacle_count = int(self.scenario["dynamic_obstacles"])
         self.bump_scale = float(self.scenario["bump_scale"])
         self.rfly_host_ip = os.environ.get("RFLY_HOST_IP", "127.0.0.1")
+        self.rfly_window_id = int(os.environ.get("RFLY_WINDOW_ID", "0"))
         self.publisher = self.create_publisher(
             TargetTrackArray, "/target_track_world", 10
         )
@@ -172,6 +174,7 @@ class RflyRosScene(Node):
         self.camera_velocity = (0.0, 0.0)
         self.camera_yaw_rate = 0.0
         self.camera_search_yaw = 0.0
+        self.last_camera_command_at = -float("inf")
         self.current_dynamic_obstacles: list[dict[str, float | int]] = []
         demo_root = Path(os.environ.get("RFLY_DEMO_ROOT", Path.cwd()))
         telemetry_path = demo_root / "logs" / "scene_telemetry.jsonl"
@@ -180,10 +183,13 @@ class RflyRosScene(Node):
         self.grid_message = self.build_grid_message()
         self.timer = self.create_timer(0.05, self.tick)
         self.ue.sendUE4Cmd(
-            f"RflyChangeMapbyName {self.scenario['map_name']}"
+            f"RflyChangeMapbyName {self.scenario['map_name']}",
+            self.rfly_window_id,
         )
+        self.ue.sendUE4Cmd("RflyChangeViewKeyCmd N 6", self.rfly_window_id)
+        self.ue.sendUE4Cmd("RflyCameraFovDegrees 90", self.rfly_window_id)
         for stale_id in (*range(1, 5), *range(100, 111), *range(200, 211), *range(400, 431)):
-            self.ue.sendUE4Destroy(stale_id)
+            self.ue.sendUE4Destroy(stale_id, self.rfly_window_id)
         if self.weather_type:
             self.ue.sendUE4PosNew(
                 WEATHER_CONTROLLER_ID,
@@ -192,13 +198,15 @@ class RflyRosScene(Node):
                 [0, 0, 0],
                 [0, 0, 0],
                 [0, 0, 0, 0, 0, 0, 0, 0],
+                windowID=self.rfly_window_id,
             )
             self.ue.sendUE4ExtAct(
                 WEATHER_CONTROLLER_ID,
                 [self.weather_type, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                windowID=self.rfly_window_id,
             )
-        self.ue.sendUE4Cmd("r.setres 1280x720w")
-        self.ue.sendUE4Cmd("t.MaxFPS 30")
+        self.ue.sendUE4Cmd("r.setres 1280x720w", self.rfly_window_id)
+        self.ue.sendUE4Cmd("t.MaxFPS 30", self.rfly_window_id)
         self.get_logger().info(
             "Rfly chase scene started: 1 evasive blue target, 3 search UAVs, "
             "3 gray ground interceptors, static and dynamic obstacles; visual input UDP port 35661; "
@@ -578,16 +586,18 @@ class RflyRosScene(Node):
             700.0,
             [camera_x, camera_y, -altitude],
             [math.radians(roll_deg), math.radians(pitch_deg), camera_yaw],
+            windowID=self.rfly_window_id,
         )
 
-        view_x = camera_x + 1.8 * math.cos(camera_yaw)
-        view_y = camera_y + 1.8 * math.sin(camera_yaw)
-        view_pitch = CAMERA_SENSOR_PITCH_DEG + pitch_deg
-        self.ue.sendUE4Cmd(
-            "RflyCameraPosAng "
-            f"{view_x:.3f} {view_y:.3f} {-altitude + 0.3:.3f} "
-            f"{roll_deg:.3f} {view_pitch:.3f} {math.degrees(camera_yaw):.3f}"
-        )
+        if t - self.last_camera_command_at >= RFLY_CAMERA_COMMAND_PERIOD_S:
+            view_pitch = CAMERA_SENSOR_PITCH_DEG + pitch_deg
+            self.ue.sendUE4Cmd(
+                "RflyCameraPosAng "
+                f"{camera_x:.3f} {camera_y:.3f} {-altitude:.3f} "
+                f"{roll_deg:.3f} {view_pitch:.3f} {math.degrees(camera_yaw):.3f}",
+                self.rfly_window_id,
+            )
+            self.last_camera_command_at = t
 
     def update_search_uavs(self, t: float) -> None:
         target_recent = (
@@ -647,6 +657,7 @@ class RflyRosScene(Node):
                 700.0,
                 [x, y, -altitude],
                 [roll, pitch, yaw],
+                windowID=self.rfly_window_id,
             )
 
     @staticmethod
@@ -810,8 +821,10 @@ class RflyRosScene(Node):
             track.pred_x = [track.x + track.vx * step for step in (0.5, 1.0, 1.5, 2.0, 2.5)]
             track.pred_y = [track.y + track.vy * step for step in (0.5, 1.0, 1.5, 2.0, 2.5)]
             track.pred_conf = [0.8, 0.7, 0.6, 0.5, 0.4]
-            track.world_valid = True
-            track.units = "m"
+            if hasattr(track, "world_valid"):
+                track.world_valid = True
+            if hasattr(track, "units"):
+                track.units = "m"
             output.tracks.append(track)
         for track_id in stale_ids:
             del self.vision_tracks[track_id]
@@ -854,6 +867,7 @@ class RflyRosScene(Node):
                 [current_x, current_y, 0.0],
                 [0.0, 0.0, yaw],
                 [2.2, 2.2, 2.2],
+                windowID=self.rfly_window_id,
             )
 
     def publish_platform_states(self) -> None:
@@ -916,6 +930,7 @@ class RflyRosScene(Node):
                 [x, y, 0.0],
                 [0.0, 0.0, yaw],
                 [1.6, 1.6, 1.6],
+                windowID=self.rfly_window_id,
             )
 
         for obstacle in self.current_dynamic_obstacles:
@@ -926,6 +941,7 @@ class RflyRosScene(Node):
                 [float(obstacle["x"]), float(obstacle["y"]), 0.0],
                 [0.0, 0.0, float(obstacle["yaw"])],
                 [float(obstacle["scale"])] * 3,
+                windowID=self.rfly_window_id,
             )
 
         for target_id, x, y, vx, vy in states:
@@ -939,6 +955,7 @@ class RflyRosScene(Node):
                 [2.2 if target_id == 101 else 1.7,
                  2.2 if target_id == 101 else 1.7,
                  2.2 if target_id == 101 else 1.7],
+                windowID=self.rfly_window_id,
             )
             track = TargetTrack()
             track.target_id = target_id
@@ -954,8 +971,10 @@ class RflyRosScene(Node):
             track.pred_x = [x + vx * step for step in (0.5, 1.0, 1.5, 2.0, 2.5)]
             track.pred_y = [y + vy * step for step in (0.5, 1.0, 1.5, 2.0, 2.5)]
             track.pred_conf = [0.9, 0.8, 0.7, 0.6, 0.5]
-            track.world_valid = True
-            track.units = "m"
+            if hasattr(track, "world_valid"):
+                track.world_valid = True
+            if hasattr(track, "units"):
+                track.units = "m"
             truth_output.tracks.append(track)
 
         self.truth_publisher.publish(truth_output)
