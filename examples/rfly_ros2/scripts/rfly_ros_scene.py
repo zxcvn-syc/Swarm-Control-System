@@ -23,7 +23,9 @@ from swarm_interfaces.msg import (
 )
 
 
-RFLY_SDK = Path("/mnt/f/RflySimAPIs/RflySimSDK")
+RFLY_SDK = Path(
+    os.environ.get("RFLY_SDK_ROOT", "/mnt/f/RflySimAPIs/RflySimSDK")
+)
 for sdk_path in (RFLY_SDK, RFLY_SDK / "ctrl", RFLY_SDK / "ue"):
     if str(sdk_path) not in sys.path:
         sys.path.insert(0, str(sdk_path))
@@ -41,6 +43,8 @@ CAMERA_MIN_ALTITUDE_M = 50.0
 CAMERA_MAX_ALTITUDE_M = 72.0
 CAMERA_SEARCH_MAX_ALTITUDE_M = 92.0
 SEGMENT_SECONDS = 5.0
+WEATHER_CONTROLLER_ID = 100
+SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
 WAYPOINTS = (
     (20.0, 30.0),
     (80.0, 25.0),
@@ -69,9 +73,28 @@ SEARCH_SECTORS = {
 }
 
 
+def load_scenario() -> tuple[str, dict[str, object]]:
+    scenario_name = os.environ.get("RFLY_SCENARIO", "clear_grasslands")
+    try:
+        scenarios = json.loads(SCENARIO_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"scenario configuration could not be loaded: {exc}") from exc
+    if scenario_name not in scenarios:
+        available = ", ".join(sorted(scenarios))
+        raise ValueError(f"unknown RFLY_SCENARIO={scenario_name}; choose one of {available}")
+    return scenario_name, dict(scenarios[scenario_name])
+
+
 class RflyRosScene(Node):
     def __init__(self) -> None:
         super().__init__("rfly_ros_scene")
+        self.scenario_name, self.scenario = load_scenario()
+        self.weather_name = str(self.scenario["weather_name"])
+        self.weather_type = int(self.scenario["weather_type"])
+        self.occlusion_level = float(self.scenario["occlusion_level"])
+        self.dynamic_obstacle_count = int(self.scenario["dynamic_obstacles"])
+        self.bump_scale = float(self.scenario["bump_scale"])
+        self.rfly_host_ip = os.environ.get("RFLY_HOST_IP", "127.0.0.1")
         self.publisher = self.create_publisher(
             TargetTrackArray, "/target_track_world", 10
         )
@@ -91,7 +114,7 @@ class RflyRosScene(Node):
             self.on_enclosure,
             10,
         )
-        self.ue = UE4CtrlAPI("127.0.0.1")
+        self.ue = UE4CtrlAPI(self.rfly_host_ip)
         self.start_time = time.monotonic()
         self.route_seed = int(os.environ.get("RFLY_SCENE_SEED", "20260821"))
         self.route_rng = random.Random(self.route_seed)
@@ -134,27 +157,53 @@ class RflyRosScene(Node):
         self.vision_socket.setblocking(False)
         self.vision_tracks: dict[int, dict[str, float | int | str | bool]] = {}
         self.vision_stream_started = False
+        self.vision_packet_count = 0
+        self.vision_track_packet_count = 0
+        self.last_vision_packet_at = -1.0
         self.visual_lock_id: int | None = None
         self.visual_lock_last_seen = -1.0
         self.visual_target_state: dict[str, float] | None = None
         self.visual_projection_state: dict[str, float] | None = None
         self.target_control_source = "none"
         self.visual_target_last_seen = -1.0
+        self.control_mode = "search"
+        self.control_prediction_lead_s = 0.9
+        self.camera_velocity = (0.0, 0.0)
+        self.camera_yaw_rate = 0.0
         self.camera_search_yaw = 0.0
+        self.current_dynamic_obstacles: list[dict[str, float | int]] = []
         demo_root = Path(os.environ.get("RFLY_DEMO_ROOT", Path.cwd()))
         telemetry_path = demo_root / "logs" / "scene_telemetry.jsonl"
         telemetry_path.parent.mkdir(parents=True, exist_ok=True)
         self.telemetry_file = telemetry_path.open("w", encoding="utf-8", buffering=1)
         self.grid_message = self.build_grid_message()
         self.timer = self.create_timer(0.05, self.tick)
-        self.ue.sendUE4Cmd("RflyChangeMapbyName Grasslands")
-        for stale_id in (*range(1, 5), *range(100, 111), *range(200, 211), *range(400, 421)):
+        self.ue.sendUE4Cmd(
+            f"RflyChangeMapbyName {self.scenario['map_name']}"
+        )
+        for stale_id in (*range(1, 5), *range(100, 111), *range(200, 211), *range(400, 431)):
             self.ue.sendUE4Destroy(stale_id)
+        if self.weather_type:
+            self.ue.sendUE4PosNew(
+                WEATHER_CONTROLLER_ID,
+                804,
+                [0, 0, -8],
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0],
+            )
+            self.ue.sendUE4ExtAct(
+                WEATHER_CONTROLLER_ID,
+                [self.weather_type, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            )
         self.ue.sendUE4Cmd("r.setres 1280x720w")
         self.ue.sendUE4Cmd("t.MaxFPS 30")
         self.get_logger().info(
             "Rfly chase scene started: 1 evasive blue target, 3 search UAVs, "
-            "3 gray ground interceptors, 8 parked obstacles; visual input UDP port 35661; "
+            "3 gray ground interceptors, static and dynamic obstacles; visual input UDP port 35661; "
+            f"scenario={self.scenario_name} map={self.scenario['map_name']} "
+            f"weather={self.weather_name} occlusion={self.occlusion_level:.2f} "
+            f"rfly_host={self.rfly_host_ip} "
             f"route seed={self.route_seed} profiles={self.car_profiles}"
         )
 
@@ -225,6 +274,45 @@ class RflyRosScene(Node):
             vx += normal_x * lateral_rate
             vy += normal_y * lateral_rate
             states.append((target_id, x, y, vx, vy))
+        return states
+
+    def dynamic_obstacle_states(
+        self,
+        t: float,
+        target: tuple[int, float, float, float, float],
+    ) -> list[dict[str, float | int]]:
+        if self.dynamic_obstacle_count <= 0 or self.occlusion_level <= 0.0:
+            return []
+        _, target_x, target_y, target_vx, target_vy = target
+        speed = max(math.hypot(target_vx, target_vy), 1.0)
+        forward_x = target_vx / speed
+        forward_y = target_vy / speed
+        right_x = -forward_y
+        right_y = forward_x
+        states = []
+        for index in range(self.dynamic_obstacle_count):
+            phase = 2.0 * math.pi * index / max(self.dynamic_obstacle_count, 1)
+            if index == 0:
+                distance = 6.0 + 2.5 * math.sin(0.31 * t + phase)
+                lateral = 1.8 * math.sin(0.63 * t + phase)
+                x = target_x - distance * forward_x + lateral * right_x
+                y = target_y - distance * forward_y + lateral * right_y
+            else:
+                route_time = 0.55 * t + 1.7 * index
+                x, y, _, _ = self.path_state(route_time)
+                x += 8.0 * math.sin(0.23 * t + phase)
+                y += 8.0 * math.cos(0.19 * t + phase)
+            next_x, next_y = x + 0.25 * forward_x, y + 0.25 * forward_y
+            yaw = math.atan2(next_y - y, next_x - x)
+            scale = 2.1 + 0.55 * self.occlusion_level + 0.15 * index
+            states.append({
+                "id": 421 + index,
+                "x": x,
+                "y": y,
+                "yaw": yaw,
+                "scale": scale,
+                "occlusion_role": "line_of_sight" if index == 0 else "crossing",
+            })
         return states
 
     @staticmethod
@@ -344,24 +432,46 @@ class RflyRosScene(Node):
             # Rfly Free's dynamic TargetCopter handoff does not expose a
             # completed-mount timestamp. Use the simulator ground truth for
             # actuation while retaining the image projection for audit.
+            previous_control = self.visual_target_state
+            if previous_control is None:
+                control_x, control_y = primary_x, primary_y
+                control_vx, control_vy = primary_vx, primary_vy
+                control_heading = math.atan2(control_vy, control_vx)
+            else:
+                control_x = 0.34 * primary_x + 0.66 * float(previous_control["x"])
+                control_y = 0.34 * primary_y + 0.66 * float(previous_control["y"])
+                control_vx = 0.26 * primary_vx + 0.74 * float(previous_control["vx"])
+                control_vy = 0.26 * primary_vy + 0.74 * float(previous_control["vy"])
+                control_heading = math.atan2(control_vy, control_vx)
+                previous_heading = float(previous_control["heading"])
+                heading_error = (control_heading - previous_heading + math.pi) % (2.0 * math.pi) - math.pi
+                control_heading = previous_heading + max(
+                    min(0.28 * heading_error, math.radians(7.0)),
+                    math.radians(-7.0),
+                )
             self.visual_target_state = {
-                "x": primary_x,
-                "y": primary_y,
-                "vx": primary_vx,
-                "vy": primary_vy,
-                "heading": math.atan2(primary_vy, primary_vx),
+                "x": control_x,
+                "y": control_y,
+                "vx": control_vx,
+                "vy": control_vy,
+                "heading": control_heading,
                 "confidence": float(visual_state["confidence"]),
             }
             self.target_control_source = "truth_assist"
-            filtered_x = primary_x
-            filtered_y = primary_y
-            filtered_vx = primary_vx
-            filtered_vy = primary_vy
-            filtered_heading = math.atan2(primary_vy, primary_vx)
+            self.control_mode = "track"
+            filtered_x = control_x
+            filtered_y = control_y
+            filtered_vx = control_vx
+            filtered_vy = control_vy
+            filtered_heading = control_heading
             self.visual_target_last_seen = t
             self.visual_lock_last_seen = t
-            target_x = filtered_x + filtered_vx * 0.9
-            target_y = filtered_y + filtered_vy * 0.9
+            self.control_prediction_lead_s = min(
+                1.35,
+                0.72 + 0.02 * math.hypot(filtered_vx, filtered_vy),
+            )
+            target_x = filtered_x + filtered_vx * self.control_prediction_lead_s
+            target_y = filtered_y + filtered_vy * self.control_prediction_lead_s
             forward_x = math.cos(filtered_heading)
             forward_y = math.sin(filtered_heading)
             right_x = -forward_y
@@ -401,6 +511,7 @@ class RflyRosScene(Node):
                     f"altitude={self.camera_altitude:.1f} m"
                 )
         elif self.visual_target_state is not None and t - self.visual_target_last_seen <= 2.0:
+            self.control_mode = "coast"
             lost_time = t - self.visual_target_last_seen
             target_x = float(self.visual_target_state["x"]) + float(
                 self.visual_target_state["vx"]
@@ -415,6 +526,7 @@ class RflyRosScene(Node):
             desired_y = target_y - 22.0 * vy / speed
             desired_yaw = math.atan2(vy, vx)
         elif self.vision_stream_started and t - self.visual_target_last_seen > 2.0:
+            self.control_mode = "search"
             self.visual_lock_id = None
             if t - self.visual_target_last_seen > 4.0:
                 self.visual_target_state = None
@@ -426,22 +538,30 @@ class RflyRosScene(Node):
             desired_yaw = base_yaw + self.camera_search_yaw
             desired_x = base_x
             desired_y = base_y
-        move_x = 0.08 * (desired_x - camera_x)
-        move_y = 0.08 * (desired_y - camera_y)
-        move_norm = math.hypot(move_x, move_y)
-        if move_norm > 1.2:
-            move_x *= 1.2 / move_norm
-            move_y *= 1.2 / move_norm
+        desired_step_x = max(min(0.12 * (desired_x - camera_x), 0.75), -0.75)
+        desired_step_y = max(min(0.12 * (desired_y - camera_y), 0.75), -0.75)
+        velocity_x, velocity_y = self.camera_velocity
+        velocity_x += max(min(desired_step_x - velocity_x, 0.10), -0.10)
+        velocity_y += max(min(desired_step_y - velocity_y, 0.10), -0.10)
+        move_x, move_y = velocity_x, velocity_y
+        self.camera_velocity = (velocity_x, velocity_y)
         camera_x += move_x
         camera_y += move_y
         yaw_error = (desired_yaw - camera_yaw + math.pi) % (2.0 * math.pi) - math.pi
-        camera_yaw += max(min(0.08 * yaw_error, math.radians(1.8)), math.radians(-1.8))
+        desired_yaw_rate = max(min(0.12 * yaw_error, math.radians(2.0)), math.radians(-2.0))
+        self.camera_yaw_rate += max(
+            min(desired_yaw_rate - self.camera_yaw_rate, math.radians(0.4)),
+            math.radians(-0.4),
+        )
+        camera_yaw += self.camera_yaw_rate
         self.camera_state = (camera_x, camera_y, camera_yaw)
         self.search_uav_states[self.active_host_id] = self.camera_state
 
-        altitude = self.camera_altitude + 0.35 * math.sin(1.1 * t) + 0.12 * math.sin(3.8 * t)
-        roll_deg = 0.65 * math.sin(1.4 * t) + 0.18 * math.sin(4.3 * t)
-        pitch_deg = 0.45 * math.sin(1.2 * t) + 0.14 * math.sin(3.7 * t)
+        altitude = self.camera_altitude + self.bump_scale * (
+            0.35 * math.sin(1.1 * t) + 0.12 * math.sin(3.8 * t)
+        )
+        roll_deg = self.bump_scale * (0.65 * math.sin(1.4 * t) + 0.18 * math.sin(4.3 * t))
+        pitch_deg = self.bump_scale * (0.45 * math.sin(1.2 * t) + 0.14 * math.sin(3.7 * t))
         self.camera_pose = (
             camera_x,
             camera_y,
@@ -592,6 +712,8 @@ class RflyRosScene(Node):
         if not packets:
             return
         self.vision_stream_started = True
+        self.vision_packet_count += len(packets)
+        self.last_vision_packet_at = now
         for latest in packets:
             host_id = int(latest.get("host_id", 1))
             requested_host = int(latest.get("active_host", self.active_host_id))
@@ -602,6 +724,7 @@ class RflyRosScene(Node):
             if host_id not in (1, 2, 3) or width <= 0 or height <= 0:
                 continue
             for item in latest.get("tracks", []):
+                self.vision_track_packet_count += 1
                 try:
                     local_track_id = int(item["track_id"])
                     track_id = host_id * 10000 + local_track_id
@@ -772,6 +895,7 @@ class RflyRosScene(Node):
     def tick(self) -> None:
         t = time.monotonic() - self.start_time
         states = self.car_states(t)
+        self.current_dynamic_obstacles = self.dynamic_obstacle_states(t, states[0])
         self.update_search_uavs(t)
         self.receive_visual_tracks(t)
         self.update_camera_uav(t, states[0])
@@ -791,6 +915,16 @@ class RflyRosScene(Node):
                 [x, y, 0.0],
                 [0.0, 0.0, yaw],
                 [1.6, 1.6, 1.6],
+            )
+
+        for obstacle in self.current_dynamic_obstacles:
+            self.ue.sendUE4PosScale2Ground(
+                int(obstacle["id"]),
+                51,
+                0.0,
+                [float(obstacle["x"]), float(obstacle["y"]), 0.0],
+                [0.0, 0.0, float(obstacle["yaw"])],
+                [float(obstacle["scale"])] * 3,
             )
 
         for target_id, x, y, vx, vy in states:
@@ -832,7 +966,13 @@ class RflyRosScene(Node):
             visual = self.visual_target_state
             self.telemetry_file.write(json.dumps({
                 "time_s": round(t, 3),
-                "mode": "track" if visual is not None and t - self.visual_target_last_seen <= 2.0 else "search",
+                "mode": self.control_mode,
+                "scenario": self.scenario_name,
+                "map_name": self.scenario["map_name"],
+                "weather": self.weather_name,
+                "weather_type": self.weather_type,
+                "occlusion_level": self.occlusion_level,
+                "prediction_lead_s": self.control_prediction_lead_s,
                 "active_host": self.active_host_id,
                 "target_truth": {
                     "id": target_id,
@@ -844,9 +984,18 @@ class RflyRosScene(Node):
                 "target_visual": self.visual_projection_state,
                 "target_control": visual,
                 "target_control_source": self.target_control_source,
+                "vision_stream_started": self.vision_stream_started,
+                "vision_packet_count": self.vision_packet_count,
+                "vision_track_packet_count": self.vision_track_packet_count,
+                "last_vision_packet_age_s": (
+                    None
+                    if self.last_vision_packet_at < 0.0
+                    else round(t - self.last_vision_packet_at, 3)
+                ),
                 "uavs": self.camera_poses,
                 "ground_cars": self.ground_car_positions,
                 "ground_goals": self.ground_car_goals,
+                "dynamic_obstacles": self.current_dynamic_obstacles,
             }) + "\n")
         self.frame_idx += 1
 

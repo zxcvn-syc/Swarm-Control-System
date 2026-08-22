@@ -1,0 +1,56 @@
+{
+  "clear_grasslands": {
+    "map_name": "Grasslands",
+    "weather_type": 0,
+    "weather_name": "clear",
+    "occlusion_level": 0.0,
+    "dynamic_obstacles": 0,
+    "bump_scale": 0.28,
+    "vision_stress": {"fog_alpha": 0.0, "rain_density": 0, "snow_density": 0, "blur_kernel": 0, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0}
+  },
+  "rain_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 5,
+    "weather_name": "rain",
+    "occlusion_level": 0.35,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.42,
+    "vision_stress": {"fog_alpha": 0.08, "rain_density": 120, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 19.0, "occlusion_duration_s": 0.70}
+  },
+  "fog_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 10,
+    "weather_name": "fog",
+    "occlusion_level": 0.30,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.34,
+    "vision_stress": {"fog_alpha": 0.28, "rain_density": 0, "snow_density": 0, "blur_kernel": 5, "occlusion_period_s": 17.0, "occlusion_duration_s": 0.80}
+  },
+  "snow_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 8,
+    "weather_name": "snow",
+    "occlusion_level": 0.25,
+    "dynamic_obstacles": 2,
+    "bump_scale": 0.38,
+    "vision_stress": {"fog_alpha": 0.12, "rain_density": 0, "snow_density": 90, "blur_kernel": 3, "occlusion_period_s": 21.0, "occlusion_duration_s": 0.60}
+  },
+  "city_clear": {
+    "map_name": "Changsha",
+    "weather_type": 0,
+    "weather_name": "clear",
+    "occlusion_level": 0.45,
+    "dynamic_obstacles": 4,
+    "bump_scale": 0.30,
+    "vision_stress": {"fog_alpha": 0.04, "rain_density": 0, "snow_density": 0, "blur_kernel": 0, "occlusion_period_s": 16.0, "occlusion_duration_s": 0.85}
+  },
+  "mountain_clear": {
+    "map_name": "MoutainRoad",
+    "weather_type": 0,
+    "weather_name": "clear",
+    "occlusion_level": 0.38,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.48,
+    "vision_stress": {"fog_alpha": 0.10, "rain_density": 0, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 18.0, "occlusion_duration_s": 0.70}
+  }
+}

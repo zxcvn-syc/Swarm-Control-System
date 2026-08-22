@@ -13,6 +13,7 @@ import types
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 
 RFLY_SDK = Path(r"F:\RflySimAPIs\RflySimSDK")
@@ -51,6 +52,7 @@ from cvtrack.types import Box  # noqa: E402
 
 SENSOR_SETTLE_SECONDS = 2.5
 SEARCH_DWELL_SECONDS = 4.0
+SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,21 +67,127 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--udp-port", type=int, default=35661)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.08)
+    parser.add_argument(
+        "--scenario",
+        default=os.environ.get("RFLY_SCENARIO", "clear_grasslands"),
+    )
     return parser.parse_args()
 
 
-def draw_status(frame, tracks, inference_fps: float, frame_index: int, host_id: int) -> None:
-    cv2.rectangle(frame, (0, 0), (frame.shape[1], 54), (16, 18, 20), -1)
+def load_vision_stress(scenario: str) -> dict[str, float | int]:
+    try:
+        scenarios = json.loads(SCENARIO_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"scenario configuration could not be loaded: {exc}") from exc
+    if scenario not in scenarios:
+        available = ", ".join(sorted(scenarios))
+        raise ValueError(f"unknown scenario {scenario}; choose one of {available}")
+    stress = dict(scenarios[scenario].get("vision_stress", {}))
+    return {
+        "fog_alpha": float(stress.get("fog_alpha", 0.0)),
+        "rain_density": int(stress.get("rain_density", 0)),
+        "snow_density": int(stress.get("snow_density", 0)),
+        "blur_kernel": int(stress.get("blur_kernel", 0)),
+        "occlusion_period_s": float(stress.get("occlusion_period_s", 0.0)),
+        "occlusion_duration_s": float(stress.get("occlusion_duration_s", 0.0)),
+    }
+
+
+def apply_vision_stress(
+    frame,
+    elapsed_s: float,
+    frame_index: int,
+    stress: dict[str, float | int],
+):
+    output = frame.copy()
+    fog_alpha = float(stress["fog_alpha"])
+    if fog_alpha > 0.0:
+        fog = output.copy()
+        fog[:] = (210, 215, 220)
+        output = cv2.addWeighted(output, 1.0 - fog_alpha, fog, fog_alpha, 0.0)
+
+    height, width = output.shape[:2]
+    rng = np.random.default_rng(frame_index + 20260821)
+    rain_density = int(stress["rain_density"])
+    if rain_density > 0:
+        overlay = output.copy()
+        for _ in range(rain_density):
+            x = int(rng.integers(0, width))
+            y = int(rng.integers(0, height))
+            length = int(rng.integers(8, 23))
+            cv2.line(overlay, (x, y), (x - 3, min(height - 1, y + length)), (205, 210, 214), 1)
+        output = cv2.addWeighted(output, 0.82, overlay, 0.18, 0.0)
+
+    snow_density = int(stress["snow_density"])
+    if snow_density > 0:
+        for _ in range(snow_density):
+            x = int(rng.integers(0, width))
+            y = int(rng.integers(0, height))
+            radius = int(rng.integers(1, 3))
+            cv2.circle(output, (x, y), radius, (232, 232, 232), -1)
+
+    occlusion_active = False
+    period = float(stress["occlusion_period_s"])
+    duration = float(stress["occlusion_duration_s"])
+    if period > 0.0 and duration > 0.0 and elapsed_s % period < duration:
+        occlusion_active = True
+        phase = min((elapsed_s % period) / duration, 1.0)
+        center_x = int(width * (0.5 + 0.14 * (phase - 0.5)))
+        center_y = int(height * 0.52)
+        half_width = int(width * 0.22)
+        half_height = int(height * 0.14)
+        cv2.rectangle(
+            output,
+            (center_x - half_width, center_y - half_height),
+            (center_x + half_width, center_y + half_height),
+            (54, 63, 68),
+            -1,
+        )
+        cv2.rectangle(
+            output,
+            (center_x - half_width, center_y - half_height),
+            (center_x + half_width, center_y + half_height),
+            (104, 122, 130),
+            2,
+        )
+
+    blur_kernel = int(stress["blur_kernel"])
+    if blur_kernel > 1:
+        output = cv2.GaussianBlur(output, (blur_kernel, blur_kernel), 0)
+    return output, occlusion_active
+
+
+def draw_status(
+    frame,
+    tracks,
+    inference_fps: float,
+    frame_index: int,
+    host_id: int,
+    scenario: str,
+    stress_active: bool,
+) -> None:
+    cv2.rectangle(frame, (0, 0), (frame.shape[1], 78), (16, 18, 20), -1)
     cv2.putText(
         frame,
         f"CVTrack LIVE | HOST UAV {host_id} | "
         f"{'LOCKED' if any(track.confirmed for track in tracks) else 'SEARCH'} | "
         f"frame {frame_index} | {min(inference_fps, 99.9):.1f} FPS",
-        (18, 34),
+        (18, 32),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.72,
         (245, 245, 245),
         2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"SCENARIO {scenario} | source=RGB+ROS2 | prediction=enabled"
+        f"{' | SENSOR OCCLUSION' if stress_active else ''}",
+        (18, 62),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        (180, 205, 220),
+        1,
         cv2.LINE_AA,
     )
     for track in tracks:
@@ -106,9 +214,9 @@ def draw_status(frame, tracks, inference_fps: float, frame_index: int, host_id: 
             cv2.line(frame, start, end, color, 2, cv2.LINE_AA)
 
 
-def blue_target_detections(frame):
+def blue_target_detections(frame, saturation_floor: int = 115):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, (86, 115, 70), (112, 255, 255))
+    mask = cv2.inRange(hsv, (84, saturation_floor, 52), (120, 255, 255))
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_CLOSE,
@@ -191,6 +299,8 @@ def vehicle_detections(frame, detector, blue_boxes, run_yolo=True):
 def main() -> None:
     args = parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    vision_stress = load_vision_stress(args.scenario)
+    saturation_floor = 70 if float(vision_stress["fog_alpha"]) >= 0.10 else 105
     detector = make_detector(
         "yolo",
         weights=str(args.weights.resolve()),
@@ -275,6 +385,8 @@ def main() -> None:
     overlay_tracks = []
     overlay_fps = 0.0
     overlay_host_id = 1
+    overlay_frame = initial.copy()
+    overlay_stress_active = False
     host_tracks = {host_id: [] for host_id in (1, 2, 3)}
     host_last_confirmed = {host_id: -1e9 for host_id in (1, 2, 3)}
     active_host_id = 1
@@ -284,6 +396,8 @@ def main() -> None:
     last_global_confirmed = -1e9
     host_switches = []
     last_yolo_at = -1e9
+    stress_frames = 0
+    stress_occlusion_frames = 0
 
     def switch_sensor_host(host_id: int) -> None:
         nonlocal active_host_since, sensor_settle_until
@@ -314,12 +428,17 @@ def main() -> None:
                 visible_tracks = list(overlay_tracks)
                 visible_fps = overlay_fps
                 visible_index = frame_index
+                visible_frame = overlay_frame.copy()
+                visible_stress_active = overlay_stress_active
+            display_frame = visible_frame
             draw_status(
                 display_frame,
                 visible_tracks,
                 visible_fps,
                 visible_index,
                 visible_host_id,
+                args.scenario,
+                visible_stress_active,
             )
             writer.write(display_frame)
             recorded_frames += 1
@@ -335,10 +454,21 @@ def main() -> None:
                 time.sleep(0.02)
                 continue
             with capture.Img_lock[sensor_index]:
-                frame = capture.Img[sensor_index].copy()
+                raw_frame = capture.Img[sensor_index].copy()
+            now = time.monotonic() - started_at
+            frame, stress_active = apply_vision_stress(
+                raw_frame,
+                now,
+                frame_index,
+                vision_stress,
+            )
+            if any(float(value) > 0.0 for value in vision_stress.values()):
+                stress_frames += 1
+            if stress_active:
+                stress_occlusion_frames += 1
             host_height, host_width = frame.shape[:2]
             step_started = time.monotonic()
-            blue_boxes = blue_target_detections(frame)
+            blue_boxes = blue_target_detections(frame, saturation_floor=saturation_floor)
             if blue_boxes:
                 semantic_detection_frames += 1
             detections = []
@@ -368,7 +498,6 @@ def main() -> None:
             ]
             elapsed_step = max(time.monotonic() - step_started, 1e-6)
             inference_fps = 1.0 / elapsed_step
-            now = time.monotonic() - started_at
             host_tracks[host_id] = list(tracks)
             if any(track.confirmed for track in tracks):
                 host_last_confirmed[host_id] = now
@@ -443,6 +572,11 @@ def main() -> None:
                 "capture_time_s": now,
                 "host_id": host_id,
                 "active_host": active_host_id,
+                "scenario": args.scenario,
+                "perception_stress": {
+                    "active_sensor_occlusion": stress_active,
+                    **vision_stress,
+                },
                 "tracks": packet_tracks,
             }).encode("utf-8")
             udp.sendto(payload, (args.udp_host, args.udp_port))
@@ -451,6 +585,8 @@ def main() -> None:
                 overlay_tracks = list(host_tracks[active_host_id])
                 overlay_fps = inference_fps
                 overlay_host_id = active_host_id
+                overlay_frame = frame.copy()
+                overlay_stress_active = stress_active
             frame_index += 1
     finally:
         recording = False
@@ -491,6 +627,10 @@ def main() -> None:
             "mavros_connected": False,
             "vehicle_armed": False,
             "flight_control_mode": "Rfly kinematic API",
+            "scenario": args.scenario,
+            "perception_stress": vision_stress,
+            "perception_stress_frames": stress_frames,
+            "synthetic_sensor_occlusion_frames": stress_occlusion_frames,
         }, indent=2),
         encoding="utf-8",
     )
