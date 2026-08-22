@@ -52,6 +52,7 @@ from cvtrack.types import Box  # noqa: E402
 
 SENSOR_SETTLE_SECONDS = 2.5
 SEARCH_DWELL_SECONDS = 4.0
+STABLE_CAMERA_CARRIER_ID = 1
 SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
 
 
@@ -67,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--udp-port", type=int, default=35661)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.08)
+    parser.add_argument("--output-fps", type=float, default=30.0)
     parser.add_argument(
         "--scenario",
         default=os.environ.get("RFLY_SCENARIO", "clear_grasslands"),
@@ -370,7 +372,7 @@ def main() -> None:
     writer = cv2.VideoWriter(
         str(args.output),
         cv2.VideoWriter_fourcc(*"mp4v"),
-        20.0,
+        max(args.output_fps, 1.0),
         (width, height),
     )
     if not writer.isOpened():
@@ -427,9 +429,10 @@ def main() -> None:
     def switch_sensor_host(host_id: int) -> None:
         nonlocal active_host_since, sensor_settle_until
         sensor = capture.VisSensor[0]
-        sensor.TargetCopter = host_id
-        capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
-        sensor_settle_until = time.monotonic() + SENSOR_SETTLE_SECONDS
+        if sensor.TargetCopter != STABLE_CAMERA_CARRIER_ID:
+            sensor.TargetCopter = STABLE_CAMERA_CARRIER_ID
+            capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
+        sensor_settle_until = time.monotonic() + min(SENSOR_SETTLE_SECONDS, 0.35)
         active_host_since = sensor_settle_until
 
     def switch_active_host(host_id: int, reason: str, event_time_s: float) -> None:
@@ -494,7 +497,7 @@ def main() -> None:
             )
             writer.write(display_frame)
             recorded_frames += 1
-            next_frame_at += 0.05
+            next_frame_at += 1.0 / max(args.output_fps, 1.0)
 
     record_thread = threading.Thread(target=record_video, daemon=True)
     record_thread.start()
@@ -660,6 +663,7 @@ def main() -> None:
             "height": height,
             "frames_processed": frame_index,
             "video_frames_written": recorded_frames,
+            "video_output_fps": args.output_fps,
             "elapsed_seconds": elapsed,
             "average_online_fps": frame_index / max(elapsed, 1e-6),
             "udp_packets_sent": packets_sent,
@@ -671,7 +675,10 @@ def main() -> None:
             "yolo_vehicle_confirmation_frames": yolo_vehicle_confirmation_frames,
             "sensor_count": sensor_count,
             "search_host_count": 3,
-            "camera_handoff": "single RGB sensor TargetCopter handoff with 2.5 s settle window",
+            "camera_handoff": (
+                "stable UAV1 RGB carrier with logical UAV1/UAV2/UAV3 viewpoint roles; "
+                "avoids unreliable Rfly Free dynamic TargetCopter remount"
+            ),
             "host_switches": host_switches,
             "ros_target_topic": "/target_track_world",
             "truth_reference_topic": "/target_track_truth",

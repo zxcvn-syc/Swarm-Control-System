@@ -24,6 +24,7 @@ class EnclosureNode(Node):
         self.declare_parameter("min_dist", 5.0)
         self.declare_parameter("update_period", 1.0)
         self.declare_parameter("target_topic", "/target_track_world")
+        self.declare_parameter("drone_topic", "/drone_states")
         self.declare_parameter("world_frame", "world")
         self._targets = []
         self._drones = []
@@ -37,7 +38,10 @@ class EnclosureNode(Node):
             10,
         )
         self._drone_sub = self.create_subscription(
-            DroneStateArray, "/drone_states", self.on_drone, 10
+            DroneStateArray,
+            str(self.get_parameter("drone_topic").value),
+            self.on_drone,
+            10,
         )
         self._publisher = self.create_publisher(
             EnclosureCommandArray, "/enclosure_command", 10

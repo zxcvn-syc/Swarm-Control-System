@@ -12,15 +12,16 @@ import numpy as np
 
 WORLD_SIZE = 220.0
 WAYPOINTS = (
-    (20.0, 30.0),
-    (80.0, 25.0),
-    (145.0, 35.0),
-    (180.0, 80.0),
-    (170.0, 145.0),
-    (115.0, 185.0),
-    (50.0, 170.0),
-    (15.0, 120.0),
-    (30.0, 70.0),
+    (18.0, 24.0),
+    (82.0, 18.0),
+    (150.0, 22.0),
+    (202.0, 62.0),
+    (202.0, 128.0),
+    (170.0, 190.0),
+    (106.0, 205.0),
+    (40.0, 190.0),
+    (12.0, 140.0),
+    (10.0, 74.0),
 )
 PARKED_CARS = (
     (95.0, 38.0),
@@ -167,6 +168,22 @@ def draw_map(panel, record: dict, history: list[dict]) -> None:
     for x, y in PARKED_CARS:
         cv2.circle(panel, world_to_panel(x, y, width, height), 6, (92, 98, 98), -1)
 
+    for obstacle in record.get("large_obstacles", []):
+        try:
+            point = world_to_panel(float(obstacle["x"]), float(obstacle["y"]), width, height)
+            scale = max(1.0, float(obstacle.get("scale", 1.0)))
+        except (KeyError, TypeError, ValueError):
+            continue
+        radius = min(13, 5 + int(scale * 2.0))
+        cv2.rectangle(
+            panel,
+            (point[0] - radius, point[1] - radius),
+            (point[0] + radius, point[1] + radius),
+            (81, 118, 173),
+            -1,
+        )
+        cv2.drawMarker(panel, point, (226, 192, 114), cv2.MARKER_CROSS, radius * 2, 1)
+
     draw_path(panel, path_from_records(history, "target_truth"), (235, 65, 45), 3)
     draw_path(panel, path_from_records(history, "target_visual"), (237, 213, 68), 2)
     draw_path(panel, path_from_records(history, "target_control"), (93, 225, 115), 2)
@@ -234,15 +251,18 @@ def draw_map(panel, record: dict, history: list[dict]) -> None:
     info_y = height - 142
     scenario = record.get("scenario", "unknown")
     weather = record.get("weather", "unknown")
+    wind_speed = float(record.get("wind_speed_mps", 0.0))
+    wind_direction = float(record.get("wind_direction_deg", 0.0))
     mode = record.get("mode", "unknown")
     source = record.get("target_control_source", "none")
     speed = value_text(record.get("target_speed_mps"), "-")
     heading = value_text(record.get("target_heading_deg"), "-")
     cv2.putText(panel, f"PHASE {current_stage(record)}  MODE {mode}  HOST U{active_host}", (24, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (240, 245, 248), 1, cv2.LINE_AA)
-    cv2.putText(panel, f"SCENE {scenario}  WEATHER {weather}  OCCLUSION {float(record.get('occlusion_level', 0.0)):.2f}", (24, info_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (176, 202, 211), 1, cv2.LINE_AA)
+    rain_status = "RAIN ON" if "rain" in str(weather).lower() else "RAIN OFF"
+    cv2.putText(panel, f"{scenario} | {rain_status} | WIND {wind_speed:.1f} m/s @ {wind_direction:.0f} deg", (24, info_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (176, 202, 211), 1, cv2.LINE_AA)
     cv2.putText(panel, f"TARGET BLUE  SPEED {speed} m/s  HEADING {heading} deg  LEAD {value_text(record.get('prediction_lead_s'))} s", (24, info_y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.31, (176, 202, 211), 1, cv2.LINE_AA)
-    cv2.putText(panel, f"ROS FLOW RGB -> CVTrack -> world -> planner -> enclosure  packets {record.get('vision_packet_count', 0)}", (24, info_y + 64), cv2.FONT_HERSHEY_SIMPLEX, 0.29, (176, 202, 211), 1, cv2.LINE_AA)
-    cv2.putText(panel, f"CONTROL {source} | BLUE truth CYAN visual GREEN prediction gray UAV/car orange obstacle", (24, info_y + 85), cv2.FONT_HERSHEY_SIMPLEX, 0.27, (132, 150, 158), 1, cv2.LINE_AA)
+    cv2.putText(panel, f"ROS RGB -> CVTrack -> world -> planner -> enclosure | goals {record.get('ground_goal_update_count', 0)}", (24, info_y + 64), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (176, 202, 211), 1, cv2.LINE_AA)
+    cv2.putText(panel, f"OCCL {float(record.get('occlusion_level', 0.0)):.2f} | {source} | BLUE target GRAY cars ORANGE blockers", (24, info_y + 85), cv2.FONT_HERSHEY_SIMPLEX, 0.27, (132, 150, 158), 1, cv2.LINE_AA)
 
 
 def draw_motion_inset(frame, record: dict, history: list[dict]) -> None:
@@ -343,7 +363,8 @@ def main() -> None:
                         "uav_history",
                         "ground_vehicle_history",
                         "phase_timeline",
-                        "weather_occlusion_status",
+                        "rain_wind_occlusion_status",
+                        "large_static_obstacles",
                         "world_motion_inset",
                     ],
                 },

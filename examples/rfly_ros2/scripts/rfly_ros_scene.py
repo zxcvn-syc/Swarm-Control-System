@@ -41,21 +41,63 @@ CAMERA_SENSOR_PITCH_DEG = -82.0
 CAMERA_ALTITUDE_M = 58.0
 CAMERA_MIN_ALTITUDE_M = 50.0
 CAMERA_MAX_ALTITUDE_M = 72.0
-CAMERA_SEARCH_MAX_ALTITUDE_M = 92.0
-RFLY_CAMERA_COMMAND_PERIOD_S = 0.10
-SEGMENT_SECONDS = 5.0
+CAMERA_SEARCH_MAX_ALTITUDE_M = 84.0
+RFLY_CAMERA_COMMAND_PERIOD_S = 0.14
+RFLY_RENDER_UPDATE_PERIOD_S = 0.08
+STATIC_SCENE_BOOTSTRAP_DELAY_S = 0.80
+INITIAL_SEARCH_ASSIST_SECONDS = 12.0
+CAMERA_CARRIER_ID = 1
+GROUND_VEHICLE_CLEARANCE_M = 8.0
+OBSTACLE_CLEARANCE_M = 10.0
+TARGET_MAX_SPEED_MPS = 17.0
+TARGET_ACCEL_MPS2 = 2.4
+TARGET_BRAKE_MPS2 = 3.2
+TARGET_MAX_YAW_RATE_RPS = 0.48
+TARGET_MIN_TURN_RADIUS_M = 20.0
+GROUND_MAX_SPEED_MPS = 10.0
+GROUND_ACCEL_MPS2 = 2.0
+GROUND_BRAKE_MPS2 = 3.0
+GROUND_MAX_YAW_RATE_RPS = 0.52
+GROUND_MIN_TURN_RADIUS_M = 12.0
 WEATHER_CONTROLLER_ID = 100
 SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
 WAYPOINTS = (
-    (20.0, 30.0),
-    (80.0, 25.0),
-    (145.0, 35.0),
-    (180.0, 80.0),
-    (170.0, 145.0),
-    (115.0, 185.0),
-    (50.0, 170.0),
-    (15.0, 120.0),
-    (30.0, 70.0),
+    (18.0, 24.0),
+    (82.0, 18.0),
+    (150.0, 22.0),
+    (202.0, 62.0),
+    (202.0, 128.0),
+    (170.0, 190.0),
+    (106.0, 205.0),
+    (40.0, 190.0),
+    (12.0, 140.0),
+    (10.0, 74.0),
+)
+DYNAMIC_OBSTACLE_ROUTES = (
+    (
+        (26.0, 54.0),
+        (108.0, 56.0),
+        (192.0, 78.0),
+        (190.0, 154.0),
+        (116.0, 158.0),
+        (28.0, 126.0),
+    ),
+    (
+        (32.0, 92.0),
+        (76.0, 48.0),
+        (158.0, 66.0),
+        (190.0, 142.0),
+        (126.0, 194.0),
+        (48.0, 166.0),
+    ),
+    (
+        (22.0, 116.0),
+        (88.0, 94.0),
+        (158.0, 122.0),
+        (196.0, 178.0),
+        (112.0, 202.0),
+        (34.0, 178.0),
+    ),
 )
 PARKED_CARS = (
     (401, 95.0, 38.0, math.pi / 2.0),
@@ -67,11 +109,83 @@ PARKED_CARS = (
     (407, 43.0, 151.0, 0.1),
     (408, 29.0, 105.0, math.pi / 2.0),
 )
+LARGE_OBSTACLES = (
+    (501, 125000051, 65.0, 36.0, 0.10, 2.8, "dump truck"),
+    (502, 118000051, 138.0, 43.0, 1.35, 2.8, "soil roller"),
+    (503, 100000750, 175.0, 113.0, 2.75, 2.4, "large crate"),
+    (504, 100000824, 88.0, 176.0, -0.45, 3.6, "concrete pillar"),
+)
 SEARCH_SECTORS = {
-    1: (55.0, 55.0, 0.0),
-    2: (160.0, 145.0, -1.6),
-    3: (175.0, 55.0, 2.1),
+    1: (24.0, 28.0, 0.0),
+    2: (96.0, 30.0, 0.0),
+    3: (178.0, 54.0, 1.1),
 }
+
+
+class UdpForwarder:
+    def __init__(self, socket_obj: socket.socket, host: str, port: int) -> None:
+        self.socket_obj = socket_obj
+        self.host = host
+        self.port = port
+
+    def sendto(self, data: bytes, _address: tuple[str, int]) -> int:
+        return self.socket_obj.sendto(data, (self.host, self.port))
+
+
+class RateLimitedUE4:
+    def __init__(self, api: UE4CtrlAPI, min_interval: float) -> None:
+        self.api = api
+        self.min_interval = max(min_interval, 0.02)
+        self.last_sent: dict[tuple[str, int], float] = {}
+        self.last_pos_state: dict[tuple[str, int], tuple[float, ...]] = {}
+
+    def _allow(self, channel: str, copter_id: int) -> bool:
+        now = time.monotonic()
+        key = (channel, copter_id)
+        last_sent = self.last_sent.get(key, -float("inf"))
+        if now - last_sent < self.min_interval:
+            return False
+        self.last_sent[key] = now
+        return True
+
+    def sendUE4Pos(self, *args, **kwargs):
+        copter_id = int(args[0] if args else kwargs.get("copterID", 0))
+        if self._allow("pos", copter_id):
+            if len(args) >= 5:
+                state = tuple(
+                    float(value)
+                    for vector in args[3:5]
+                    for value in vector
+                )
+                previous = self.last_pos_state.get(("pos", copter_id))
+                if previous is not None and max(
+                    abs(current - old) for current, old in zip(state, previous)
+                ) < 0.035:
+                    return None
+                self.last_pos_state[("pos", copter_id)] = state
+            return self.api.sendUE4Pos(*args, **kwargs)
+        return None
+
+    def sendUE4PosScale2Ground(self, *args, **kwargs):
+        copter_id = int(args[0] if args else kwargs.get("copterID", 0))
+        if self._allow("ground", copter_id):
+            if len(args) >= 6:
+                state = tuple(
+                    float(value)
+                    for vector in args[3:6]
+                    for value in vector
+                )
+                previous = self.last_pos_state.get(("ground", copter_id))
+                if previous is not None and max(
+                    abs(current - old) for current, old in zip(state, previous)
+                ) < 0.06:
+                    return None
+                self.last_pos_state[("ground", copter_id)] = state
+            return self.api.sendUE4PosScale2Ground(*args, **kwargs)
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self.api, name)
 
 
 def load_scenario() -> tuple[str, dict[str, object]]:
@@ -95,6 +209,9 @@ class RflyRosScene(Node):
         self.occlusion_level = float(self.scenario["occlusion_level"])
         self.dynamic_obstacle_count = int(self.scenario["dynamic_obstacles"])
         self.bump_scale = float(self.scenario["bump_scale"])
+        self.wind_speed_mps = float(self.scenario.get("wind_speed_mps", 0.0))
+        self.wind_direction_deg = float(self.scenario.get("wind_direction_deg", 0.0))
+        self.wind_direction_rad = math.radians(self.wind_direction_deg)
         self.rfly_host_ip = os.environ.get("RFLY_HOST_IP", "127.0.0.1")
         self.rfly_window_id = int(os.environ.get("RFLY_WINDOW_ID", "0"))
         self.publisher = self.create_publisher(
@@ -116,32 +233,60 @@ class RflyRosScene(Node):
             self.on_enclosure,
             10,
         )
-        self.ue = UE4CtrlAPI(self.rfly_host_ip)
+        ue_api = UE4CtrlAPI(self.rfly_host_ip)
+        bridge_host = os.environ.get("RFLY_UE4_BRIDGE_HOST", "").strip()
+        bridge_port = int(os.environ.get("RFLY_UE4_BRIDGE_PORT", "0"))
+        if bridge_host and bridge_port > 0:
+            ue_api.udp_socket = UdpForwarder(
+                ue_api.udp_socket,
+                bridge_host,
+                bridge_port,
+            )
+            self.get_logger().info(
+                f"UE4 control forwarding enabled: {bridge_host}:{bridge_port}"
+            )
+        self.ue = RateLimitedUE4(
+            ue_api,
+            float(os.environ.get("RFLY_RENDER_UPDATE_PERIOD_S", RFLY_RENDER_UPDATE_PERIOD_S)),
+        )
         self.start_time = time.monotonic()
         self.route_seed = int(os.environ.get("RFLY_SCENE_SEED", "20260821"))
         self.route_rng = random.Random(self.route_seed)
         self.car_profiles = {
             target_id: {
                 "phase": phase,
-                "speed_scale": self.route_rng.uniform(1.18, 1.55),
-                "lateral_phase": self.route_rng.uniform(0.0, 2.0 * math.pi),
-                "lateral_amplitude": self.route_rng.uniform(2.5, 6.0),
+                "speed_phase": self.route_rng.uniform(0.0, 2.0 * math.pi),
             }
             for target_id, phase in ((101, 0.0),)
         }
         self.frame_idx = 0
+        self.target_motion: dict[str, float | int] | None = None
+        self.last_target_time = -1.0
+        self.dynamic_obstacle_motion: dict[int, dict[str, float | int]] = {}
+        self.last_dynamic_obstacle_time = -1.0
+        self.static_scene_spawned = False
         self.ground_car_goals: dict[int, tuple[float, float]] = {}
+        self.ground_goal_update_count = 0
         self.ground_car_positions = {
-            0: (24.0, 24.0),
+            0: (24.0, 184.0),
             1: (194.0, 28.0),
-            2: (108.0, 194.0),
+            2: (108.0, 198.0),
         }
+        self.ground_car_velocities = {car_id: (0.0, 0.0) for car_id in self.ground_car_positions}
+        self.ground_car_speeds = {car_id: 0.0 for car_id in self.ground_car_positions}
+        self.ground_car_yaws = {
+            0: -0.70,
+            1: 2.45,
+            2: -1.65,
+        }
+        self.ground_car_yaw_rates = {car_id: 0.0 for car_id in self.ground_car_positions}
+        self.last_ground_update_time = -1.0
         self.camera_state: tuple[float, float, float] | None = SEARCH_SECTORS[1]
         self.active_host_id = 1
         self.last_active_host_id = 1
         self.telemetry_host_id = 1
         self.search_uav_states = dict(SEARCH_SECTORS)
-        self.camera_altitude = CAMERA_SEARCH_MAX_ALTITUDE_M - 4.0
+        self.camera_altitude = CAMERA_SEARCH_MAX_ALTITUDE_M - 8.0
         self.camera_pose = (
             SEARCH_SECTORS[1][0],
             SEARCH_SECTORS[1][1],
@@ -160,6 +305,7 @@ class RflyRosScene(Node):
         self.vision_socket.setblocking(False)
         self.vision_tracks: dict[int, dict[str, float | int | str | bool]] = {}
         self.vision_stream_started = False
+        self.vision_first_packet_at = -1.0
         self.vision_packet_count = 0
         self.vision_track_packet_count = 0
         self.last_vision_packet_at = -1.0
@@ -170,6 +316,7 @@ class RflyRosScene(Node):
         self.target_control_source = "none"
         self.visual_target_last_seen = -1.0
         self.control_mode = "search"
+        self.search_bootstrap_active = False
         self.control_prediction_lead_s = 0.9
         self.camera_velocity = (0.0, 0.0)
         self.camera_yaw_rate = 0.0
@@ -188,7 +335,14 @@ class RflyRosScene(Node):
         )
         self.ue.sendUE4Cmd("RflyChangeViewKeyCmd N 6", self.rfly_window_id)
         self.ue.sendUE4Cmd("RflyCameraFovDegrees 90", self.rfly_window_id)
-        for stale_id in (*range(1, 5), *range(100, 111), *range(200, 211), *range(400, 431)):
+        for stale_id in (
+            *range(1, 5),
+            *range(100, 111),
+            *range(200, 211),
+            *range(400, 431),
+            *range(500, 521),
+            *range(880, 900),
+        ):
             self.ue.sendUE4Destroy(stale_id, self.rfly_window_id)
         if self.weather_type:
             self.ue.sendUE4PosNew(
@@ -206,83 +360,187 @@ class RflyRosScene(Node):
                 windowID=self.rfly_window_id,
             )
         self.ue.sendUE4Cmd("r.setres 1280x720w", self.rfly_window_id)
-        self.ue.sendUE4Cmd("t.MaxFPS 30", self.rfly_window_id)
+        self.ue.sendUE4Cmd("t.MaxFPS 45", self.rfly_window_id)
         self.get_logger().info(
             "Rfly chase scene started: 1 evasive blue target, 3 search UAVs, "
             "3 gray ground interceptors, static and dynamic obstacles; visual input UDP port 35661; "
             f"scenario={self.scenario_name} map={self.scenario['map_name']} "
             f"weather={self.weather_name} occlusion={self.occlusion_level:.2f} "
+            f"wind={self.wind_speed_mps:.1f}m/s@{self.wind_direction_deg:.0f}deg "
             f"rfly_host={self.rfly_host_ip} "
             f"route seed={self.route_seed} profiles={self.car_profiles}"
         )
 
     @staticmethod
-    def path_state(t: float) -> tuple[float, float, float, float]:
-        segment_value = (t / SEGMENT_SECONDS) % len(WAYPOINTS)
-        segment = int(segment_value)
-        u = segment_value - segment
-        points = [
-            WAYPOINTS[(segment + offset) % len(WAYPOINTS)]
-            for offset in (-1, 0, 1, 2)
-        ]
+    def wrap_angle(angle: float) -> float:
+        return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
-        def component(index: int) -> tuple[float, float]:
-            p0, p1, p2, p3 = (point[index] for point in points)
-            a = -p0 + p2
-            b = 2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3
-            c = -p0 + 3.0 * p1 - 3.0 * p2 + p3
-            value = 0.5 * (2.0 * p1 + a * u + b * u * u + c * u * u * u)
-            derivative = 0.5 * (a + 2.0 * b * u + 3.0 * c * u * u)
-            return value, derivative / SEGMENT_SECONDS
+    @classmethod
+    def advance_forward_vehicle(
+        cls,
+        state: dict[str, float | int],
+        desired_heading: float,
+        desired_speed: float,
+        dt: float,
+        *,
+        max_speed: float,
+        acceleration: float,
+        braking: float,
+        max_yaw_rate: float,
+        max_yaw_acceleration: float,
+        min_turn_radius: float,
+    ) -> None:
+        if dt <= 0.0:
+            return
+        yaw = float(state["yaw"])
+        speed = float(state["speed"])
+        yaw_rate = float(state.get("yaw_rate", 0.0))
+        heading_error = cls.wrap_angle(desired_heading - yaw)
+        turn_speed_scale = max(0.28, 1.0 - 0.85 * abs(heading_error))
+        speed_target = min(max(desired_speed, 0.0), max_speed * turn_speed_scale)
+        speed_delta_limit = (acceleration if speed_target >= speed else braking) * dt
+        speed += max(min(speed_target - speed, speed_delta_limit), -speed_delta_limit)
+        physical_yaw_limit = min(
+            max_yaw_rate,
+            max(speed, 0.8) / max(min_turn_radius, 1.0),
+        )
+        desired_yaw_rate = max(
+            min(1.35 * heading_error, physical_yaw_limit),
+            -physical_yaw_limit,
+        )
+        yaw_rate_delta = max_yaw_acceleration * dt
+        yaw_rate += max(
+            min(desired_yaw_rate - yaw_rate, yaw_rate_delta),
+            -yaw_rate_delta,
+        )
+        yaw = cls.wrap_angle(yaw + yaw_rate * dt)
+        velocity_x = speed * math.cos(yaw)
+        velocity_y = speed * math.sin(yaw)
+        state["x"] = float(state["x"]) + velocity_x * dt
+        state["y"] = float(state["y"]) + velocity_y * dt
+        state["yaw"] = yaw
+        state["yaw_rate"] = yaw_rate
+        state["speed"] = speed
+        state["vx"] = velocity_x
+        state["vy"] = velocity_y
 
-        x, vx = component(0)
-        y, vy = component(1)
-        return x, y, vx, vy
+    @staticmethod
+    def waypoint_heading(
+        state: dict[str, float | int],
+        route: tuple[tuple[float, float], ...],
+        capture_radius: float,
+    ) -> float:
+        waypoint_index = int(state["waypoint_index"])
+        waypoint_x, waypoint_y = route[waypoint_index]
+        delta_x = waypoint_x - float(state["x"])
+        delta_y = waypoint_y - float(state["y"])
+        if math.hypot(delta_x, delta_y) <= capture_radius:
+            waypoint_index = (waypoint_index + 1) % len(route)
+            state["waypoint_index"] = waypoint_index
+            waypoint_x, waypoint_y = route[waypoint_index]
+            delta_x = waypoint_x - float(state["x"])
+            delta_y = waypoint_y - float(state["y"])
+        return math.atan2(delta_y, delta_x)
+
+    @classmethod
+    def avoidance_heading(
+        cls,
+        base_heading: float,
+        x: float,
+        y: float,
+        avoidance_points: list[tuple[float, float, float]],
+    ) -> float:
+        steering_x = math.cos(base_heading)
+        steering_y = math.sin(base_heading)
+        for avoid_x, avoid_y, clearance in avoidance_points:
+            separation_x = x - avoid_x
+            separation_y = y - avoid_y
+            separation = math.hypot(separation_x, separation_y)
+            influence_radius = 2.25 * clearance
+            if 1e-6 < separation < influence_radius:
+                strength = 2.4 * (influence_radius - separation) / influence_radius
+                steering_x += strength * separation_x / separation
+                steering_y += strength * separation_y / separation
+        boundary_margin = 18.0
+        if x < boundary_margin:
+            steering_x += 1.8 * (boundary_margin - x) / boundary_margin
+        elif x > GRID_SIZE - boundary_margin:
+            steering_x -= 1.8 * (x - GRID_SIZE + boundary_margin) / boundary_margin
+        if y < boundary_margin:
+            steering_y += 1.8 * (boundary_margin - y) / boundary_margin
+        elif y > GRID_SIZE - boundary_margin:
+            steering_y -= 1.8 * (y - GRID_SIZE + boundary_margin) / boundary_margin
+        if math.hypot(steering_x, steering_y) < 1e-6:
+            return base_heading
+        return math.atan2(steering_y, steering_x)
 
     def car_states(self, t: float) -> list[tuple[int, float, float, float, float]]:
         states = []
         for target_id in (101,):
             profile = self.car_profiles[target_id]
-            phase = float(profile["phase"])
-            base_speed_scale = float(profile["speed_scale"])
-            speed_phase = float(profile["lateral_phase"])
-            speed_scale = base_speed_scale * (
-                1.0
-                + 0.28 * math.sin(0.23 * t + speed_phase)
-                + 0.16 * math.sin(0.71 * t + 0.5 * speed_phase)
-            )
-            route_time = phase + base_speed_scale * (
-                t
-                + 0.28 / 0.23 * (
-                    math.cos(speed_phase) - math.cos(0.23 * t + speed_phase)
+            if self.target_motion is None:
+                initial_yaw = math.atan2(
+                    WAYPOINTS[1][1] - WAYPOINTS[0][1],
+                    WAYPOINTS[1][0] - WAYPOINTS[0][0],
                 )
-                + 0.16 / 0.71 * (
-                    math.cos(0.5 * speed_phase)
-                    - math.cos(0.71 * t + 0.5 * speed_phase)
+                self.target_motion = {
+                    "x": WAYPOINTS[0][0],
+                    "y": WAYPOINTS[0][1],
+                    "yaw": initial_yaw,
+                    "yaw_rate": 0.0,
+                    "speed": 7.5,
+                    "vx": 7.5 * math.cos(initial_yaw),
+                    "vy": 7.5 * math.sin(initial_yaw),
+                    "waypoint_index": 1,
+                }
+            dt = (
+                0.0
+                if self.last_target_time < 0.0
+                else min(max(t - self.last_target_time, 0.0), 0.15)
+            )
+            capture_radius = max(14.0, 1.15 * float(self.target_motion["speed"]))
+            desired_heading = self.waypoint_heading(
+                self.target_motion,
+                WAYPOINTS,
+                capture_radius,
+            )
+            wind_heading_bias = 0.006 * self.wind_speed_mps * (
+                math.sin(0.29 * t + self.wind_direction_rad)
+                + 0.25 * math.sin(0.71 * t)
+            )
+            desired_heading = self.wrap_angle(desired_heading + wind_heading_bias)
+            speed_phase = float(profile["speed_phase"])
+            desired_speed = min(
+                16.7,
+                max(
+                    8.0,
+                    13.2
+                    + 2.1 * math.sin(0.18 * t + speed_phase)
+                    + 1.2 * math.sin(0.49 * t + 0.4 * speed_phase),
+                ),
+            )
+            self.advance_forward_vehicle(
+                self.target_motion,
+                desired_heading,
+                desired_speed,
+                dt,
+                max_speed=TARGET_MAX_SPEED_MPS,
+                acceleration=TARGET_ACCEL_MPS2,
+                braking=TARGET_BRAKE_MPS2,
+                max_yaw_rate=TARGET_MAX_YAW_RATE_RPS,
+                max_yaw_acceleration=0.62,
+                min_turn_radius=TARGET_MIN_TURN_RADIUS_M,
+            )
+            self.last_target_time = t
+            states.append(
+                (
+                    target_id,
+                    float(self.target_motion["x"]),
+                    float(self.target_motion["y"]),
+                    float(self.target_motion["vx"]),
+                    float(self.target_motion["vy"]),
                 )
             )
-            x, y, vx, vy = self.path_state(route_time)
-            vx *= speed_scale
-            vy *= speed_scale
-            speed = max(math.hypot(vx, vy), 1e-6)
-            normal_x = -vy / speed
-            normal_y = vx / speed
-            lateral_phase = float(profile["lateral_phase"])
-            lateral_amplitude = float(profile["lateral_amplitude"])
-            lateral_omega = 0.43
-            lateral = (
-                lateral_amplitude * math.sin(lateral_omega * t + lateral_phase)
-                + 2.2 * math.sin(1.15 * t + 0.3 * lateral_phase)
-            )
-            lateral_rate = (
-                lateral_amplitude * lateral_omega * math.cos(lateral_omega * t + lateral_phase)
-                + 2.2 * 1.15 * math.cos(1.15 * t + 0.3 * lateral_phase)
-            )
-            x += normal_x * lateral
-            y += normal_y * lateral
-            vx += normal_x * lateral_rate
-            vy += normal_y * lateral_rate
-            states.append((target_id, x, y, vx, vy))
         return states
 
     def dynamic_obstacle_states(
@@ -292,37 +550,116 @@ class RflyRosScene(Node):
     ) -> list[dict[str, float | int]]:
         if self.dynamic_obstacle_count <= 0 or self.occlusion_level <= 0.0:
             return []
-        _, target_x, target_y, target_vx, target_vy = target
-        speed = max(math.hypot(target_vx, target_vy), 1.0)
-        forward_x = target_vx / speed
-        forward_y = target_vy / speed
-        right_x = -forward_y
-        right_y = forward_x
+        _, target_x, target_y, _, _ = target
         states = []
+        dt = (
+            0.0
+            if self.last_dynamic_obstacle_time < 0.0
+            else min(max(t - self.last_dynamic_obstacle_time, 0.0), 0.15)
+        )
+        self.last_dynamic_obstacle_time = t
+        static_centers = [(entry[2], entry[3]) for entry in LARGE_OBSTACLES]
         for index in range(self.dynamic_obstacle_count):
-            phase = 2.0 * math.pi * index / max(self.dynamic_obstacle_count, 1)
-            if index == 0:
-                distance = 6.0 + 2.5 * math.sin(0.31 * t + phase)
-                lateral = 1.8 * math.sin(0.63 * t + phase)
-                x = target_x - distance * forward_x + lateral * right_x
-                y = target_y - distance * forward_y + lateral * right_y
-            else:
-                route_time = 0.55 * t + 1.7 * index
-                x, y, _, _ = self.path_state(route_time)
-                x += 8.0 * math.sin(0.23 * t + phase)
-                y += 8.0 * math.cos(0.19 * t + phase)
-            next_x, next_y = x + 0.25 * forward_x, y + 0.25 * forward_y
-            yaw = math.atan2(next_y - y, next_x - x)
-            scale = 2.1 + 0.55 * self.occlusion_level + 0.15 * index
+            obstacle_id = 421 + index
+            route = DYNAMIC_OBSTACLE_ROUTES[index % len(DYNAMIC_OBSTACLE_ROUTES)]
+            motion = self.dynamic_obstacle_motion.get(obstacle_id)
+            if motion is None:
+                route_start = (2 * index) % len(route)
+                route_next = (route_start + 1) % len(route)
+                initial_yaw = math.atan2(
+                    route[route_next][1] - route[route_start][1],
+                    route[route_next][0] - route[route_start][0],
+                )
+                motion = {
+                    "x": route[route_start][0],
+                    "y": route[route_start][1],
+                    "yaw": initial_yaw,
+                    "yaw_rate": 0.0,
+                    "speed": 4.5 + index,
+                    "vx": (4.5 + index) * math.cos(initial_yaw),
+                    "vy": (4.5 + index) * math.sin(initial_yaw),
+                    "waypoint_index": route_next,
+                }
+                self.dynamic_obstacle_motion[obstacle_id] = motion
+            base_heading = self.waypoint_heading(
+                motion,
+                route,
+                max(12.0, float(motion["speed"])),
+            )
+            positions_to_avoid = [(target_x, target_y, 9.0)]
+            positions_to_avoid.extend(
+                (center_x, center_y, OBSTACLE_CLEARANCE_M)
+                for center_x, center_y in static_centers
+            )
+            positions_to_avoid.extend(
+                (float(previous["x"]), float(previous["y"]), OBSTACLE_CLEARANCE_M)
+                for previous in states
+            )
+            desired_heading = self.avoidance_heading(
+                base_heading,
+                float(motion["x"]),
+                float(motion["y"]),
+                positions_to_avoid,
+            )
+            desired_speed = 7.2 + 1.3 * math.sin(0.16 * t + 1.7 * index)
+            self.advance_forward_vehicle(
+                motion,
+                desired_heading,
+                desired_speed,
+                dt,
+                max_speed=9.0,
+                acceleration=1.6,
+                braking=2.4,
+                max_yaw_rate=0.42,
+                max_yaw_acceleration=0.58,
+                min_turn_radius=15.0,
+            )
+            x = float(motion["x"])
+            y = float(motion["y"])
+            yaw = float(motion["yaw"])
+            obstacle_types = (125000051, 118000051, 100000750, 100000824)
+            scale = 2.7 + 0.35 * self.occlusion_level + 0.18 * index
             states.append({
-                "id": 421 + index,
+                "id": obstacle_id,
+                "vehicle_type": obstacle_types[index % len(obstacle_types)],
                 "x": x,
                 "y": y,
                 "yaw": yaw,
+                "yaw_rate": float(motion["yaw_rate"]),
+                "speed": float(motion["speed"]),
+                "vx": float(motion["vx"]),
+                "vy": float(motion["vy"]),
                 "scale": scale,
-                "occlusion_role": "line_of_sight" if index == 0 else "crossing",
+                "occlusion_role": "independent_occluder" if index == 0 else "crossing",
+                "label": (
+                    "moving dump truck"
+                    if index == 0
+                    else ("moving soil roller" if index == 1 else "moving large blocker")
+                ),
             })
         return states
+
+    def spawn_static_scene(self) -> None:
+        for obstacle_id, x, y, yaw in PARKED_CARS:
+            self.ue.sendUE4PosScale2Ground(
+                obstacle_id,
+                51,
+                0.0,
+                [x, y, 0.0],
+                [0.0, 0.0, yaw],
+                [1.6, 1.6, 1.6],
+                windowID=self.rfly_window_id,
+            )
+        for obstacle_id, vehicle_type, x, y, yaw, scale, _label in LARGE_OBSTACLES:
+            self.ue.sendUE4PosScale2Ground(
+                obstacle_id,
+                vehicle_type,
+                0.0,
+                [x, y, 0.0],
+                [0.0, 0.0, yaw],
+                [scale, scale, scale],
+                windowID=self.rfly_window_id,
+            )
 
     @staticmethod
     def search_waypoint(host_id: int, t: float) -> tuple[float, float, float]:
@@ -344,6 +681,13 @@ class RflyRosScene(Node):
             center_y = int(round(y))
             for cell_y in range(center_y - 4, center_y + 5):
                 for cell_x in range(center_x - 4, center_x + 5):
+                    if 0 <= cell_x < GRID_SIZE and 0 <= cell_y < GRID_SIZE:
+                        data[cell_y * GRID_SIZE + cell_x] = 100
+        for _, _, x, y, _, _, _ in LARGE_OBSTACLES:
+            center_x = int(round(x))
+            center_y = int(round(y))
+            for cell_y in range(center_y - 8, center_y + 9):
+                for cell_x in range(center_x - 8, center_x + 9):
                     if 0 <= cell_x < GRID_SIZE and 0 <= cell_y < GRID_SIZE:
                         data[cell_y * GRID_SIZE + cell_x] = 100
         message = UInt8MultiArray()
@@ -398,6 +742,7 @@ class RflyRosScene(Node):
         ) if visual_candidates else None
 
         if selected is not None:
+            self.search_bootstrap_active = False
             self.visual_lock_id, visual_state = selected
             measurement_x = float(visual_state["x"])
             measurement_y = float(visual_state["y"])
@@ -495,13 +840,21 @@ class RflyRosScene(Node):
                 18.0,
             )
             lateral_correction = 10.0 * image_error_x
+            view_offset = math.radians((0.0, 55.0, -55.0)[self.active_host_id - 1])
+            view_heading = filtered_heading + view_offset
+            view_forward_x = math.cos(view_heading)
+            view_forward_y = math.sin(view_heading)
+            view_right_x = -view_forward_y
+            view_right_y = view_forward_x
             desired_x = (
-                target_x - follow_distance * forward_x + lateral_correction * right_x
+                target_x - follow_distance * view_forward_x
+                + lateral_correction * view_right_x
             )
             desired_y = (
-                target_y - follow_distance * forward_y + lateral_correction * right_y
+                target_y - follow_distance * view_forward_y
+                + lateral_correction * view_right_y
             )
-            desired_yaw = filtered_heading + math.radians(CAMERA_FOV_DEG * 0.45) * image_error_x
+            desired_yaw = view_heading + math.radians(CAMERA_FOV_DEG * 0.45) * image_error_x
             target_height_fraction = float(visual_state["height_fraction"])
             edge_error = float(visual_state["center_error"])
             altitude_adjustment = (target_height_fraction - 0.08) * 55.0
@@ -520,6 +873,7 @@ class RflyRosScene(Node):
                     f"altitude={self.camera_altitude:.1f} m"
                 )
         elif self.visual_target_state is not None and t - self.visual_target_last_seen <= 2.0:
+            self.search_bootstrap_active = False
             self.control_mode = "coast"
             lost_time = t - self.visual_target_last_seen
             target_x = float(self.visual_target_state["x"]) + float(
@@ -541,14 +895,35 @@ class RflyRosScene(Node):
                 self.visual_target_state = None
                 self.visual_projection_state = None
                 self.target_control_source = "none"
-            self.camera_altitude = min(self.camera_altitude + 0.04, CAMERA_SEARCH_MAX_ALTITUDE_M)
-            base_x, base_y, base_yaw = self.search_waypoint(self.active_host_id, t)
-            self.camera_search_yaw += math.radians(2.5)
-            desired_yaw = base_yaw + self.camera_search_yaw
-            desired_x = base_x
-            desired_y = base_y
-        desired_step_x = max(min(0.12 * (desired_x - camera_x), 0.75), -0.75)
-        desired_step_y = max(min(0.12 * (desired_y - camera_y), 0.75), -0.75)
+            bootstrap_age = (
+                t - self.vision_first_packet_at
+                if self.vision_first_packet_at >= 0.0
+                else float("inf")
+            )
+            self.search_bootstrap_active = (
+                self.vision_track_packet_count == 0
+                and bootstrap_age <= INITIAL_SEARCH_ASSIST_SECONDS
+            )
+            if self.search_bootstrap_active:
+                target_heading = math.atan2(primary_vy, primary_vx)
+                camera_center_offset = self.camera_altitude / math.tan(
+                    math.radians(abs(CAMERA_SENSOR_PITCH_DEG))
+                )
+                desired_x = primary_x - camera_center_offset * math.cos(target_heading)
+                desired_y = primary_y - camera_center_offset * math.sin(target_heading)
+                desired_yaw = target_heading
+            else:
+                self.camera_altitude = min(
+                    self.camera_altitude + 0.04,
+                    CAMERA_SEARCH_MAX_ALTITUDE_M,
+                )
+                base_x, base_y, base_yaw = self.search_waypoint(self.active_host_id, t)
+                self.camera_search_yaw += math.radians(2.5)
+                desired_yaw = base_yaw + self.camera_search_yaw
+                desired_x = base_x
+                desired_y = base_y
+        desired_step_x = max(min(0.12 * (desired_x - camera_x), 0.95), -0.95)
+        desired_step_y = max(min(0.12 * (desired_y - camera_y), 0.95), -0.95)
         velocity_x, velocity_y = self.camera_velocity
         velocity_x += max(min(desired_step_x - velocity_x, 0.10), -0.10)
         velocity_y += max(min(desired_step_y - velocity_y, 0.10), -0.10)
@@ -566,25 +941,40 @@ class RflyRosScene(Node):
         self.camera_state = (camera_x, camera_y, camera_yaw)
         self.search_uav_states[self.active_host_id] = self.camera_state
 
+        wind_x = 0.10 * self.wind_speed_mps * (
+            math.sin(0.29 * t) + 0.28 * math.sin(0.83 * t + 0.4)
+        ) * math.cos(self.wind_direction_rad)
+        wind_y = 0.10 * self.wind_speed_mps * (
+            math.sin(0.29 * t) + 0.28 * math.sin(0.83 * t + 0.4)
+        ) * math.sin(self.wind_direction_rad)
+        rendered_x = camera_x + wind_x
+        rendered_y = camera_y + wind_y
         altitude = self.camera_altitude + self.bump_scale * (
             0.35 * math.sin(1.1 * t) + 0.12 * math.sin(3.8 * t)
+        ) + 0.025 * self.wind_speed_mps * math.sin(0.41 * t + 0.8)
+        roll_deg = (
+            self.bump_scale * (0.65 * math.sin(1.4 * t) + 0.18 * math.sin(4.3 * t))
+            + 0.06 * self.wind_speed_mps * math.sin(0.37 * t + 0.2)
         )
-        roll_deg = self.bump_scale * (0.65 * math.sin(1.4 * t) + 0.18 * math.sin(4.3 * t))
-        pitch_deg = self.bump_scale * (0.45 * math.sin(1.2 * t) + 0.14 * math.sin(3.7 * t))
+        pitch_deg = (
+            self.bump_scale * (0.45 * math.sin(1.2 * t) + 0.14 * math.sin(3.7 * t))
+            + 0.045 * self.wind_speed_mps * math.sin(0.33 * t + 1.1)
+        )
         self.camera_pose = (
-            camera_x,
-            camera_y,
+            rendered_x,
+            rendered_y,
             altitude,
             math.radians(roll_deg),
             math.radians(pitch_deg),
             camera_yaw,
         )
         self.camera_poses[self.active_host_id] = self.camera_pose
+        self.camera_poses[CAMERA_CARRIER_ID] = self.camera_pose
         self.ue.sendUE4Pos(
-            self.active_host_id,
+            CAMERA_CARRIER_ID,
             3,
             700.0,
-            [camera_x, camera_y, -altitude],
+            [rendered_x, rendered_y, -altitude],
             [math.radians(roll_deg), math.radians(pitch_deg), camera_yaw],
             windowID=self.rfly_window_id,
         )
@@ -593,7 +983,7 @@ class RflyRosScene(Node):
             view_pitch = CAMERA_SENSOR_PITCH_DEG + pitch_deg
             self.ue.sendUE4Cmd(
                 "RflyCameraPosAng "
-                f"{camera_x:.3f} {camera_y:.3f} {-altitude:.3f} "
+                f"{rendered_x:.3f} {rendered_y:.3f} {-altitude:.3f} "
                 f"{roll_deg:.3f} {view_pitch:.3f} {math.degrees(camera_yaw):.3f}",
                 self.rfly_window_id,
             )
@@ -649,13 +1039,18 @@ class RflyRosScene(Node):
             roll = math.radians(0.4 * math.sin(0.8 * t + phase))
             pitch = math.radians(0.3 * math.sin(0.7 * t + phase))
             self.search_uav_states[host_id] = (x, y, yaw)
-            pose = (x, y, altitude, roll, pitch, yaw)
+            wind_sway = 0.05 * self.wind_speed_mps * math.sin(0.35 * t + phase)
+            rendered_x = x + wind_sway * math.cos(self.wind_direction_rad)
+            rendered_y = y + wind_sway * math.sin(self.wind_direction_rad)
+            roll += math.radians(0.035 * self.wind_speed_mps * math.sin(0.31 * t + phase))
+            pitch += math.radians(0.025 * self.wind_speed_mps * math.sin(0.27 * t + phase))
+            pose = (rendered_x, rendered_y, altitude, roll, pitch, yaw)
             self.camera_poses[host_id] = pose
             self.ue.sendUE4Pos(
                 host_id,
                 3,
                 700.0,
-                [x, y, -altitude],
+                [rendered_x, rendered_y, -altitude],
                 [roll, pitch, yaw],
                 windowID=self.rfly_window_id,
             )
@@ -724,6 +1119,8 @@ class RflyRosScene(Node):
         if not packets:
             return
         self.vision_stream_started = True
+        if self.vision_first_packet_at < 0.0:
+            self.vision_first_packet_at = now
         self.vision_packet_count += len(packets)
         self.last_vision_packet_at = now
         for latest in packets:
@@ -831,6 +1228,7 @@ class RflyRosScene(Node):
         return output
 
     def on_enclosure(self, message: EnclosureCommandArray) -> None:
+        updated = 0
         for command in message.commands:
             if not (
                 math.isfinite(command.target_x)
@@ -842,31 +1240,94 @@ class RflyRosScene(Node):
                 float(command.target_x),
                 float(command.target_y),
             )
+            updated += 1
+        if updated:
+            self.ground_goal_update_count += 1
+            if self.ground_goal_update_count == 1 or self.ground_goal_update_count % 20 == 0:
+                self.get_logger().info(
+                    f"ground enclosure update {self.ground_goal_update_count}: "
+                    f"{updated} finite command(s)"
+                )
 
-    def update_ground_interceptors(self) -> None:
+    def update_ground_interceptors(self, t: float) -> None:
+        dt = (
+            0.0
+            if self.last_ground_update_time < 0.0
+            else min(max(t - self.last_ground_update_time, 0.0), 0.15)
+        )
+        self.last_ground_update_time = t
         for car_id, (current_x, current_y) in self.ground_car_positions.items():
             goal = self.ground_car_goals.get(car_id)
-            if goal is not None:
+            yaw = self.ground_car_yaws[car_id]
+            speed = self.ground_car_speeds[car_id]
+            yaw_rate = self.ground_car_yaw_rates[car_id]
+            if goal is None:
+                base_heading = yaw
+                desired_speed = 0.0
+            else:
                 delta_x = goal[0] - current_x
                 delta_y = goal[1] - current_y
                 distance = math.hypot(delta_x, delta_y)
-                max_step = 1.05
-                if distance > max_step:
-                    delta_x *= max_step / distance
-                    delta_y *= max_step / distance
-                current_x += delta_x
-                current_y += delta_y
-            yaw = 0.0
-            if goal is not None:
-                yaw = math.atan2(goal[1] - current_y, goal[0] - current_x)
+                base_heading = math.atan2(delta_y, delta_x)
+                desired_speed = 0.0 if distance < 1.5 else min(9.2, distance * 0.55)
+            avoidance_points = [
+                (float(self.target_motion["x"]), float(self.target_motion["y"]), GROUND_VEHICLE_CLEARANCE_M)
+            ] if self.target_motion is not None else []
+            avoidance_points.extend(
+                (other_x, other_y, GROUND_VEHICLE_CLEARANCE_M)
+                for other_id, (other_x, other_y) in self.ground_car_positions.items()
+                if other_id != car_id
+            )
+            avoidance_points.extend(
+                (float(obstacle["x"]), float(obstacle["y"]), OBSTACLE_CLEARANCE_M)
+                for obstacle in self.current_dynamic_obstacles
+            )
+            avoidance_points.extend((entry[2], entry[3], OBSTACLE_CLEARANCE_M) for entry in LARGE_OBSTACLES)
+            desired_heading = self.avoidance_heading(
+                base_heading,
+                current_x,
+                current_y,
+                avoidance_points,
+            )
+            motion: dict[str, float | int] = {
+                "x": current_x,
+                "y": current_y,
+                "yaw": yaw,
+                "yaw_rate": yaw_rate,
+                "speed": speed,
+                "vx": speed * math.cos(yaw),
+                "vy": speed * math.sin(yaw),
+            }
+            self.advance_forward_vehicle(
+                motion,
+                desired_heading,
+                desired_speed,
+                dt,
+                max_speed=GROUND_MAX_SPEED_MPS,
+                acceleration=GROUND_ACCEL_MPS2,
+                braking=GROUND_BRAKE_MPS2,
+                max_yaw_rate=GROUND_MAX_YAW_RATE_RPS,
+                max_yaw_acceleration=0.72,
+                min_turn_radius=GROUND_MIN_TURN_RADIUS_M,
+            )
+            current_x = float(motion["x"])
+            current_y = float(motion["y"])
+            yaw = float(motion["yaw"])
             self.ground_car_positions[car_id] = (current_x, current_y)
+            self.ground_car_velocities[car_id] = (
+                float(motion["vx"]),
+                float(motion["vy"]),
+            )
+            self.ground_car_speeds[car_id] = float(motion["speed"])
+            self.ground_car_yaws[car_id] = yaw
+            self.ground_car_yaw_rates[car_id] = float(motion["yaw_rate"])
             self.ue.sendUE4PosScale2Ground(
                 201 + car_id,
                 51,
                 0.0,
                 [current_x, current_y, 0.0],
                 [0.0, 0.0, yaw],
-                [2.2, 2.2, 2.2],
+                [1.8, 1.8, 1.8],
                 windowID=self.rfly_window_id,
             )
 
@@ -894,13 +1355,14 @@ class RflyRosScene(Node):
         ground_message.num_drones = 3
         ground_message.drones = []
         for car_id, (x, y) in self.ground_car_positions.items():
+            velocity_x, velocity_y = self.ground_car_velocities[car_id]
             state = DroneState()
             state.drone_id = car_id
             state.x = x
             state.y = y
             state.z = 0.0
-            state.vx = 0.0
-            state.vy = 0.0
+            state.vx = velocity_x
+            state.vy = velocity_y
             state.vz = 0.0
             state.available = True
             state.platform_type = 1
@@ -914,7 +1376,7 @@ class RflyRosScene(Node):
         self.update_search_uavs(t)
         self.receive_visual_tracks(t)
         self.update_camera_uav(t, states[0])
-        self.update_ground_interceptors()
+        self.update_ground_interceptors(t)
         self.publish_platform_states()
         truth_output = TargetTrackArray()
         truth_output.header.stamp = self.get_clock().now().to_msg()
@@ -922,21 +1384,14 @@ class RflyRosScene(Node):
         truth_output.frame_idx = self.frame_idx
         truth_output.tracks = []
 
-        for obstacle_id, x, y, yaw in PARKED_CARS:
-            self.ue.sendUE4PosScale2Ground(
-                obstacle_id,
-                51,
-                0.0,
-                [x, y, 0.0],
-                [0.0, 0.0, yaw],
-                [1.6, 1.6, 1.6],
-                windowID=self.rfly_window_id,
-            )
+        if not self.static_scene_spawned and t >= STATIC_SCENE_BOOTSTRAP_DELAY_S:
+            self.spawn_static_scene()
+            self.static_scene_spawned = True
 
         for obstacle in self.current_dynamic_obstacles:
             self.ue.sendUE4PosScale2Ground(
                 int(obstacle["id"]),
-                51,
+                int(obstacle["vehicle_type"]),
                 0.0,
                 [float(obstacle["x"]), float(obstacle["y"]), 0.0],
                 [0.0, 0.0, float(obstacle["yaw"])],
@@ -952,9 +1407,9 @@ class RflyRosScene(Node):
                 0,
                 [x, y, 0.0],
                 [0.0, 0.0, yaw],
-                [2.2 if target_id == 101 else 1.7,
-                 2.2 if target_id == 101 else 1.7,
-                 2.2 if target_id == 101 else 1.7],
+                [3.0 if target_id == 101 else 1.7,
+                 3.0 if target_id == 101 else 1.7,
+                 3.0 if target_id == 101 else 1.7],
                 windowID=self.rfly_window_id,
             )
             track = TargetTrack()
@@ -1005,6 +1460,8 @@ class RflyRosScene(Node):
                 "map_name": self.scenario["map_name"],
                 "weather": self.weather_name,
                 "weather_type": self.weather_type,
+                "wind_speed_mps": self.wind_speed_mps,
+                "wind_direction_deg": self.wind_direction_deg,
                 "occlusion_level": self.occlusion_level,
                 "prediction_lead_s": self.control_prediction_lead_s,
                 "active_host": self.active_host_id,
@@ -1014,12 +1471,16 @@ class RflyRosScene(Node):
                     "y": truth_y,
                     "vx": truth_vx,
                     "vy": truth_vy,
+                    "yaw": float(self.target_motion["yaw"]),
+                    "yaw_rate": float(self.target_motion["yaw_rate"]),
                 },
                 "target_visual": self.visual_projection_state,
                 "target_control": visual,
                 "target_control_source": self.target_control_source,
+                "search_bootstrap_active": self.search_bootstrap_active,
                 "target_speed_mps": math.hypot(truth_vx, truth_vy),
                 "target_heading_deg": math.degrees(math.atan2(truth_vy, truth_vx)),
+                "target_waypoint_index": int(self.target_motion["waypoint_index"]),
                 "vision_stream_started": self.vision_stream_started,
                 "vision_packet_count": self.vision_packet_count,
                 "vision_track_packet_count": self.vision_track_packet_count,
@@ -1031,6 +1492,29 @@ class RflyRosScene(Node):
                 "uavs": self.camera_poses,
                 "ground_cars": self.ground_car_positions,
                 "ground_goals": self.ground_car_goals,
+                "ground_kinematics": {
+                    car_id: {
+                        "yaw": self.ground_car_yaws[car_id],
+                        "yaw_rate": self.ground_car_yaw_rates[car_id],
+                        "speed": self.ground_car_speeds[car_id],
+                        "vx": self.ground_car_velocities[car_id][0],
+                        "vy": self.ground_car_velocities[car_id][1],
+                    }
+                    for car_id in self.ground_car_positions
+                },
+                "ground_goal_update_count": self.ground_goal_update_count,
+                "large_obstacles": [
+                    {
+                        "id": obstacle_id,
+                        "vehicle_type": vehicle_type,
+                        "x": x,
+                        "y": y,
+                        "yaw": yaw,
+                        "scale": scale,
+                        "label": label,
+                    }
+                    for obstacle_id, vehicle_type, x, y, yaw, scale, label in LARGE_OBSTACLES
+                ],
                 "dynamic_obstacles": self.current_dynamic_obstacles,
             }) + "\n")
         self.frame_idx += 1

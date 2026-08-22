@@ -15,7 +15,31 @@
     "occlusion_level": 0.35,
     "dynamic_obstacles": 3,
     "bump_scale": 0.42,
+    "wind_speed_mps": 4.0,
+    "wind_direction_deg": 20.0,
     "vision_stress": {"fog_alpha": 0.08, "rain_density": 120, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 19.0, "occlusion_duration_s": 0.70}
+  },
+  "strong_wind_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 1,
+    "weather_name": "strong wind",
+    "occlusion_level": 0.35,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.52,
+    "wind_speed_mps": 14.0,
+    "wind_direction_deg": 35.0,
+    "vision_stress": {"fog_alpha": 0.03, "rain_density": 0, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 18.0, "occlusion_duration_s": 0.70}
+  },
+  "rain_wind_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 1,
+    "weather_name": "rain overlay and strong wind",
+    "occlusion_level": 0.42,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.62,
+    "wind_speed_mps": 14.0,
+    "wind_direction_deg": 35.0,
+    "vision_stress": {"fog_alpha": 0.10, "rain_density": 140, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 17.0, "occlusion_duration_s": 0.85}
   },
   "fog_3ddisplay": {
     "map_name": "3DDisplay",
