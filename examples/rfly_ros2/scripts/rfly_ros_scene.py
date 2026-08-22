@@ -137,6 +137,7 @@ class RflyRosScene(Node):
         self.camera_state: tuple[float, float, float] | None = SEARCH_SECTORS[1]
         self.active_host_id = 1
         self.last_active_host_id = 1
+        self.telemetry_host_id = 1
         self.search_uav_states = dict(SEARCH_SECTORS)
         self.camera_altitude = CAMERA_SEARCH_MAX_ALTITUDE_M - 4.0
         self.camera_pose = (
@@ -964,9 +965,23 @@ class RflyRosScene(Node):
         if self.frame_idx % 10 == 0:
             target_id, truth_x, truth_y, truth_vx, truth_vy = states[0]
             visual = self.visual_target_state
+            host_changed = self.active_host_id != self.telemetry_host_id
+            self.telemetry_host_id = self.active_host_id
+            if host_changed:
+                phase = "handoff"
+            elif self.control_mode == "track" and self.ground_car_goals:
+                phase = "contain"
+            elif self.control_mode == "track":
+                phase = "lock_predict"
+            elif self.control_mode == "coast":
+                phase = "coast_recover"
+            else:
+                phase = "search_360"
             self.telemetry_file.write(json.dumps({
                 "time_s": round(t, 3),
                 "mode": self.control_mode,
+                "phase": phase,
+                "host_changed": host_changed,
                 "scenario": self.scenario_name,
                 "map_name": self.scenario["map_name"],
                 "weather": self.weather_name,
@@ -984,6 +999,8 @@ class RflyRosScene(Node):
                 "target_visual": self.visual_projection_state,
                 "target_control": visual,
                 "target_control_source": self.target_control_source,
+                "target_speed_mps": math.hypot(truth_vx, truth_vy),
+                "target_heading_deg": math.degrees(math.atan2(truth_vy, truth_vx)),
                 "vision_stream_started": self.vision_stream_started,
                 "vision_packet_count": self.vision_packet_count,
                 "vision_track_packet_count": self.vision_track_packet_count,

@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         "--scenario",
         default=os.environ.get("RFLY_SCENARIO", "clear_grasslands"),
     )
+    parser.add_argument(
+        "--view-cycle-s",
+        type=float,
+        default=8.0,
+        help="force a visible multi-view handoff at this interval; 0 disables it",
+    )
     return parser.parse_args()
 
 
@@ -165,12 +171,15 @@ def draw_status(
     host_id: int,
     scenario: str,
     stress_active: bool,
+    mode: str,
+    handoff_text: str,
+    motion_text: str,
 ) -> None:
-    cv2.rectangle(frame, (0, 0), (frame.shape[1], 78), (16, 18, 20), -1)
+    cv2.rectangle(frame, (0, 0), (frame.shape[1], 96), (16, 18, 20), -1)
     cv2.putText(
         frame,
         f"CVTrack LIVE | HOST UAV {host_id} | "
-        f"{'LOCKED' if any(track.confirmed for track in tracks) else 'SEARCH'} | "
+        f"{mode.upper()} | "
         f"frame {frame_index} | {min(inference_fps, 99.9):.1f} FPS",
         (18, 32),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -181,7 +190,7 @@ def draw_status(
     )
     cv2.putText(
         frame,
-        f"SCENARIO {scenario} | source=RGB+ROS2 | prediction=enabled"
+        f"SCENARIO {scenario} | source=RGB+ROS2 | prediction=enabled | {motion_text}"
         f"{' | SENSOR OCCLUSION' if stress_active else ''}",
         (18, 62),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -190,6 +199,18 @@ def draw_status(
         1,
         cv2.LINE_AA,
     )
+    if handoff_text:
+        cv2.rectangle(frame, (18, 72), (430, 94), (42, 99, 132), -1)
+        cv2.putText(
+            frame,
+            handoff_text,
+            (28, 88),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (255, 236, 178),
+            1,
+            cv2.LINE_AA,
+        )
     for track in tracks:
         x1, y1, x2, y2 = (int(value) for value in (
             track.box.x1,
@@ -387,6 +408,9 @@ def main() -> None:
     overlay_host_id = 1
     overlay_frame = initial.copy()
     overlay_stress_active = False
+    overlay_mode = "search"
+    overlay_handoff_text = ""
+    overlay_handoff_until = 0.0
     host_tracks = {host_id: [] for host_id in (1, 2, 3)}
     host_last_confirmed = {host_id: -1e9 for host_id in (1, 2, 3)}
     active_host_id = 1
@@ -398,6 +422,7 @@ def main() -> None:
     last_yolo_at = -1e9
     stress_frames = 0
     stress_occlusion_frames = 0
+    next_view_cycle_at = max(float(args.view_cycle_s), 0.0)
 
     def switch_sensor_host(host_id: int) -> None:
         nonlocal active_host_since, sensor_settle_until
@@ -406,6 +431,23 @@ def main() -> None:
         capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
         sensor_settle_until = time.monotonic() + SENSOR_SETTLE_SECONDS
         active_host_since = sensor_settle_until
+
+    def switch_active_host(host_id: int, reason: str, event_time_s: float) -> None:
+        nonlocal active_host_id, active_host_since
+        nonlocal overlay_handoff_text, overlay_handoff_until
+        if host_id == active_host_id:
+            return
+        previous_host = active_host_id
+        active_host_id = host_id
+        host_switches.append({
+            "time_s": round(event_time_s, 3),
+            "from": previous_host,
+            "to": host_id,
+            "reason": reason,
+        })
+        switch_sensor_host(active_host_id)
+        overlay_handoff_text = f"CAMERA HANDOFF U{previous_host} -> U{host_id}"
+        overlay_handoff_until = time.monotonic() + 2.2
     recording = True
     recorded_frames = 0
 
@@ -430,7 +472,14 @@ def main() -> None:
                 visible_index = frame_index
                 visible_frame = overlay_frame.copy()
                 visible_stress_active = overlay_stress_active
+                visible_mode = overlay_mode
+                visible_handoff_text = (
+                    overlay_handoff_text
+                    if time.monotonic() <= overlay_handoff_until
+                    else ""
+                )
             display_frame = visible_frame
+            visible_motion_text = "TRACK TRAIL active"
             draw_status(
                 display_frame,
                 visible_tracks,
@@ -439,6 +488,9 @@ def main() -> None:
                 visible_host_id,
                 args.scenario,
                 visible_stress_active,
+                visible_mode,
+                visible_handoff_text,
+                visible_motion_text,
             )
             writer.write(display_frame)
             recorded_frames += 1
@@ -503,33 +555,25 @@ def main() -> None:
                 host_last_confirmed[host_id] = now
                 last_global_confirmed = now
                 lock_acquired = True
-            if lock_acquired and now - last_global_confirmed <= 3.0:
+            if (
+                args.view_cycle_s > 0.0
+                and now >= next_view_cycle_at
+                and time.monotonic() >= sensor_settle_until
+            ):
+                next_host = active_host_id % 3 + 1
+                switch_active_host(next_host, "scheduled multi-view handoff", now)
+                next_view_cycle_at += max(args.view_cycle_s, 1.0)
+            elif lock_acquired and now - last_global_confirmed <= 3.0:
                 pass
             elif now - host_last_confirmed[active_host_id] > 1.5:
                 best_host = max(host_last_confirmed, key=host_last_confirmed.get)
                 if now - host_last_confirmed[best_host] <= 1.5:
                     if best_host != active_host_id:
-                        host_switches.append({
-                            "time_s": round(now, 3),
-                            "from": active_host_id,
-                            "to": best_host,
-                            "reason": "confirmed vehicle detected",
-                        })
-                        active_host_id = best_host
-                        active_host_since = time.monotonic()
-                        switch_sensor_host(active_host_id)
+                        switch_active_host(best_host, "confirmed vehicle detected", now)
                 elif time.monotonic() - active_host_since > SEARCH_DWELL_SECONDS:
                     lock_acquired = False
                     next_host = active_host_id % 3 + 1
-                    host_switches.append({
-                        "time_s": round(now, 3),
-                        "from": active_host_id,
-                        "to": next_host,
-                        "reason": "search view rotation",
-                    })
-                    active_host_id = next_host
-                    active_host_since = time.monotonic()
-                    switch_sensor_host(active_host_id)
+                    switch_active_host(next_host, "search view rotation", now)
             packet_tracks = []
             for track in tracks:
                 logical_track_id = 1
@@ -587,6 +631,13 @@ def main() -> None:
                 overlay_host_id = active_host_id
                 overlay_frame = frame.copy()
                 overlay_stress_active = stress_active
+                overlay_mode = (
+                    "handoff"
+                    if time.monotonic() < sensor_settle_until
+                    else "lock"
+                    if any(track.confirmed for track in tracks)
+                    else "search"
+                )
             frame_index += 1
     finally:
         recording = False
