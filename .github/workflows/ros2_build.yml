@@ -93,7 +93,8 @@ jobs:
             ros-humble-std-msgs \
             ros-humble-sensor-msgs \
             ros-humble-cv-bridge \
-            ros-humble-image-transport
+            ros-humble-image-transport \
+            ros-humble-mavros-msgs
 
       - name: Fallback - install Python deps
         if: always()

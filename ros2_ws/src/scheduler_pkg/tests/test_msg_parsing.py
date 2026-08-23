@@ -19,11 +19,21 @@ def test_target_track_array_parsing_preserves_ids_coordinates_and_priority():
 
 def test_drone_state_array_parsing_drops_unavailable_drones():
     drones = [
-        SimpleNamespace(drone_id=1, x=1.0, y=2.0, available=True),
-        SimpleNamespace(drone_id=2, x=3.0, y=4.0, available=False),
-        SimpleNamespace(drone_id=9, x=-1.0, y=0.0, available=True),
+        SimpleNamespace(drone_id=1, x=1.0, y=2.0, available=True, platform_type=0),
+        SimpleNamespace(drone_id=2, x=3.0, y=4.0, available=False, platform_type=1),
+        SimpleNamespace(drone_id=9, x=-1.0, y=0.0, available=True, platform_type=1),
     ]
     assert parse_drones(SimpleNamespace(drones=drones)) == {
-        1: (1.0, 2.0),
-        9: (-1.0, 0.0),
+        1: (1.0, 2.0, 0),
+        9: (-1.0, 0.0, 1),
+    }
+
+
+def test_drone_state_array_parsing_defaults_to_uav_without_platform_type():
+    """Legacy DroneState stubs without ``platform_type`` fall back to 0 (UAV)."""
+    drones = [
+        SimpleNamespace(drone_id=5, x=1.5, y=-2.5, available=True),
+    ]
+    assert parse_drones(SimpleNamespace(drones=drones)) == {
+        5: (1.5, -2.5, 0),
     }

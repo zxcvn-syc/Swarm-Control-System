@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-cv-bridge \
         ros-humble-image-transport \
         ros-humble-tf2-ros \
+        ros-humble-mavros-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps that need pip.  Pin to versions known to work with the
