@@ -45,10 +45,12 @@ jobs:
             bash -c "source /opt/ros/humble/setup.bash && \
                      source ros2_ws/install/setup.bash && \
                      cd ros2_ws && \
+                     FAIL=0; \
                      for i in 1 2 3 4 5; do \
                        echo \"=== Run \$i ===\"; \
-                       python3 test_three_links.py && echo PASS || echo FAIL; \
-                     done"
+                       python3 test_three_links.py && echo PASS || FAIL=1; \
+                     done; \
+                     exit \$FAIL"
 
       - name: Run pytest inside Docker
         run: |
@@ -120,8 +122,10 @@ jobs:
           source /opt/ros/humble/setup.bash
           source ros2_ws/install/setup.bash
           cd ros2_ws
+          FAIL=0
           for i in 1 2 3 4 5; do
             echo "=== Run $i ==="
-            python3 test_three_links.py && echo "PASS" || echo "FAIL"
+            python3 test_three_links.py && echo "PASS" || FAIL=1
           done
+          exit $FAIL
         shell: bash

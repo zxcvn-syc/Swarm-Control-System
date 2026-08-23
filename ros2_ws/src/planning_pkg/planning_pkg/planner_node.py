@@ -25,7 +25,6 @@ from rclpy.executors import ExternalShutdownException
 
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
 from std_msgs.msg import UInt8MultiArray
@@ -95,9 +94,13 @@ class PlannerNode(Node):
         self.declare_parameter("rfly_pose_topic", "/drone_pose_external")
 
         # Initial drone layout
-        self.declare_parameter(
-            "initial_positions", Parameter.Type.DOUBLE_ARRAY
-        )  # flat [x0, y0, x1, y1, ...]
+        # NOTE: keep the ``[]`` default. Declaring with only
+        # ``Parameter.Type.DOUBLE_ARRAY`` leaves the parameter
+        # *uninitialized*, so ``get_parameter()`` raises
+        # ParameterUninitializedException on every no-argument
+        # construction (e.g. test_three_links.py PlannerNode()) —
+        # that silently disabled link2/link3 in CI.
+        self.declare_parameter("initial_positions", [])       # flat [x0, y0, x1, y1, ...]
         self.declare_parameter("obstacle_cells", [])
         self.declare_parameter("explicit_target_cells", [])
 
