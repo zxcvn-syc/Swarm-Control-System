@@ -47,6 +47,7 @@ setup(
         'console_scripts': [
             'tracker_node = perception_pkg.tracker_node:main',
             'coord_transform_node = perception_pkg.coord_transform_node:main',
+            'video_replay_fixture = perception_pkg.video_replay_fixture:main',
         ],
     },
 )

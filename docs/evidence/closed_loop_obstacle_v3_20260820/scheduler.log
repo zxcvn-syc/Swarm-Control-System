@@ -1,0 +1,16 @@
+[INFO] [1787226310.885960590] [scheduler_node]: scheduler_node up: strategy=greedy, num_drones=4, max_per_drone=1, tick=0.2s, in=/target_track+/drone_states, out=/task_assignment
+[INFO] [1787226310.888410847] [scheduler_node]: scheduler_node: no targets received yet, waiting...
+[INFO] [1787226310.890572209] [scheduler_node]: scheduler summary: 0 assignments, 0 active targets, 0 active drones, tick=200 ms
+[INFO] [1787226310.892167681] [scheduler_node]: metric assignments.active=0, targets.active=0, drones.active=0, latency.ms=200
+[INFO] [1787226313.087568280] [scheduler_node]: scheduler summary: 0 assignments, 0 active targets, 4 active drones, tick=200 ms
+[INFO] [1787226313.089718242] [scheduler_node]: metric assignments.active=0, targets.active=0, drones.active=4, latency.ms=200
+[INFO] [1787226315.287780894] [scheduler_node]: scheduler summary: 2 assignments, 2 active targets, 4 active drones, tick=200 ms
+[INFO] [1787226315.290361449] [scheduler_node]: metric assignments.active=2, targets.active=2, drones.active=4, latency.ms=200
+[INFO] [1787226317.490178170] [scheduler_node]: scheduler summary: 2 assignments, 2 active targets, 4 active drones, tick=200 ms
+[INFO] [1787226317.491922839] [scheduler_node]: metric assignments.active=2, targets.active=2, drones.active=4, latency.ms=200
+[INFO] [1787226319.688352520] [scheduler_node]: scheduler summary: 2 assignments, 2 active targets, 4 active drones, tick=200 ms
+[INFO] [1787226319.692621245] [scheduler_node]: metric assignments.active=2, targets.active=2, drones.active=4, latency.ms=200
+[INFO] [1787226321.887723649] [scheduler_node]: scheduler summary: 2 assignments, 2 active targets, 4 active drones, tick=200 ms
+[INFO] [1787226321.890997392] [scheduler_node]: metric assignments.active=2, targets.active=2, drones.active=4, latency.ms=200
+[INFO] [1787226323.888141177] [scheduler_node]: scheduler summary: 2 assignments, 2 active targets, 4 active drones, tick=200 ms
+[INFO] [1787226323.892023208] [scheduler_node]: metric assignments.active=2, targets.active=2, drones.active=4, latency.ms=200

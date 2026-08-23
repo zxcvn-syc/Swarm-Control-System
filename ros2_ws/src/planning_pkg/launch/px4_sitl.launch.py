@@ -130,6 +130,8 @@ def _resolve_actions(context, *args, **kwargs):
                         "-p", "state_topic:=/uav0/mavros/state",
                         "-p", "arm_service:=/uav0/mavros/cmd/arming",
                         "-p", "mode_service:=/uav0/mavros/set_mode",
+                        "-p", "enable_setpoint_streaming:=true",
+                        "-p", "drone_id:=0",
                         "-p", "auto_arm:=true",
                     ],
                     name="px4_offboard_bridge_uav0",
