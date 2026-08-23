@@ -1,6 +1,7 @@
 import "./index.css";
 import { Composition, Folder } from "remotion";
 import { CVTrackThreeSceneDemo } from "./CVTrackThreeSceneDemo";
+import { ClosedLoopEvidenceDemo } from "./ClosedLoopEvidenceDemo";
 import { AirportReplayScene } from "./scenes/AirportReplayScene";
 import { GazeboSimulationScene } from "./scenes/GazeboSimulationScene";
 import { IntroScene } from "./scenes/IntroScene";
@@ -25,6 +26,14 @@ export const RemotionRoot: React.FC = () => {
         id="CVTrackThreeSceneDemo"
         component={CVTrackThreeSceneDemo}
         durationInFrames={2700}
+        fps={fps}
+        width={width}
+        height={height}
+      />
+      <Composition
+        id="ClosedLoopEvidenceDemo"
+        component={ClosedLoopEvidenceDemo}
+        durationInFrames={720}
         fps={fps}
         width={width}
         height={height}
