@@ -15,8 +15,9 @@ if [[ -z "${ROS2_SETUP:-}" ]]; then
   done
 fi
 : "${ROS2_SETUP:?Set ROS2_SETUP or build install_cvtrack/install_validation/install under ROS2_WS_ROOT}"
-LOG_ROOT="$DEMO_ROOT/logs"
+LOG_ROOT="${RFLY_LOG_ROOT:-$DEMO_ROOT/logs}"
 RUN_SECONDS="${1:-35}"
+EVIDENCE_DURATION="${RFLY_EVIDENCE_DURATION:-$((RUN_SECONDS + 12))}"
 SCENARIO="${2:-clear_grasslands}"
 TARGET_TOPIC="${RFLY_TARGET_TOPIC:-/target_track_world}"
 RUN_ID="${RFLY_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
@@ -33,6 +34,7 @@ export RFLY_SCENE_SEED=20260821
 export RFLY_SCENARIO="$SCENARIO"
 export RFLY_HOST_IP="${RFLY_HOST_IP:-127.0.0.1}"
 export RFLY_SDK_ROOT="${RFLY_SDK_ROOT:-$DEMO_ROOT/rfly_sdk}"
+export RFLY_LOG_ROOT="$LOG_ROOT"
 
 printf 'scenario=%s run_seconds=%s target_topic=%s rfly_host_ip=%s rfly_sdk_root=%s ros2_setup=%s\n' \
   "$SCENARIO" "$RUN_SECONDS" "$TARGET_TOPIC" "$RFLY_HOST_IP" "$RFLY_SDK_ROOT" "$ROS2_SETUP" \
@@ -46,6 +48,11 @@ start_grouped() {
   LAST_PID=$!
   printf '%s\n' "$LAST_PID" >>"$PID_FILE"
 }
+
+start_grouped "$LOG_ROOT/evidence_recorder.log" python3 "$DEMO_ROOT/scripts/capture_ros_evidence.py" \
+  --duration "$EVIDENCE_DURATION" \
+  --output-dir "$LOG_ROOT"
+EVIDENCE_PID=$LAST_PID
 
 start_grouped "$LOG_ROOT/scene.log" python3 "$DEMO_ROOT/scripts/rfly_ros_scene.py"
 SCENE_PID=$LAST_PID
@@ -76,12 +83,12 @@ start_grouped "$LOG_ROOT/enclosure.log" ros2 run containment_pkg enclosure_node 
 ENCLOSURE_PID=$LAST_PID
 
 cleanup() {
-  for pid in "$ENCLOSURE_PID" "$PLANNER_PID" "$SCHEDULER_PID" "$SCENE_PID"; do
+  for pid in "$EVIDENCE_PID" "$ENCLOSURE_PID" "$PLANNER_PID" "$SCHEDULER_PID" "$SCENE_PID"; do
     if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
     fi
   done
-  for pid in "$ENCLOSURE_PID" "$PLANNER_PID" "$SCHEDULER_PID" "$SCENE_PID"; do
+  for pid in "$EVIDENCE_PID" "$ENCLOSURE_PID" "$PLANNER_PID" "$SCHEDULER_PID" "$SCENE_PID"; do
     wait "$pid" 2>/dev/null || true
   done
   rm -f "$PID_FILE"
@@ -92,7 +99,4 @@ sleep 9
 ros2 topic list --no-daemon --spin-time 3 -t >"$LOG_ROOT/topics.txt"
 ros2 node list --no-daemon --spin-time 3 >"$LOG_ROOT/nodes.txt"
 
-python3 "$DEMO_ROOT/scripts/capture_ros_evidence.py" \
-  --duration "$((RUN_SECONDS + 12))" \
-  --output-dir "$LOG_ROOT"
 sleep "$RUN_SECONDS"

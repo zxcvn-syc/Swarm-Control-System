@@ -105,6 +105,13 @@ def draw_path(panel, points: list[tuple[float, float]], color, width: int = 2) -
 
 
 def current_stage(record: dict) -> str:
+    physical_occlusion = record.get("physical_occlusion_engaged", False)
+    if isinstance(record.get("physical_occlusion"), dict):
+        physical_occlusion = record["physical_occlusion"].get("engaged", False)
+    if record.get("reacquisition_active"):
+        return "REACQUIRE"
+    if physical_occlusion and record.get("mode") in {"coast", "search"}:
+        return "OCCLUDED"
     phase = str(record.get("phase", ""))
     if phase == "handoff" or record.get("host_changed"):
         return "HANDOFF"
@@ -118,14 +125,15 @@ def current_stage(record: dict) -> str:
 
 
 def draw_stage_timeline(panel, record: dict, history: list[dict]) -> None:
-    labels = ("SEARCH", "LOCK", "PREDICT", "HANDOFF", "COAST/RECOVER", "CONTAIN")
+    labels = ("SEARCH", "LOCK", "PREDICT", "OCCLUDED", "REACQUIRE", "HANDOFF", "CONTAIN")
     active = current_stage(record)
     seen = {
         "SEARCH": True,
         "LOCK": any(item.get("mode") == "track" for item in history),
         "PREDICT": any(item.get("target_control") for item in history),
+        "OCCLUDED": any(item.get("physical_occlusion_engaged") for item in history),
+        "REACQUIRE": any(item.get("reacquisition_active") for item in history),
         "HANDOFF": any(item.get("host_changed") for item in history),
-        "COAST/RECOVER": any(item.get("mode") == "coast" for item in history),
         "CONTAIN": any(item.get("ground_goals") for item in history),
     }
     left_margin = 24
@@ -217,6 +225,12 @@ def draw_map(panel, record: dict, history: list[dict]) -> None:
         point = world_to_panel(float(target_truth["x"]), float(target_truth["y"]), width, height)
         cv2.drawMarker(panel, point, (66, 82, 235), cv2.MARKER_TILTED_CROSS, 22, 3)
         cv2.putText(panel, "TARGET BLUE", (point[0] + 10, point[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (66, 82, 235), 1, cv2.LINE_AA)
+        if record.get("physical_occlusion_requested") or record.get("physical_occlusion_engaged"):
+            active_pose = uavs.get(str(active_host), uavs.get(active_host))
+            if isinstance(active_pose, (list, tuple)) and len(active_pose) >= 2:
+                camera_point = world_to_panel(float(active_pose[0]), float(active_pose[1]), width, height)
+                cv2.line(panel, camera_point, point, (120, 120, 220), 1, cv2.LINE_AA)
+                cv2.putText(panel, "LOS / BLOCKER", (camera_point[0] + 5, camera_point[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (160, 160, 228), 1, cv2.LINE_AA)
     if target_visual:
         point = world_to_panel(float(target_visual["x"]), float(target_visual["y"]), width, height)
         cv2.circle(panel, point, 8, (68, 213, 237), 2)
@@ -262,7 +276,10 @@ def draw_map(panel, record: dict, history: list[dict]) -> None:
     cv2.putText(panel, f"{scenario} | {rain_status} | WIND {wind_speed:.1f} m/s @ {wind_direction:.0f} deg", (24, info_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (176, 202, 211), 1, cv2.LINE_AA)
     cv2.putText(panel, f"TARGET BLUE  SPEED {speed} m/s  HEADING {heading} deg  LEAD {value_text(record.get('prediction_lead_s'))} s", (24, info_y + 43), cv2.FONT_HERSHEY_SIMPLEX, 0.31, (176, 202, 211), 1, cv2.LINE_AA)
     cv2.putText(panel, f"ROS RGB -> CVTrack -> world -> planner -> enclosure | goals {record.get('ground_goal_update_count', 0)}", (24, info_y + 64), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (176, 202, 211), 1, cv2.LINE_AA)
-    cv2.putText(panel, f"OCCL {float(record.get('occlusion_level', 0.0)):.2f} | {source} | BLUE target GRAY cars ORANGE blockers", (24, info_y + 85), cv2.FONT_HERSHEY_SIMPLEX, 0.27, (132, 150, 158), 1, cv2.LINE_AA)
+    physical_status = "ENGAGED" if record.get("physical_occlusion_engaged") else "REQUESTED" if record.get("physical_occlusion_requested") else "OFF"
+    min_distance = record.get("min_vehicle_distance_m")
+    overlap_count = record.get("vehicle_overlap_count", 0)
+    cv2.putText(panel, f"PHYSICAL LOS {physical_status} | MIN VEHICLE DIST {value_text(min_distance)} m | OVERLAP {overlap_count}", (24, info_y + 85), cv2.FONT_HERSHEY_SIMPLEX, 0.27, (132, 150, 158), 1, cv2.LINE_AA)
 
 
 def draw_motion_inset(frame, record: dict, history: list[dict]) -> None:

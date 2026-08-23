@@ -1,61 +1,61 @@
 # 何泓林 CVTrack + RflySim3D 联调报告
 
-## 本轮修复
+## 2026-08-23 最终验证
 
-- 原始航拍视频加入 `SEARCH / LOCK / HANDOFF` 状态和 `CAMERA HANDOFF Ux -> Uy` 横幅。
-- 视觉主机默认每 8 秒在 UAV1、UAV2、UAV3 之间交接，保留 2.5 秒传感器稳定窗口。
-- 决策回放增加蓝色目标真实轨迹、视觉投影轨迹、控制轨迹、预测箭头、三架 UAV 轨迹、三辆灰车轨迹、动态障碍物、世界运动小窗和全过程时间线。
-- 遥测增加 `phase`、`host_changed`、目标速度和航向，便于把识别、预测、交接、恢复和封控对齐到视频。
+本轮交付使用 `rain_wind_3ddisplay` 预设，在 RflySim3D、Windows 实时视觉进程和 ROS2 虚拟机之间完成单次 55.1 秒连续运行。蓝色目标车按受速度、加速度、制动、横摆角速度和最小转弯半径约束的路线行驶；三辆灰色地面车接收封控命令；大型动态工程车、静态工程障碍和停放车辆参与避障与遮挡压力测试。
 
-## 雨风主验证
+| 验收项 | 实测结果 |
+|---|---:|
+| UAV 视角视频 | 55.0 s，1280x720，30 FPS，1650 帧 |
+| 视频动态采样比例 | 93.3% |
+| 在线视觉处理 | 1217 帧，22.12 FPS |
+| 确认目标跟踪 | 1137 帧，稳定逻辑 ID `10001` |
+| 目标居中率 | 75.5%（验收阈值 35%） |
+| 物理遮挡触发 | 66 条请求记录，58 条几何对准记录 |
+| 遮挡后的重捕获 | 3/3，最大 1.11 s |
+| 车辆重叠 | 0 |
+| ROS2 话题 | 7/7 均收到有效消息 |
+| 地面封控命令 | 2 条有效 `/enclosure_command` |
 
-主视频：`rfly_uav_cvtrack_30fps_verified.mp4`
+本次生成的原始证据均在 `outputs/rfly_full_demo_20260823_184221/`：
 
-决策视频：`rfly_decision_god_view_verified.mp4`
+- `uav_live.mp4`：Rfly UAV 第一视角，包含识别框、搜索/锁定/重捕获状态。
+- `decision_god_view.mp4`：左侧 UAV 视角、右侧上帝视角、目标与无人机轨迹、预测、地面封控和障碍物。
+- `validation.json`：全部验收项通过的机器可读结果。
+- `detection_summary.json`、`tracks.csv`：检测、跟踪与重捕获证据。
+- `scene_telemetry.jsonl`、`capture_summary.json`：Rfly/ROS2 遥测和话题采样结果。
+- `decision_god_view.json`：决策回放的帧数、分辨率和自动估计的遥测时间偏移。
 
-- 地图：`3DDisplay`；Rfly 使用强风类型 1，视觉层叠加雨滴、雾化、模糊和周期遮挡，避免部分启动状态下官方雨类型 5 造成黑屏。
-- 风场：14 m/s，方向 35 度；视觉压力：雾化 0.10、雨滴 140、模糊核 3、周期遮挡 17 秒/次、每次 0.85 秒。
-- 场景障碍：3 辆动态遮挡车和 8 辆静态障碍车。
-- 在线视觉：30 秒、1280x720、777 个处理帧、661 个确认跟踪行、777 个 UDP 视觉包，输出 900 帧/30 FPS。
-- 多视角：3 次有效 UAV 逻辑视角交接，识别链包含搜索、锁定、预测和封控阶段。
-- 决策视频右侧上帝视角和左下运动小窗持续显示目标路线、UAV、灰车、预测箭头和障碍物。
-- ROS2：`/target_track_world`、`/target_track_truth`、`/drone_states`、`/ground_vehicle_states`、`/planned_path`、`/task_assignment`、`/enclosure_command` 均收到有效消息。
-- 封控：3 条有限坐标命令，`drone_id=0/1/2`，每条 `enclosure_radius=18.0 m`。
+## 实现内容
 
-## 车辆运动约束
+- 蓝色目标车 ID 101 使用前向车辆运动学。速度上限 17 m/s，加速度上限 2.4 m/s²，制动上限 3.2 m/s²，最大横摆角速度 0.48 rad/s，最小转弯半径 20 m。
+- 三架 UAV 分区搜索；主机发现目标后根据目标速度做预测前置，自动调整相机 FOV 和飞行高度。其他 UAV 向目标周围集合。
+- 3 辆灰色地面车根据 ROS2 `/enclosure_command` 向目标预测位置形成封控；避让目标、彼此、动态障碍和静态大型障碍。
+- 场景含 4 个大型静态工程障碍、8 辆静态车辆和 3 个动态工程障碍。车辆间使用半径与安全边界分离，不允许重叠。
+- `rain_wind_3ddisplay` 使用 14 m/s 风场、视觉雨滴、雾化和轻度模糊。其余预设覆盖晴天、雨天、强风、雾、雪、城市和山地。
+- 物理遮挡车持续根据相机至目标的视线走廊对准；对准后，检测器输入施加最多 1 秒的同步可见性退化，触发搜索、升高和重捕获。视频以 `SENSOR OCCLUSION` 和 `PHYSICAL BLOCKER / REACQUISITION SEARCH` 标记该阶段。
+- 决策回放同步显示目标蓝车、预测箭头、三架 UAV、三辆灰色地面车、静态/动态障碍、目标历史轨迹和封控任务线。
 
-- 蓝色目标车沿闭合路点路线运行，只沿车头方向积分，不叠加横向正弦位移。
-- 目标车最高速度 17.0 m/s，实际探针最高 16.20 m/s；加速度上限 2.4 m/s^2，制动上限 3.2 m/s^2。
-- 目标车最大横摆角速度 0.48 rad/s，最小转弯半径 20 m；转弯前自动降速。
-- 灰色封控车和动态工程车使用同类前向运动学，最大侧滑速度误差小于 1e-14 m/s。
+## 运行方式
 
-## 场景矩阵
+先启动 `F:\RflySim3D\RflySim3D.exe`，并保证 ROS VM 可 SSH 访问。Windows 侧从仓库根目录运行：
 
-短视频和统计文件位于 `scenario_matrix_20260822/`：
-
-| 场景 | 地图 | 天气 | 动态障碍 | 遮挡级别 | 视觉压力 |
-|---|---|---:|---:|---:|---|
-| `clear_grasslands` | Grasslands | clear | 0 | 0.00 | 无 |
-| `rain_3ddisplay` | 3DDisplay | rain | 3 | 0.35 | 雨、雾化、模糊、周期遮挡 |
-| `fog_3ddisplay` | 3DDisplay | fog | 3 | 0.30 | 雾化 0.28、模糊、周期遮挡 |
-| `snow_3ddisplay` | 3DDisplay | snow | 2 | 0.25 | 雪粒、雾化、模糊、周期遮挡 |
-| `city_clear` | Changsha | clear | 4 | 0.45 | 轻雾、周期遮挡 |
-| `mountain_clear` | MoutainRoad | clear | 3 | 0.38 | 轻雾、模糊、周期遮挡 |
-
-## 复现
-
-ROS VM：`192.168.88.135`；Windows/Rfly 主机：`192.168.88.1`；ROS Domain：`61`。
-
-```bash
-export RFLY_DEMO_ROOT=/home/hhh/Downloads/cvtrack-rfly-enhanced-20260821
-export ROS2_WS_ROOT=/home/hhh/Downloads/Swarm-Control-System/ros2_ws
-export ROS2_SETUP=$ROS2_WS_ROOT/install_validation/setup.bash
-export RFLY_HOST_IP=192.168.88.1
-bash $RFLY_DEMO_ROOT/scripts/run_ros_chain.sh 60 rain_3ddisplay
+```powershell
+.\tools\run_rfly_full_demo.ps1 `
+  -Duration 55 `
+  -Scenario rain_wind_3ddisplay `
+  -Python "C:\Users\911MT\AppData\Local\Programs\Python\Python311\python.exe"
 ```
 
-Windows 侧给 `rfly_live_cvtrack.py` 传入 `--view-cycle-s 8`，视频结束后用相同场景的 `scene_telemetry.jsonl` 运行 `make_decision_visualization.py`。
+脚本会启动 VM 中的 ROS2 场景、等待遥测就绪、启动 Windows 的实时视觉处理、下载 ROS2 遥测、生成上帝视角视频，并运行 `validate_rfly_run.py`。通过验收才会打印 `Full Rfly demo completed`。
 
-## 边界
+可用预设定义在 `scripts/scenario_presets.json`：`clear_grasslands`、`rain_3ddisplay`、`strong_wind_3ddisplay`、`rain_wind_3ddisplay`、`fog_3ddisplay`、`snow_3ddisplay`、`city_clear`、`mountain_clear`。
 
-这是“视觉触发的 Rfly 空地协同控制演示”。图像检测由蓝色目标语义分割式颜色候选加 BoT-SORT 完成，世界坐标控制在 Rfly Free 的动态相机换挂限制下保留 `truth_assist` 审计源；不能宣称为未经辅助的纯单目世界坐标闭环。此次没有 ARM、PX4 Offboard 或 MAVROS 飞控闭环。
+## 坐标和飞控边界
+
+这是视觉触发的 Rfly 空地协同控制演示，不是 PX4 或真机飞控验证。
+
+- Rfly Free 当前稳定提供单条原生 UAV1 RGB 流。UAV2/UAV3 的搜索和集合是场景级协同状态，不能描述为已验证的多相机原生视角交接。
+- 蓝色车辆检测、BoT-SORT 跟踪、丢失和重捕获由实时 RGB 输入产生。`target_visual` 保留视觉投影以供审计。
+- 遥测中的 `target_control_source=vision` 表示控制使用图像投影得到的目标状态；该投影依赖仿真相机位姿，不能声称为未经标定和同步验证的纯单目世界坐标闭环。
+- 控制使用 `UE4CtrlAPI` 运动学接口；未连接 MAVROS、未 ARM、未进入 PX4 Offboard 模式。

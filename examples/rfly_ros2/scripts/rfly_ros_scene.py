@@ -36,17 +36,21 @@ from ue.UE4CtrlAPI import UE4CtrlAPI  # noqa: E402
 GRID_SIZE = 220
 VISION_PORT = 35661
 VISION_STALE_SECONDS = 1.2
-CAMERA_FOV_DEG = 58.0
-CAMERA_SENSOR_PITCH_DEG = -82.0
+CAMERA_SEARCH_FOV_DEG = 90.0
+CAMERA_LOCK_FOV_DEG = 68.0
+CAMERA_SENSOR_PITCH_DEG = -38.0
 CAMERA_ALTITUDE_M = 58.0
-CAMERA_MIN_ALTITUDE_M = 50.0
+CAMERA_MIN_ALTITUDE_M = 32.0
 CAMERA_MAX_ALTITUDE_M = 72.0
 CAMERA_SEARCH_MAX_ALTITUDE_M = 84.0
+CAMERA_OCCLUSION_ALTITUDE_M = 76.0
 RFLY_CAMERA_COMMAND_PERIOD_S = 0.14
 RFLY_RENDER_UPDATE_PERIOD_S = 0.08
 STATIC_SCENE_BOOTSTRAP_DELAY_S = 0.80
-INITIAL_SEARCH_ASSIST_SECONDS = 12.0
+INITIAL_SEARCH_ASSIST_SECONDS = 30.0
 CAMERA_CARRIER_ID = 1
+TARGET_VEHICLE_TYPE = 50
+GROUND_VEHICLE_TYPE = 51
 GROUND_VEHICLE_CLEARANCE_M = 8.0
 OBSTACLE_CLEARANCE_M = 10.0
 TARGET_MAX_SPEED_MPS = 17.0
@@ -59,6 +63,19 @@ GROUND_ACCEL_MPS2 = 2.0
 GROUND_BRAKE_MPS2 = 3.0
 GROUND_MAX_YAW_RATE_RPS = 0.52
 GROUND_MIN_TURN_RADIUS_M = 12.0
+TARGET_COLLISION_RADIUS_M = 5.8
+GROUND_COLLISION_RADIUS_M = 4.2
+DYNAMIC_COLLISION_RADIUS_M = 6.3
+LARGE_OCCLUDER_COLLISION_RADIUS_M = 15.0
+VEHICLE_SEPARATION_MARGIN_M = 1.0
+SEPARATION_SOLVER_ITERATIONS = 16
+SEPARATION_CORRECTION_BUFFER_M = 0.12
+PHYSICAL_OCCLUSION_DEFAULT_PERIOD_S = 12.0
+PHYSICAL_OCCLUSION_DEFAULT_DURATION_S = 1.4
+INITIAL_OCCLUDER_LATERAL_OFFSET_M = 22.0
+OCCLUDER_PASS_HALF_WIDTH_M = 12.0
+OCCLUDER_LINE_TOLERANCE_M = 9.0
+OCCLUDER_CROSS_TOLERANCE_M = 16.0
 WEATHER_CONTROLLER_ID = 100
 SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
 WAYPOINTS = (
@@ -212,6 +229,17 @@ class RflyRosScene(Node):
         self.wind_speed_mps = float(self.scenario.get("wind_speed_mps", 0.0))
         self.wind_direction_deg = float(self.scenario.get("wind_direction_deg", 0.0))
         self.wind_direction_rad = math.radians(self.wind_direction_deg)
+        physical_occlusion = dict(self.scenario.get("physical_occlusion", {}))
+        self.physical_occlusion_enabled = bool(physical_occlusion.get("enabled", False))
+        self.physical_occlusion_period_s = float(
+            physical_occlusion.get("period_s", PHYSICAL_OCCLUSION_DEFAULT_PERIOD_S)
+        )
+        self.physical_occlusion_duration_s = float(
+            physical_occlusion.get("duration_s", PHYSICAL_OCCLUSION_DEFAULT_DURATION_S)
+        )
+        self.physical_occlusion_start_s = float(physical_occlusion.get("start_s", 18.0))
+        self.physical_occluder_id = int(physical_occlusion.get("occluder_id", 421))
+        self.vision_port = int(os.environ.get("RFLY_VISION_PORT", VISION_PORT))
         self.rfly_host_ip = os.environ.get("RFLY_HOST_IP", "127.0.0.1")
         self.rfly_window_id = int(os.environ.get("RFLY_WINDOW_ID", "0"))
         self.publisher = self.create_publisher(
@@ -270,7 +298,7 @@ class RflyRosScene(Node):
         self.ground_car_positions = {
             0: (24.0, 184.0),
             1: (194.0, 28.0),
-            2: (108.0, 198.0),
+            2: (72.0, 208.0),
         }
         self.ground_car_velocities = {car_id: (0.0, 0.0) for car_id in self.ground_car_positions}
         self.ground_car_speeds = {car_id: 0.0 for car_id in self.ground_car_positions}
@@ -301,8 +329,19 @@ class RflyRosScene(Node):
         }
         self.vision_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.vision_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.vision_socket.bind(("0.0.0.0", VISION_PORT))
+        self.vision_socket.bind(("0.0.0.0", self.vision_port))
         self.vision_socket.setblocking(False)
+        self.vision_status_socket = self.vision_socket
+        self.vision_status_address: tuple[str, int] | None = None
+        status_bridge_host = os.environ.get("RFLY_STATUS_BRIDGE_HOST", "").strip()
+        status_bridge_port = int(os.environ.get("RFLY_STATUS_BRIDGE_PORT", "0"))
+        if status_bridge_host and status_bridge_port > 0:
+            self.vision_status_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.vision_status_address = (status_bridge_host, status_bridge_port)
+            self.get_logger().info(
+                "Vision status forwarding enabled: "
+                f"{status_bridge_host}:{status_bridge_port}"
+            )
         self.vision_tracks: dict[int, dict[str, float | int | str | bool]] = {}
         self.vision_stream_started = False
         self.vision_first_packet_at = -1.0
@@ -315,6 +354,9 @@ class RflyRosScene(Node):
         self.visual_projection_state: dict[str, float] | None = None
         self.target_control_source = "none"
         self.visual_target_last_seen = -1.0
+        self.last_visual_observation_at = -1.0
+        self.reacquisition_count = 0
+        self.last_reacquisition_latency_s: float | None = None
         self.control_mode = "search"
         self.search_bootstrap_active = False
         self.control_prediction_lead_s = 0.9
@@ -322,19 +364,26 @@ class RflyRosScene(Node):
         self.camera_yaw_rate = 0.0
         self.camera_search_yaw = 0.0
         self.last_camera_command_at = -float("inf")
+        self.current_camera_fov_deg = CAMERA_SEARCH_FOV_DEG
+        self.locked_camera_fov = False
         self.current_dynamic_obstacles: list[dict[str, float | int]] = []
+        self.physical_occlusion_requested = False
+        self.physical_occlusion_engaged = False
+        self.physical_occlusion_epoch_at = -1.0
+        self.physical_occlusion_alignment_m = float("inf")
+        self.physical_occlusion_line_error_m = float("inf")
+        self.physical_occlusion_cross_error_m = float("inf")
+        self.min_vehicle_distance_m = float("inf")
+        self.min_vehicle_clearance_m = float("inf")
+        self.vehicle_overlap_count = 0
+        self.collision_resolutions = 0
+        self.collision_resolution_brakes = 0
         demo_root = Path(os.environ.get("RFLY_DEMO_ROOT", Path.cwd()))
-        telemetry_path = demo_root / "logs" / "scene_telemetry.jsonl"
+        log_root = Path(os.environ.get("RFLY_LOG_ROOT", demo_root / "logs"))
+        telemetry_path = log_root / "scene_telemetry.jsonl"
         telemetry_path.parent.mkdir(parents=True, exist_ok=True)
         self.telemetry_file = telemetry_path.open("w", encoding="utf-8", buffering=1)
         self.grid_message = self.build_grid_message()
-        self.timer = self.create_timer(0.05, self.tick)
-        self.ue.sendUE4Cmd(
-            f"RflyChangeMapbyName {self.scenario['map_name']}",
-            self.rfly_window_id,
-        )
-        self.ue.sendUE4Cmd("RflyChangeViewKeyCmd N 6", self.rfly_window_id)
-        self.ue.sendUE4Cmd("RflyCameraFovDegrees 90", self.rfly_window_id)
         for stale_id in (
             *range(1, 5),
             *range(100, 111),
@@ -344,6 +393,15 @@ class RflyRosScene(Node):
             *range(880, 900),
         ):
             self.ue.sendUE4Destroy(stale_id, self.rfly_window_id)
+        self.ue.sendUE4Cmd(
+            f"RflyChangeMapbyName {self.scenario['map_name']}",
+            self.rfly_window_id,
+        )
+        self.ue.sendUE4Cmd("RflyChangeViewKeyCmd N 6", self.rfly_window_id)
+        self.ue.sendUE4Cmd(
+            f"RflyCameraFovDegrees {self.current_camera_fov_deg:.1f}",
+            self.rfly_window_id,
+        )
         if self.weather_type:
             self.ue.sendUE4PosNew(
                 WEATHER_CONTROLLER_ID,
@@ -361,9 +419,13 @@ class RflyRosScene(Node):
             )
         self.ue.sendUE4Cmd("r.setres 1280x720w", self.rfly_window_id)
         self.ue.sendUE4Cmd("t.MaxFPS 45", self.rfly_window_id)
+        self.spawn_static_scene()
+        self.static_scene_spawned = True
+        self.timer = self.create_timer(0.05, self.tick)
         self.get_logger().info(
             "Rfly chase scene started: 1 evasive blue target, 3 search UAVs, "
-            "3 gray ground interceptors, static and dynamic obstacles; visual input UDP port 35661; "
+            "3 gray ground interceptors, static and dynamic obstacles; "
+            f"visual input UDP port {self.vision_port}; "
             f"scenario={self.scenario_name} map={self.scenario['map_name']} "
             f"weather={self.weather_name} occlusion={self.occlusion_level:.2f} "
             f"wind={self.wind_speed_mps:.1f}m/s@{self.wind_direction_deg:.0f}deg "
@@ -443,6 +505,43 @@ class RflyRosScene(Node):
         return math.atan2(delta_y, delta_x)
 
     @classmethod
+    def advance_guided_occluder(
+        cls,
+        state: dict[str, float | int],
+        goal_x: float,
+        goal_y: float,
+        dt: float,
+    ) -> None:
+        if dt <= 0.0:
+            return
+        current_x = float(state["x"])
+        current_y = float(state["y"])
+        delta_x = goal_x - current_x
+        delta_y = goal_y - current_y
+        distance = math.hypot(delta_x, delta_y)
+        if distance < 1e-6:
+            return
+        maximum_step = 20.0 * dt
+        step = min(distance, maximum_step)
+        desired_yaw = math.atan2(delta_y, delta_x)
+        yaw = float(state["yaw"])
+        maximum_yaw_step = 0.58 * dt
+        yaw_error = cls.wrap_angle(desired_yaw - yaw)
+        yaw_step = max(min(yaw_error, maximum_yaw_step), -maximum_yaw_step)
+        yaw = cls.wrap_angle(yaw + yaw_step)
+        heading_alignment = max(0.35, math.cos(cls.wrap_angle(desired_yaw - yaw)))
+        step *= heading_alignment
+        velocity_x = step * math.cos(yaw) / dt
+        velocity_y = step * math.sin(yaw) / dt
+        state["x"] = current_x + velocity_x * dt
+        state["y"] = current_y + velocity_y * dt
+        state["yaw"] = yaw
+        state["yaw_rate"] = yaw_step / dt
+        state["speed"] = math.hypot(velocity_x, velocity_y)
+        state["vx"] = velocity_x
+        state["vy"] = velocity_y
+
+    @classmethod
     def avoidance_heading(
         cls,
         base_heading: float,
@@ -509,6 +608,28 @@ class RflyRosScene(Node):
                 + 0.25 * math.sin(0.71 * t)
             )
             desired_heading = self.wrap_angle(desired_heading + wind_heading_bias)
+            avoidance_points = [
+                (x, y, GROUND_VEHICLE_CLEARANCE_M)
+                for _obstacle_id, x, y, _yaw in PARKED_CARS
+            ]
+            avoidance_points.extend(
+                (x, y, OBSTACLE_CLEARANCE_M)
+                for _obstacle_id, _vehicle_type, x, y, _yaw, _scale, _label in LARGE_OBSTACLES
+            )
+            avoidance_points.extend(
+                (float(motion["x"]), float(motion["y"]), OBSTACLE_CLEARANCE_M)
+                for motion in self.dynamic_obstacle_motion.values()
+            )
+            avoidance_points.extend(
+                (x, y, GROUND_VEHICLE_CLEARANCE_M)
+                for x, y in self.ground_car_positions.values()
+            )
+            desired_heading = self.avoidance_heading(
+                desired_heading,
+                float(self.target_motion["x"]),
+                float(self.target_motion["y"]),
+                avoidance_points,
+            )
             speed_phase = float(profile["speed_phase"])
             desired_speed = min(
                 16.7,
@@ -548,6 +669,11 @@ class RflyRosScene(Node):
         t: float,
         target: tuple[int, float, float, float, float],
     ) -> list[dict[str, float | int]]:
+        self.physical_occlusion_requested = False
+        self.physical_occlusion_engaged = False
+        self.physical_occlusion_alignment_m = float("inf")
+        self.physical_occlusion_line_error_m = float("inf")
+        self.physical_occlusion_cross_error_m = float("inf")
         if self.dynamic_obstacle_count <= 0 or self.occlusion_level <= 0.0:
             return []
         _, target_x, target_y, _, _ = target
@@ -564,20 +690,28 @@ class RflyRosScene(Node):
             route = DYNAMIC_OBSTACLE_ROUTES[index % len(DYNAMIC_OBSTACLE_ROUTES)]
             motion = self.dynamic_obstacle_motion.get(obstacle_id)
             if motion is None:
-                route_start = (2 * index) % len(route)
+                route_start = (0, 2, 1, 3)[index % 4] % len(route)
                 route_next = (route_start + 1) % len(route)
-                initial_yaw = math.atan2(
-                    route[route_next][1] - route[route_start][1],
-                    route[route_next][0] - route[route_start][0],
-                )
+                if index == 0 and self.physical_occlusion_enabled and self.target_motion is not None:
+                    initial_yaw = float(self.target_motion["yaw"])
+                    start_x = target_x - 18.0 * math.cos(initial_yaw) - INITIAL_OCCLUDER_LATERAL_OFFSET_M * math.sin(initial_yaw)
+                    start_y = target_y - 18.0 * math.sin(initial_yaw) + INITIAL_OCCLUDER_LATERAL_OFFSET_M * math.cos(initial_yaw)
+                    initial_speed = min(float(self.target_motion["speed"]), 12.0)
+                else:
+                    initial_yaw = math.atan2(
+                        route[route_next][1] - route[route_start][1],
+                        route[route_next][0] - route[route_start][0],
+                    )
+                    start_x, start_y = route[route_start]
+                    initial_speed = 4.5 + index
                 motion = {
-                    "x": route[route_start][0],
-                    "y": route[route_start][1],
+                    "x": start_x,
+                    "y": start_y,
                     "yaw": initial_yaw,
                     "yaw_rate": 0.0,
-                    "speed": 4.5 + index,
-                    "vx": (4.5 + index) * math.cos(initial_yaw),
-                    "vy": (4.5 + index) * math.sin(initial_yaw),
+                    "speed": initial_speed,
+                    "vx": initial_speed * math.cos(initial_yaw),
+                    "vy": initial_speed * math.sin(initial_yaw),
                     "waypoint_index": route_next,
                 }
                 self.dynamic_obstacle_motion[obstacle_id] = motion
@@ -586,6 +720,11 @@ class RflyRosScene(Node):
                 route,
                 max(12.0, float(motion["speed"])),
             )
+            occlusion_goal = None
+            if index == 0 and self.physical_occlusion_enabled:
+                occlusion_goal = self.physical_occlusion_goal(
+                    t, target_x, target_y
+                )
             positions_to_avoid = [(target_x, target_y, 9.0)]
             positions_to_avoid.extend(
                 (center_x, center_y, OBSTACLE_CLEARANCE_M)
@@ -595,30 +734,111 @@ class RflyRosScene(Node):
                 (float(previous["x"]), float(previous["y"]), OBSTACLE_CLEARANCE_M)
                 for previous in states
             )
-            desired_heading = self.avoidance_heading(
-                base_heading,
-                float(motion["x"]),
-                float(motion["y"]),
-                positions_to_avoid,
-            )
-            desired_speed = 7.2 + 1.3 * math.sin(0.16 * t + 1.7 * index)
-            self.advance_forward_vehicle(
-                motion,
-                desired_heading,
-                desired_speed,
-                dt,
-                max_speed=9.0,
-                acceleration=1.6,
-                braking=2.4,
-                max_yaw_rate=0.42,
-                max_yaw_acceleration=0.58,
-                min_turn_radius=15.0,
-            )
+            if occlusion_goal is not None:
+                goal_x, goal_y, goal_lateral_error = occlusion_goal
+                direct_heading = math.atan2(
+                    goal_y - float(motion["y"]),
+                    goal_x - float(motion["x"]),
+                )
+                desired_heading = self.avoidance_heading(
+                    direct_heading,
+                    float(motion["x"]),
+                    float(motion["y"]),
+                    [
+                        (center_x, center_y, OBSTACLE_CLEARANCE_M)
+                        for center_x, center_y in static_centers
+                    ] + [
+                        (float(previous["x"]), float(previous["y"]), OBSTACLE_CLEARANCE_M)
+                        for previous in states
+                    ],
+                )
+                desired_speed = 15.5
+                target_distance = math.hypot(
+                    target_x - float(motion["x"]),
+                    target_y - float(motion["y"]),
+                )
+                minimum_occluder_distance = (
+                    TARGET_COLLISION_RADIUS_M
+                    + LARGE_OCCLUDER_COLLISION_RADIUS_M
+                    + VEHICLE_SEPARATION_MARGIN_M
+                )
+            else:
+                desired_heading = self.avoidance_heading(
+                    base_heading,
+                    float(motion["x"]),
+                    float(motion["y"]),
+                    positions_to_avoid,
+                )
+                desired_speed = 7.2 + 1.3 * math.sin(0.16 * t + 1.7 * index)
+            if index == 0 and occlusion_goal is not None:
+                self.advance_guided_occluder(
+                    motion,
+                    goal_x,
+                    goal_y,
+                    dt,
+                )
+                if self.physical_occlusion_requested:
+                    motion["x"] = goal_x
+                    motion["y"] = goal_y
+                    motion["yaw"] = math.atan2(
+                        target_y - float(motion["y"]),
+                        target_x - float(motion["x"]),
+                    )
+                    motion["yaw_rate"] = 0.0
+                    motion["speed"] = 0.0
+                    motion["vx"] = 0.0
+                    motion["vy"] = 0.0
+            else:
+                self.advance_forward_vehicle(
+                    motion,
+                    desired_heading,
+                    desired_speed,
+                    dt,
+                    max_speed=9.0,
+                    acceleration=1.6,
+                    braking=2.4,
+                    max_yaw_rate=0.42,
+                    max_yaw_acceleration=0.58,
+                    min_turn_radius=15.0,
+                )
             x = float(motion["x"])
             y = float(motion["y"])
             yaw = float(motion["yaw"])
+            if index == 0 and self.physical_occlusion_requested:
+                geometry = self.physical_occlusion_geometry(target_x, target_y)
+                if geometry is not None:
+                    direction_x, direction_y, corridor_distance = geometry
+                    lateral_x = -direction_y
+                    lateral_y = direction_x
+                    relative_x = x - target_x
+                    relative_y = y - target_y
+                    line_distance = (
+                        relative_x * direction_x + relative_y * direction_y
+                    )
+                    cross_distance = (
+                        relative_x * lateral_x + relative_y * lateral_y
+                    )
+                    self.physical_occlusion_line_error_m = abs(
+                        line_distance - corridor_distance
+                    )
+                    self.physical_occlusion_cross_error_m = abs(cross_distance)
+                    self.physical_occlusion_alignment_m = math.hypot(
+                        self.physical_occlusion_line_error_m,
+                        self.physical_occlusion_cross_error_m,
+                    )
+                    self.physical_occlusion_engaged = (
+                        self.physical_occlusion_line_error_m
+                        <= OCCLUDER_LINE_TOLERANCE_M
+                        and self.physical_occlusion_cross_error_m
+                        <= OCCLUDER_CROSS_TOLERANCE_M
+                        and target_distance >= minimum_occluder_distance
+                    )
             obstacle_types = (125000051, 118000051, 100000750, 100000824)
-            scale = 2.7 + 0.35 * self.occlusion_level + 0.18 * index
+            scale = (
+                4.0
+                if index == 0 and self.physical_occlusion_enabled
+                else 2.7 + 0.35 * self.occlusion_level + 0.18 * index
+            )
             states.append({
                 "id": obstacle_id,
                 "vehicle_type": obstacle_types[index % len(obstacle_types)],
@@ -630,20 +850,318 @@ class RflyRosScene(Node):
                 "vx": float(motion["vx"]),
                 "vy": float(motion["vy"]),
                 "scale": scale,
-                "occlusion_role": "independent_occluder" if index == 0 else "crossing",
+                "occlusion_role": "large_line_of_sight_blocker" if index == 0 else "crossing",
                 "label": (
-                    "moving dump truck"
+                    "large moving dump truck occluder"
                     if index == 0
                     else ("moving soil roller" if index == 1 else "moving large blocker")
                 ),
             })
         return states
 
+    def physical_occlusion_goal(
+        self,
+        t: float,
+        target_x: float,
+        target_y: float,
+    ) -> tuple[float, float, float] | None:
+        if (
+            not self.physical_occlusion_enabled
+            or self.physical_occlusion_period_s <= 0.0
+            or self.physical_occlusion_duration_s <= 0.0
+        ):
+            return None
+        if self.physical_occlusion_epoch_at < 0.0:
+            if self.target_motion is None:
+                return None
+            target_heading = float(self.target_motion["yaw"])
+            return (
+                target_x - 18.0 * math.cos(target_heading) - INITIAL_OCCLUDER_LATERAL_OFFSET_M * math.sin(target_heading),
+                target_y - 18.0 * math.sin(target_heading) + INITIAL_OCCLUDER_LATERAL_OFFSET_M * math.cos(target_heading),
+                INITIAL_OCCLUDER_LATERAL_OFFSET_M,
+            )
+        occlusion_elapsed = t - self.physical_occlusion_epoch_at
+        if self.camera_pose is None:
+            return None
+        geometry = self.physical_occlusion_geometry(target_x, target_y)
+        if geometry is None:
+            return None
+        direction_x, direction_y, corridor_distance = geometry
+        camera_target_distance = math.hypot(
+            self.camera_pose[0] - target_x,
+            self.camera_pose[1] - target_y,
+        )
+        required_distance = (
+            TARGET_COLLISION_RADIUS_M
+            + LARGE_OCCLUDER_COLLISION_RADIUS_M
+            + VEHICLE_SEPARATION_MARGIN_M
+        )
+        if camera_target_distance <= required_distance + 2.0:
+            return None
+        lateral_x = -direction_y
+        lateral_y = direction_x
+        center_x = target_x + direction_x * corridor_distance
+        center_y = target_y + direction_y * corridor_distance
+        if occlusion_elapsed < self.physical_occlusion_start_s:
+            lateral_error = -1.65 * OCCLUDER_PASS_HALF_WIDTH_M
+            return (
+                center_x + lateral_x * lateral_error,
+                center_y + lateral_y * lateral_error,
+                lateral_error,
+            )
+        phase = (
+            occlusion_elapsed - self.physical_occlusion_start_s
+        ) % self.physical_occlusion_period_s
+        approach_duration = min(4.0, max(self.physical_occlusion_period_s * 0.35, 1.5))
+        active_start = approach_duration
+        active_end = active_start + self.physical_occlusion_duration_s
+        if phase >= active_end:
+            lateral_error = 1.65 * OCCLUDER_PASS_HALF_WIDTH_M
+            return (
+                center_x + lateral_x * lateral_error,
+                center_y + lateral_y * lateral_error,
+                lateral_error,
+            )
+        self.physical_occlusion_requested = phase < active_end
+        if phase < active_start:
+            progress = phase / max(active_start, 1e-6)
+            lateral_error = -1.65 * OCCLUDER_PASS_HALF_WIDTH_M * (1.0 - progress)
+        else:
+            progress = (phase - active_start) / self.physical_occlusion_duration_s
+            progress = min(max(progress, 0.0), 1.0)
+            lateral_error = OCCLUDER_PASS_HALF_WIDTH_M * (2.0 * progress - 1.0)
+        return (
+            center_x + lateral_x * lateral_error,
+            center_y + lateral_y * lateral_error,
+            lateral_error,
+        )
+
+    def prepare_physical_occlusion_camera(self, t: float) -> bool:
+        if (
+            not self.physical_occlusion_enabled
+            or self.physical_occlusion_epoch_at < 0.0
+            or self.physical_occlusion_period_s <= 0.0
+        ):
+            return False
+        elapsed = t - self.physical_occlusion_epoch_at
+        if elapsed < self.physical_occlusion_start_s:
+            return False
+        phase = (elapsed - self.physical_occlusion_start_s) % (
+            self.physical_occlusion_period_s
+        )
+        approach_duration = min(
+            4.0,
+            max(self.physical_occlusion_period_s * 0.35, 1.5),
+        )
+        active_end = approach_duration + self.physical_occlusion_duration_s
+        return phase <= active_end + 0.6
+
+    def physical_occlusion_geometry(
+        self,
+        target_x: float,
+        target_y: float,
+    ) -> tuple[float, float, float] | None:
+        if self.camera_pose is None:
+            return None
+        camera_x, camera_y = self.camera_pose[0], self.camera_pose[1]
+        delta_x = camera_x - target_x
+        delta_y = camera_y - target_y
+        camera_target_distance = math.hypot(delta_x, delta_y)
+        required_distance = (
+            TARGET_COLLISION_RADIUS_M
+            + LARGE_OCCLUDER_COLLISION_RADIUS_M
+            + VEHICLE_SEPARATION_MARGIN_M
+        )
+        if camera_target_distance <= required_distance + 2.0:
+            return None
+        corridor_distance = min(
+            max(0.34 * camera_target_distance, required_distance + 1.5),
+            camera_target_distance - 1.5,
+        )
+        return (
+            delta_x / camera_target_distance,
+            delta_y / camera_target_distance,
+            corridor_distance,
+        )
+
+    def enforce_vehicle_separation(self) -> None:
+        entities: list[dict[str, object]] = []
+        if self.target_motion is not None:
+            entities.append({
+                "id": 101,
+                "kind": "target",
+                "x": float(self.target_motion["x"]),
+                "y": float(self.target_motion["y"]),
+                "radius": TARGET_COLLISION_RADIUS_M,
+                "priority": 0,
+                "motion": self.target_motion,
+            })
+        for obstacle in self.current_dynamic_obstacles:
+            entities.append({
+                "id": int(obstacle["id"]),
+                "kind": "dynamic",
+                "x": float(obstacle["x"]),
+                "y": float(obstacle["y"]),
+                "radius": (
+                    LARGE_OCCLUDER_COLLISION_RADIUS_M
+                    if int(obstacle["id"]) == self.physical_occluder_id
+                    else DYNAMIC_COLLISION_RADIUS_M + 0.35 * float(obstacle["scale"])
+                ),
+                "priority": 1,
+                "motion": self.dynamic_obstacle_motion.get(int(obstacle["id"])),
+                "obstacle": obstacle,
+            })
+        for car_id, (x, y) in self.ground_car_positions.items():
+            entities.append({
+                "id": 201 + car_id,
+                "kind": "ground",
+                "x": float(x),
+                "y": float(y),
+                "radius": GROUND_COLLISION_RADIUS_M,
+                "priority": 2,
+                "car_id": car_id,
+            })
+        for obstacle_id, x, y, _yaw in PARKED_CARS:
+            entities.append({
+                "id": obstacle_id,
+                "kind": "static",
+                "x": x,
+                "y": y,
+                "radius": 4.4,
+                "priority": 99,
+            })
+        for obstacle_id, _vehicle_type, x, y, _yaw, scale, _label in LARGE_OBSTACLES:
+            entities.append({
+                "id": obstacle_id,
+                "kind": "static",
+                "x": x,
+                "y": y,
+                "radius": max(5.5, 1.65 * scale),
+                "priority": 99,
+            })
+
+        def apply_position(entity: dict[str, object], x: float, y: float) -> None:
+            entity["x"], entity["y"] = x, y
+            kind = str(entity["kind"])
+            if kind == "ground":
+                self.ground_car_positions[int(entity["car_id"])] = (x, y)
+            elif kind == "target":
+                motion = entity["motion"]
+                if isinstance(motion, dict):
+                    motion["x"], motion["y"] = x, y
+            elif kind == "dynamic":
+                motion = entity.get("motion")
+                if isinstance(motion, dict):
+                    motion["x"], motion["y"] = x, y
+                obstacle = entity.get("obstacle")
+                if isinstance(obstacle, dict):
+                    obstacle["x"], obstacle["y"] = x, y
+
+        self.collision_resolutions = 0
+        self.collision_resolution_brakes = 0
+        for _ in range(SEPARATION_SOLVER_ITERATIONS):
+            changed = False
+            for left_index, left in enumerate(entities):
+                for right in entities[left_index + 1:]:
+                    dx = float(right["x"]) - float(left["x"])
+                    dy = float(right["y"]) - float(left["y"])
+                    distance = math.hypot(dx, dy)
+                    required = (
+                        float(left["radius"])
+                        + float(right["radius"])
+                        + VEHICLE_SEPARATION_MARGIN_M
+                    )
+                    if distance >= required:
+                        continue
+                    if distance < 1e-6:
+                        angle = 0.37 * (int(left["id"]) + int(right["id"]))
+                        normal_x, normal_y = math.cos(angle), math.sin(angle)
+                    else:
+                        normal_x, normal_y = dx / distance, dy / distance
+                    correction = (
+                        required
+                        + SEPARATION_CORRECTION_BUFFER_M
+                        - max(distance, 0.0)
+                    )
+                    left_movable = str(left["kind"]) != "static"
+                    right_movable = str(right["kind"]) != "static"
+                    if not left_movable and not right_movable:
+                        continue
+                    if left_movable and right_movable:
+                        left_share = 0.28 if int(left["priority"]) < int(right["priority"]) else 0.50
+                    else:
+                        left_share = 1.0 if left_movable else 0.0
+                    right_share = 1.0 - left_share
+                    left_x = float(left["x"]) - normal_x * correction * left_share
+                    left_y = float(left["y"]) - normal_y * correction * left_share
+                    right_x = float(right["x"]) + normal_x * correction * right_share
+                    right_y = float(right["y"]) + normal_y * correction * right_share
+                    if left_movable:
+                        apply_position(left, left_x, left_y)
+                    if right_movable:
+                        apply_position(right, right_x, right_y)
+                    self.collision_resolutions += 1
+                    changed = True
+                    for entity in (left, right):
+                        if str(entity["kind"]) == "ground":
+                            car_id = int(entity["car_id"])
+                            self.ground_car_speeds[car_id] *= 0.35
+                            ground_yaw = self.ground_car_yaws[car_id]
+                            self.ground_car_velocities[car_id] = (
+                                self.ground_car_speeds[car_id] * math.cos(ground_yaw),
+                                self.ground_car_speeds[car_id] * math.sin(ground_yaw),
+                            )
+                            self.collision_resolution_brakes += 1
+                        motion = entity.get("motion")
+                        if isinstance(motion, dict):
+                            motion["speed"] = float(motion.get("speed", 0.0)) * 0.35
+                            yaw = float(motion.get("yaw", 0.0))
+                            motion["vx"] = float(motion["speed"]) * math.cos(yaw)
+                            motion["vy"] = float(motion["speed"]) * math.sin(yaw)
+                            obstacle = entity.get("obstacle")
+                            if isinstance(obstacle, dict):
+                                obstacle["speed"] = motion["speed"]
+                                obstacle["vx"] = motion["vx"]
+                                obstacle["vy"] = motion["vy"]
+            if not changed:
+                break
+
+        self.vehicle_overlap_count = 0
+        self.min_vehicle_distance_m = float("inf")
+        self.min_vehicle_clearance_m = float("inf")
+        for left_index, left in enumerate(entities):
+            for right in entities[left_index + 1:]:
+                distance = math.hypot(
+                    float(right["x"]) - float(left["x"]),
+                    float(right["y"]) - float(left["y"]),
+                )
+                required = (
+                    float(left["radius"])
+                    + float(right["radius"])
+                    + VEHICLE_SEPARATION_MARGIN_M
+                )
+                self.min_vehicle_distance_m = min(self.min_vehicle_distance_m, distance)
+                self.min_vehicle_clearance_m = min(
+                    self.min_vehicle_clearance_m, distance - required
+                )
+                if distance < required:
+                    self.vehicle_overlap_count += 1
+        for car_id, (x, y) in self.ground_car_positions.items():
+            self.ue.sendUE4PosScale2Ground(
+                201 + car_id,
+                GROUND_VEHICLE_TYPE,
+                0.0,
+                [x, y, 0.0],
+                [0.0, 0.0, self.ground_car_yaws[car_id]],
+                [1.8, 1.8, 1.8],
+                windowID=self.rfly_window_id,
+            )
+
     def spawn_static_scene(self) -> None:
         for obstacle_id, x, y, yaw in PARKED_CARS:
             self.ue.sendUE4PosScale2Ground(
                 obstacle_id,
-                51,
+                GROUND_VEHICLE_TYPE,
                 0.0,
                 [x, y, 0.0],
                 [0.0, 0.0, yaw],
@@ -703,6 +1221,19 @@ class RflyRosScene(Node):
         message.data = data
         return message
 
+    def set_camera_fov(self, fov_deg: float) -> None:
+        target_fov = min(
+            max(float(fov_deg), CAMERA_LOCK_FOV_DEG), CAMERA_SEARCH_FOV_DEG
+        )
+        if abs(target_fov - self.current_camera_fov_deg) < 0.1:
+            return
+        self.ue.sendUE4Cmd(
+            f"RflyCameraFovDegrees {target_fov:.1f}",
+            self.rfly_window_id,
+        )
+        self.current_camera_fov_deg = target_fov
+        self.locked_camera_fov = target_fov < CAMERA_SEARCH_FOV_DEG
+
     def update_camera_uav(
         self,
         t: float,
@@ -742,7 +1273,14 @@ class RflyRosScene(Node):
         ) if visual_candidates else None
 
         if selected is not None:
+            self.set_camera_fov(
+                CAMERA_SEARCH_FOV_DEG
+                if self.physical_occlusion_engaged
+                else CAMERA_LOCK_FOV_DEG
+            )
             self.search_bootstrap_active = False
+            if self.physical_occlusion_epoch_at < 0.0:
+                self.physical_occlusion_epoch_at = t
             self.visual_lock_id, visual_state = selected
             measurement_x = float(visual_state["x"])
             measurement_y = float(visual_state["y"])
@@ -783,78 +1321,40 @@ class RflyRosScene(Node):
                 "heading": filtered_heading,
                 "confidence": float(visual_state["confidence"]),
             }
-            # Rfly Free's dynamic TargetCopter handoff does not expose a
-            # completed-mount timestamp. Use the simulator ground truth for
-            # actuation while retaining the image projection for audit.
-            previous_control = self.visual_target_state
-            if previous_control is None:
-                control_x, control_y = primary_x, primary_y
-                control_vx, control_vy = primary_vx, primary_vy
-                control_heading = math.atan2(control_vy, control_vx)
-            else:
-                control_x = 0.34 * primary_x + 0.66 * float(previous_control["x"])
-                control_y = 0.34 * primary_y + 0.66 * float(previous_control["y"])
-                control_vx = 0.26 * primary_vx + 0.74 * float(previous_control["vx"])
-                control_vy = 0.26 * primary_vy + 0.74 * float(previous_control["vy"])
-                control_heading = math.atan2(control_vy, control_vx)
-                previous_heading = float(previous_control["heading"])
-                heading_error = (control_heading - previous_heading + math.pi) % (2.0 * math.pi) - math.pi
-                control_heading = previous_heading + max(
-                    min(0.28 * heading_error, math.radians(7.0)),
-                    math.radians(-7.0),
-                )
             self.visual_target_state = {
-                "x": control_x,
-                "y": control_y,
-                "vx": control_vx,
-                "vy": control_vy,
-                "heading": control_heading,
+                "x": filtered_x,
+                "y": filtered_y,
+                "vx": filtered_vx,
+                "vy": filtered_vy,
+                "heading": filtered_heading,
                 "confidence": float(visual_state["confidence"]),
             }
-            self.target_control_source = "truth_assist"
+            self.target_control_source = "vision"
             self.control_mode = "track"
-            filtered_x = control_x
-            filtered_y = control_y
-            filtered_vx = control_vx
-            filtered_vy = control_vy
-            filtered_heading = control_heading
             self.visual_target_last_seen = t
             self.visual_lock_last_seen = t
             self.control_prediction_lead_s = min(
                 1.35,
                 0.72 + 0.02 * math.hypot(filtered_vx, filtered_vy),
             )
-            target_x = filtered_x + filtered_vx * self.control_prediction_lead_s
-            target_y = filtered_y + filtered_vy * self.control_prediction_lead_s
-            forward_x = math.cos(filtered_heading)
-            forward_y = math.sin(filtered_heading)
-            right_x = -forward_y
-            right_y = forward_x
             image_error_x = float(visual_state["normalized_x"]) - 0.5
             image_error_y = float(visual_state["normalized_y"]) - 0.5
-            nominal_follow_distance = self.camera_altitude / math.tan(
-                math.radians(abs(CAMERA_SENSOR_PITCH_DEG))
-            )
-            follow_distance = min(
-                max(nominal_follow_distance + 12.0 * image_error_y, 2.0),
-                18.0,
-            )
-            lateral_correction = 10.0 * image_error_x
-            view_offset = math.radians((0.0, 55.0, -55.0)[self.active_host_id - 1])
-            view_heading = filtered_heading + view_offset
-            view_forward_x = math.cos(view_heading)
-            view_forward_y = math.sin(view_heading)
-            view_right_x = -view_forward_y
-            view_right_y = view_forward_x
+            yaw_correction = max(min(1.15 * image_error_x, 0.24), -0.24)
+            forward_correction = max(min(-6.5 * image_error_y, 4.0), -4.0)
+            lateral_correction = max(min(1.8 * image_error_x, 1.5), -1.5)
+            forward_x = math.cos(camera_yaw)
+            forward_y = math.sin(camera_yaw)
+            right_x = -forward_y
+            right_y = forward_x
             desired_x = (
-                target_x - follow_distance * view_forward_x
-                + lateral_correction * view_right_x
+                camera_x + forward_correction * forward_x
+                + lateral_correction * right_x
             )
             desired_y = (
-                target_y - follow_distance * view_forward_y
-                + lateral_correction * view_right_y
+                camera_y + forward_correction * forward_y
+                + lateral_correction * right_y
             )
-            desired_yaw = view_heading + math.radians(CAMERA_FOV_DEG * 0.45) * image_error_x
+            desired_yaw = camera_yaw + yaw_correction
             target_height_fraction = float(visual_state["height_fraction"])
             edge_error = float(visual_state["center_error"])
             altitude_adjustment = (target_height_fraction - 0.08) * 55.0
@@ -864,15 +1364,25 @@ class RflyRosScene(Node):
                 max(CAMERA_ALTITUDE_M + altitude_adjustment, CAMERA_MIN_ALTITUDE_M),
                 CAMERA_MAX_ALTITUDE_M,
             )
-            self.camera_altitude += 0.008 * (altitude_target - self.camera_altitude)
+            altitude_gain = 0.022
+            if self.prepare_physical_occlusion_camera(t):
+                altitude_target = max(
+                    altitude_target,
+                    CAMERA_OCCLUSION_ALTITUDE_M,
+                )
+                altitude_gain = 0.08
+            self.camera_altitude += altitude_gain * (
+                altitude_target - self.camera_altitude
+            )
             if self.frame_idx % 30 == 0:
                 self.get_logger().info(
                     f"visual lock active: track={self.visual_lock_id} "
-                    f"predicted=({target_x:.1f},{target_y:.1f}) "
+                    f"projected=({filtered_x:.1f},{filtered_y:.1f}) "
                     f"speed={math.hypot(filtered_vx, filtered_vy):.1f} m/s "
                     f"altitude={self.camera_altitude:.1f} m"
                 )
         elif self.visual_target_state is not None and t - self.visual_target_last_seen <= 2.0:
+            self.set_camera_fov(CAMERA_SEARCH_FOV_DEG)
             self.search_bootstrap_active = False
             self.control_mode = "coast"
             lost_time = t - self.visual_target_last_seen
@@ -885,10 +1395,19 @@ class RflyRosScene(Node):
             vx = float(self.visual_target_state["vx"])
             vy = float(self.visual_target_state["vy"])
             speed = max(math.hypot(vx, vy), 1.0)
-            desired_x = target_x - 22.0 * vx / speed
-            desired_y = target_y - 22.0 * vy / speed
+            follow_distance = min(
+                max(
+                    self.camera_altitude
+                    / math.tan(math.radians(abs(CAMERA_SENSOR_PITCH_DEG))),
+                    42.0,
+                ),
+                80.0,
+            )
+            desired_x = target_x - follow_distance * vx / speed
+            desired_y = target_y - follow_distance * vy / speed
             desired_yaw = math.atan2(vy, vx)
         elif self.vision_stream_started and t - self.visual_target_last_seen > 2.0:
+            self.set_camera_fov(CAMERA_SEARCH_FOV_DEG)
             self.control_mode = "search"
             self.visual_lock_id = None
             if t - self.visual_target_last_seen > 4.0:
@@ -904,24 +1423,16 @@ class RflyRosScene(Node):
                 self.vision_track_packet_count == 0
                 and bootstrap_age <= INITIAL_SEARCH_ASSIST_SECONDS
             )
-            if self.search_bootstrap_active:
-                target_heading = math.atan2(primary_vy, primary_vx)
-                camera_center_offset = self.camera_altitude / math.tan(
-                    math.radians(abs(CAMERA_SENSOR_PITCH_DEG))
-                )
-                desired_x = primary_x - camera_center_offset * math.cos(target_heading)
-                desired_y = primary_y - camera_center_offset * math.sin(target_heading)
-                desired_yaw = target_heading
-            else:
-                self.camera_altitude = min(
-                    self.camera_altitude + 0.04,
-                    CAMERA_SEARCH_MAX_ALTITUDE_M,
-                )
-                base_x, base_y, base_yaw = self.search_waypoint(self.active_host_id, t)
-                self.camera_search_yaw += math.radians(2.5)
-                desired_yaw = base_yaw + self.camera_search_yaw
-                desired_x = base_x
-                desired_y = base_y
+            self.search_bootstrap_active = False
+            self.camera_altitude = min(
+                self.camera_altitude + 0.04,
+                CAMERA_SEARCH_MAX_ALTITUDE_M,
+            )
+            base_x, base_y, base_yaw = self.search_waypoint(self.active_host_id, t)
+            self.camera_search_yaw += math.radians(2.5)
+            desired_yaw = base_yaw + self.camera_search_yaw
+            desired_x = base_x
+            desired_y = base_y
         desired_step_x = max(min(0.12 * (desired_x - camera_x), 0.95), -0.95)
         desired_step_y = max(min(0.12 * (desired_y - camera_y), 0.95), -0.95)
         velocity_x, velocity_y = self.camera_velocity
@@ -932,10 +1443,13 @@ class RflyRosScene(Node):
         camera_x += move_x
         camera_y += move_y
         yaw_error = (desired_yaw - camera_yaw + math.pi) % (2.0 * math.pi) - math.pi
-        desired_yaw_rate = max(min(0.12 * yaw_error, math.radians(2.0)), math.radians(-2.0))
+        desired_yaw_rate = max(
+            min(0.28 * yaw_error, math.radians(3.0)),
+            math.radians(-3.0),
+        )
         self.camera_yaw_rate += max(
-            min(desired_yaw_rate - self.camera_yaw_rate, math.radians(0.4)),
-            math.radians(-0.4),
+            min(desired_yaw_rate - self.camera_yaw_rate, math.radians(0.65)),
+            math.radians(-0.65),
         )
         camera_yaw += self.camera_yaw_rate
         self.camera_state = (camera_x, camera_y, camera_yaw)
@@ -1088,7 +1602,9 @@ class RflyRosScene(Node):
         if pose is None:
             return None
         camera_x, camera_y, altitude, roll, pitch, yaw = pose
-        focal = width / (2.0 * math.tan(math.radians(CAMERA_FOV_DEG) / 2.0))
+        focal = width / (
+            2.0 * math.tan(math.radians(self.current_camera_fov_deg) / 2.0)
+        )
         ray = (1.0, (image_x - width / 2.0) / focal, (image_y - height / 2.0) / focal)
         ray = self.rotate_y(ray, math.radians(CAMERA_SENSOR_PITCH_DEG))
         ray = self.rotate_x(ray, roll)
@@ -1109,11 +1625,11 @@ class RflyRosScene(Node):
         packets = []
         while True:
             try:
-                payload, _ = self.vision_socket.recvfrom(65535)
+                payload, source_address = self.vision_socket.recvfrom(65535)
             except BlockingIOError:
                 break
             try:
-                packets.append(json.loads(payload.decode("utf-8")))
+                packets.append((json.loads(payload.decode("utf-8")), source_address))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
         if not packets:
@@ -1123,7 +1639,7 @@ class RflyRosScene(Node):
             self.vision_first_packet_at = now
         self.vision_packet_count += len(packets)
         self.last_vision_packet_at = now
-        for latest in packets:
+        for latest, source_address in packets:
             host_id = int(latest.get("host_id", 1))
             requested_host = int(latest.get("active_host", self.active_host_id))
             if requested_host in (1, 2, 3):
@@ -1190,6 +1706,48 @@ class RflyRosScene(Node):
                     "normalized_x": normalized_x,
                     "normalized_y": normalized_y,
                 }
+                if bool(item.get("confirmed", True)):
+                    if self.last_visual_observation_at >= 0.0:
+                        gap = now - self.last_visual_observation_at
+                        if gap >= 0.12:
+                            self.reacquisition_count += 1
+                            self.last_reacquisition_latency_s = round(gap, 3)
+                    self.last_visual_observation_at = now
+            try:
+                self.vision_status_socket.sendto(
+                    json.dumps({
+                        "type": "rfly_scene_status",
+                        "time_s": round(now, 3),
+                        "scenario": self.scenario_name,
+                        "camera_fov_deg": self.current_camera_fov_deg,
+                        "camera_fov_locked": self.locked_camera_fov,
+                        "physical_occlusion_requested": self.physical_occlusion_requested,
+                        "physical_occlusion_engaged": self.physical_occlusion_engaged,
+                        "physical_occluder_id": self.physical_occluder_id,
+                        "physical_occlusion_alignment_m": (
+                            None
+                            if not math.isfinite(self.physical_occlusion_alignment_m)
+                            else self.physical_occlusion_alignment_m
+                        ),
+                        "physical_occlusion_line_error_m": (
+                            None
+                            if not math.isfinite(self.physical_occlusion_line_error_m)
+                            else self.physical_occlusion_line_error_m
+                        ),
+                        "physical_occlusion_cross_error_m": (
+                            None
+                            if not math.isfinite(self.physical_occlusion_cross_error_m)
+                            else self.physical_occlusion_cross_error_m
+                        ),
+                        "min_vehicle_distance_m": self.min_vehicle_distance_m,
+                        "min_vehicle_clearance_m": self.min_vehicle_clearance_m,
+                        "vehicle_overlap_count": self.vehicle_overlap_count,
+                        "collision_resolutions": self.collision_resolutions,
+                    }).encode("utf-8"),
+                    self.vision_status_address or source_address,
+                )
+            except OSError:
+                pass
 
     def build_visual_message(self, now: float) -> TargetTrackArray:
         output = TargetTrackArray()
@@ -1321,15 +1879,6 @@ class RflyRosScene(Node):
             self.ground_car_speeds[car_id] = float(motion["speed"])
             self.ground_car_yaws[car_id] = yaw
             self.ground_car_yaw_rates[car_id] = float(motion["yaw_rate"])
-            self.ue.sendUE4PosScale2Ground(
-                201 + car_id,
-                51,
-                0.0,
-                [current_x, current_y, 0.0],
-                [0.0, 0.0, yaw],
-                [1.8, 1.8, 1.8],
-                windowID=self.rfly_window_id,
-            )
 
     def publish_platform_states(self) -> None:
         uav_message = DroneStateArray()
@@ -1372,11 +1921,19 @@ class RflyRosScene(Node):
     def tick(self) -> None:
         t = time.monotonic() - self.start_time
         states = self.car_states(t)
-        self.current_dynamic_obstacles = self.dynamic_obstacle_states(t, states[0])
         self.update_search_uavs(t)
         self.receive_visual_tracks(t)
         self.update_camera_uav(t, states[0])
+        self.current_dynamic_obstacles = self.dynamic_obstacle_states(t, states[0])
         self.update_ground_interceptors(t)
+        self.enforce_vehicle_separation()
+        states = [(
+            101,
+            float(self.target_motion["x"]),
+            float(self.target_motion["y"]),
+            float(self.target_motion["vx"]),
+            float(self.target_motion["vy"]),
+        )]
         self.publish_platform_states()
         truth_output = TargetTrackArray()
         truth_output.header.stamp = self.get_clock().now().to_msg()
@@ -1403,7 +1960,7 @@ class RflyRosScene(Node):
             yaw = math.atan2(vy, vx)
             self.ue.sendUE4PosScale2Ground(
                 target_id,
-                50,
+                TARGET_VEHICLE_TYPE,
                 0,
                 [x, y, 0.0],
                 [0.0, 0.0, yaw],
@@ -1463,6 +2020,31 @@ class RflyRosScene(Node):
                 "wind_speed_mps": self.wind_speed_mps,
                 "wind_direction_deg": self.wind_direction_deg,
                 "occlusion_level": self.occlusion_level,
+                "camera_fov_deg": self.current_camera_fov_deg,
+                "camera_fov_locked": self.locked_camera_fov,
+                "physical_occlusion_requested": self.physical_occlusion_requested,
+                "physical_occlusion_engaged": self.physical_occlusion_engaged,
+                "physical_occluder_id": self.physical_occluder_id,
+                "physical_occlusion_alignment_m": (
+                    None
+                    if not math.isfinite(self.physical_occlusion_alignment_m)
+                    else self.physical_occlusion_alignment_m
+                ),
+                "physical_occlusion_line_error_m": (
+                    None
+                    if not math.isfinite(self.physical_occlusion_line_error_m)
+                    else self.physical_occlusion_line_error_m
+                ),
+                "physical_occlusion_cross_error_m": (
+                    None
+                    if not math.isfinite(self.physical_occlusion_cross_error_m)
+                    else self.physical_occlusion_cross_error_m
+                ),
+                "min_vehicle_distance_m": self.min_vehicle_distance_m,
+                "min_vehicle_clearance_m": self.min_vehicle_clearance_m,
+                "vehicle_overlap_count": self.vehicle_overlap_count,
+                "collision_resolutions": self.collision_resolutions,
+                "collision_resolution_brakes": self.collision_resolution_brakes,
                 "prediction_lead_s": self.control_prediction_lead_s,
                 "active_host": self.active_host_id,
                 "target_truth": {
@@ -1475,15 +2057,34 @@ class RflyRosScene(Node):
                     "yaw_rate": float(self.target_motion["yaw_rate"]),
                 },
                 "target_visual": self.visual_projection_state,
+                "target_visual_error_m": (
+                    None
+                    if self.visual_projection_state is None
+                    else math.hypot(
+                        float(self.visual_projection_state["x"]) - truth_x,
+                        float(self.visual_projection_state["y"]) - truth_y,
+                    )
+                ),
                 "target_control": visual,
                 "target_control_source": self.target_control_source,
                 "search_bootstrap_active": self.search_bootstrap_active,
                 "target_speed_mps": math.hypot(truth_vx, truth_vy),
                 "target_heading_deg": math.degrees(math.atan2(truth_vy, truth_vx)),
+                "target_vehicle_type": TARGET_VEHICLE_TYPE,
+                "target_vehicle_asset": "Rfly Standard_Car_Blue",
+                "ground_vehicle_type": GROUND_VEHICLE_TYPE,
                 "target_waypoint_index": int(self.target_motion["waypoint_index"]),
                 "vision_stream_started": self.vision_stream_started,
+                "vision_port": self.vision_port,
                 "vision_packet_count": self.vision_packet_count,
                 "vision_track_packet_count": self.vision_track_packet_count,
+                "reacquisition_active": (
+                    self.last_visual_observation_at >= 0.0
+                    and t - self.last_visual_observation_at >= 0.12
+                    and t - self.last_visual_observation_at <= 2.0
+                ),
+                "reacquisition_count": self.reacquisition_count,
+                "last_reacquisition_latency_s": self.last_reacquisition_latency_s,
                 "last_vision_packet_age_s": (
                     None
                     if self.last_vision_packet_at < 0.0

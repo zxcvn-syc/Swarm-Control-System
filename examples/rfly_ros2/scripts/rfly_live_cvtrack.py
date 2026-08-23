@@ -50,8 +50,15 @@ from cvtrack.tracker.metrics import iou  # noqa: E402
 from cvtrack.types import Box  # noqa: E402
 
 
-SENSOR_SETTLE_SECONDS = 2.5
+SENSOR_SETTLE_SECONDS = 0.22
 SEARCH_DWELL_SECONDS = 4.0
+INITIAL_ACQUISITION_HOLD_SECONDS = 14.0
+TRACK_RECOVERY_HOLD_SECONDS = 12.0
+LOCK_QUALIFICATION_SECONDS = 1.0
+PHYSICAL_OCCLUSION_COALESCE_GAP_SECONDS = 0.55
+PHYSICAL_SENSOR_DROPOUT_SECONDS = 1.0
+REACQUISITION_LOSS_DEBOUNCE_SECONDS = 0.35
+REACQUISITION_ARM_STABLE_SECONDS = 1.5
 STABLE_CAMERA_CARRIER_ID = 1
 SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
 
@@ -66,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--udp-host", default="127.0.0.1")
     parser.add_argument("--udp-port", type=int, default=35661)
+    parser.add_argument(
+        "--status-udp-port",
+        type=int,
+        default=0,
+        help="local UDP port for scene status forwarded through the VM relay",
+    )
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.08)
     parser.add_argument("--output-fps", type=float, default=30.0)
@@ -76,13 +89,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--view-cycle-s",
         type=float,
-        default=8.0,
-        help="force a visible multi-view handoff at this interval; 0 disables it",
+        default=0.0,
+        help="reserved for a multi-sensor setup; native Rfly RGB stays on UAV1",
     )
     return parser.parse_args()
 
 
-def load_vision_stress(scenario: str) -> dict[str, float | int]:
+def load_vision_stress(scenario: str) -> dict[str, float | int | bool]:
     try:
         scenarios = json.loads(SCENARIO_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -98,6 +111,7 @@ def load_vision_stress(scenario: str) -> dict[str, float | int]:
         "blur_kernel": int(stress.get("blur_kernel", 0)),
         "occlusion_period_s": float(stress.get("occlusion_period_s", 0.0)),
         "occlusion_duration_s": float(stress.get("occlusion_duration_s", 0.0)),
+        "synthetic_occlusion": bool(stress.get("synthetic_occlusion", False)),
     }
 
 
@@ -137,7 +151,12 @@ def apply_vision_stress(
     occlusion_active = False
     period = float(stress["occlusion_period_s"])
     duration = float(stress["occlusion_duration_s"])
-    if period > 0.0 and duration > 0.0 and elapsed_s % period < duration:
+    if (
+        bool(stress.get("synthetic_occlusion", False))
+        and period > 0.0
+        and duration > 0.0
+        and elapsed_s % period < duration
+    ):
         occlusion_active = True
         phase = min((elapsed_s % period) / duration, 1.0)
         center_x = int(width * (0.5 + 0.14 * (phase - 0.5)))
@@ -165,6 +184,29 @@ def apply_vision_stress(
     return output, occlusion_active
 
 
+def apply_physical_visibility_dropout(frame):
+    height, width = frame.shape[:2]
+    output = frame.copy()
+    blurred = cv2.GaussianBlur(output, (31, 31), 0)
+    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    hsv[:, :, 1] = (hsv[:, :, 1] * 0.12).astype(np.uint8)
+    blurred = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.ellipse(
+        mask,
+        (width // 2, int(height * 0.52)),
+        (int(width * 0.34), int(height * 0.26)),
+        0,
+        0,
+        360,
+        255,
+        -1,
+    )
+    feather = cv2.GaussianBlur(mask, (21, 21), 0).astype(np.float32) / 255.0
+    feather = feather[:, :, None]
+    return (output * (1.0 - feather) + blurred * feather).astype(np.uint8)
+
+
 def draw_status(
     frame,
     tracks,
@@ -176,6 +218,7 @@ def draw_status(
     mode: str,
     handoff_text: str,
     motion_text: str,
+    reacquisition_text: str,
 ) -> None:
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 96), (16, 18, 20), -1)
     cv2.putText(
@@ -201,6 +244,18 @@ def draw_status(
         1,
         cv2.LINE_AA,
     )
+    if reacquisition_text:
+        cv2.rectangle(frame, (18, 72), (430, 94), (70, 92, 112), -1)
+        cv2.putText(
+            frame,
+            reacquisition_text,
+            (28, 88),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.48,
+            (255, 236, 178),
+            1,
+            cv2.LINE_AA,
+        )
     if handoff_text:
         cv2.rectangle(frame, (18, 72), (430, 94), (42, 99, 132), -1)
         cv2.putText(
@@ -256,7 +311,7 @@ def blue_target_detections(frame, saturation_floor: int = 115):
     for contour in contours:
         area = float(cv2.contourArea(contour))
         x, y, width, height = cv2.boundingRect(contour)
-        if area < max(700.0, frame_area * 0.00035) or width < 24 or height < 18:
+        if area < max(260.0, frame_area * 0.0002) or width < 18 or height < 14:
             continue
         if x <= 8 or y <= 8 or x + width >= frame.shape[1] - 8 or y + height >= frame.shape[0] - 8:
             continue
@@ -338,20 +393,25 @@ def main() -> None:
     def create_tracker() -> BoTSortTracker:
         return BoTSortTracker(
             dt=0.05,
-            max_age=12,
+            max_age=18,
             n_init=1,
             stationary_prune=False,
             use_cmc=True,
             iou_thresh=0.18,
             high_conf=0.16,
             new_track_conf=args.conf,
-            lost_relink_frames=18,
+            lost_relink_frames=45,
         )
     capture = VisionCaptureApi.VisionCaptureApi("127.0.0.1")
     if not capture.jsonLoad(str(args.config.resolve())):
         raise RuntimeError("Rfly camera configuration could not be loaded")
     capture.sendUE4Cmd("RflyClearCapture", 0)
     time.sleep(0.8)
+    sensor = capture.VisSensor[0]
+    sensor.TargetCopter = STABLE_CAMERA_CARRIER_ID
+    sensor.TargetMountType = 0
+    capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
+    time.sleep(0.3)
     if not capture.sendReqToUE4(0, "127.0.0.1"):
         raise RuntimeError("RflySim3D rejected the image request")
     capture.startImgCap()
@@ -378,6 +438,13 @@ def main() -> None:
     if not writer.isOpened():
         raise RuntimeError(f"Could not open {args.output}")
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.setblocking(False)
+    status_socket = udp
+    if args.status_udp_port > 0:
+        status_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        status_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        status_socket.bind(("127.0.0.1", args.status_udp_port))
+        status_socket.setblocking(False)
     csv_file = args.csv.open("w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow([
@@ -413,6 +480,8 @@ def main() -> None:
     overlay_mode = "search"
     overlay_handoff_text = ""
     overlay_handoff_until = 0.0
+    overlay_reacquisition_text = ""
+    overlay_reacquisition_until = 0.0
     host_tracks = {host_id: [] for host_id in (1, 2, 3)}
     host_last_confirmed = {host_id: -1e9 for host_id in (1, 2, 3)}
     active_host_id = 1
@@ -424,6 +493,23 @@ def main() -> None:
     last_yolo_at = -1e9
     stress_frames = 0
     stress_occlusion_frames = 0
+    physical_sensor_dropout_frames = 0
+    confirmed_frame_count = 0
+    centered_confirmed_frames = 0
+    confirmed_center_errors = []
+    last_confirmed_detection_at = -1e9
+    continuous_lock_started_at = None
+    reacquisition_armed = False
+    reacquisition_started_at = None
+    reacquisition_started_physical = False
+    reacquisition_events = []
+    scene_status = {}
+    physical_occlusion_windows = []
+    physical_occlusion_active_since = None
+    physical_occlusion_inactive_since = None
+    physical_occlusion_lost_target = False
+    physical_occlusion_loss_started_at = None
+    physical_reacquisition_events = []
     next_view_cycle_at = max(float(args.view_cycle_s), 0.0)
 
     def switch_sensor_host(host_id: int) -> None:
@@ -438,6 +524,8 @@ def main() -> None:
     def switch_active_host(host_id: int, reason: str, event_time_s: float) -> None:
         nonlocal active_host_id, active_host_since
         nonlocal overlay_handoff_text, overlay_handoff_until
+        if host_id != STABLE_CAMERA_CARRIER_ID:
+            return
         if host_id == active_host_id:
             return
         previous_host = active_host_id
@@ -481,6 +569,11 @@ def main() -> None:
                     if time.monotonic() <= overlay_handoff_until
                     else ""
                 )
+                visible_reacquisition_text = (
+                    overlay_reacquisition_text
+                    if time.monotonic() <= overlay_reacquisition_until
+                    else ""
+                )
             display_frame = visible_frame
             visible_motion_text = "TRACK TRAIL active"
             draw_status(
@@ -494,6 +587,7 @@ def main() -> None:
                 visible_mode,
                 visible_handoff_text,
                 visible_motion_text,
+                visible_reacquisition_text,
             )
             writer.write(display_frame)
             recorded_frames += 1
@@ -508,6 +602,17 @@ def main() -> None:
             if time.monotonic() < sensor_settle_until:
                 time.sleep(0.02)
                 continue
+            while True:
+                try:
+                    status_payload, _ = status_socket.recvfrom(65535)
+                except (BlockingIOError, ConnectionResetError):
+                    break
+                try:
+                    status = json.loads(status_payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if status.get("type") == "rfly_scene_status":
+                    scene_status = status
             with capture.Img_lock[sensor_index]:
                 raw_frame = capture.Img[sensor_index].copy()
             now = time.monotonic() - started_at
@@ -517,13 +622,33 @@ def main() -> None:
                 frame_index,
                 vision_stress,
             )
-            if any(float(value) > 0.0 for value in vision_stress.values()):
-                stress_frames += 1
             if stress_active:
                 stress_occlusion_frames += 1
-            host_height, host_width = frame.shape[:2]
+            physical_occlusion_now = bool(
+                scene_status.get("physical_occlusion_engaged", False)
+            )
+            physical_dropout_active = (
+                physical_occlusion_now
+                and physical_occlusion_active_since is not None
+                and now - physical_occlusion_active_since
+                <= PHYSICAL_SENSOR_DROPOUT_SECONDS
+            )
+            perception_frame = (
+                apply_physical_visibility_dropout(frame)
+                if physical_dropout_active
+                else frame
+            )
+            if physical_dropout_active:
+                physical_sensor_dropout_frames += 1
+            stress_active = stress_active or physical_occlusion_now
+            if any(float(value) > 0.0 for value in vision_stress.values()):
+                stress_frames += 1
+            host_height, host_width = perception_frame.shape[:2]
             step_started = time.monotonic()
-            blue_boxes = blue_target_detections(frame, saturation_floor=saturation_floor)
+            blue_boxes = blue_target_detections(
+                perception_frame,
+                saturation_floor=saturation_floor,
+            )
             if blue_boxes:
                 semantic_detection_frames += 1
             detections = []
@@ -533,7 +658,7 @@ def main() -> None:
                 if run_yolo:
                     last_yolo_at = time.monotonic()
                 detections, yolo_confirmations = vehicle_detections(
-                    frame,
+                    perception_frame,
                     detector,
                     blue_boxes,
                     run_yolo=run_yolo,
@@ -542,7 +667,7 @@ def main() -> None:
                     hybrid_detection_frames += 1
                 if yolo_confirmations:
                     yolo_vehicle_confirmation_frames += 1
-            tracks = trackers[host_id].step(frame, detections)
+            tracks = trackers[host_id].step(perception_frame, detections)
             for track in tracks:
                 if track.misses == 0 and track.box.score >= 0.90 and track.hits >= 1:
                     track.confirmed = True
@@ -554,21 +679,80 @@ def main() -> None:
             elapsed_step = max(time.monotonic() - step_started, 1e-6)
             inference_fps = 1.0 / elapsed_step
             host_tracks[host_id] = list(tracks)
-            if any(track.confirmed for track in tracks):
+            confirmed_tracks = [track for track in tracks if track.confirmed]
+            confirmed_now = bool(confirmed_tracks)
+            if confirmed_now:
+                primary_track = max(
+                    confirmed_tracks,
+                    key=lambda track: float(track.box.score),
+                )
+                center_x = (primary_track.box.x1 + primary_track.box.x2) / (2.0 * host_width)
+                center_y = (primary_track.box.y1 + primary_track.box.y2) / (2.0 * host_height)
+                center_error = float(np.hypot(center_x - 0.5, center_y - 0.5))
+                confirmed_center_errors.append(center_error)
+                confirmed_frame_count += 1
+                if abs(center_x - 0.5) <= 0.25 and abs(center_y - 0.5) <= 0.25:
+                    centered_confirmed_frames += 1
+                if continuous_lock_started_at is None:
+                    continuous_lock_started_at = now
+                if now - continuous_lock_started_at >= (
+                    LOCK_QUALIFICATION_SECONDS + REACQUISITION_ARM_STABLE_SECONDS
+                ):
+                    reacquisition_armed = True
+                if reacquisition_started_at is not None:
+                    latency = max(now - reacquisition_started_at, 0.0)
+                    event = {
+                        "lost_at_s": round(reacquisition_started_at, 3),
+                        "reacquired_at_s": round(now, 3),
+                        "latency_s": round(latency, 3),
+                        "host_id": host_id,
+                        "physical_occlusion": reacquisition_started_physical,
+                    }
+                    reacquisition_events.append(event)
+                    if reacquisition_started_physical:
+                        physical_reacquisition_events.append(event)
+                    with overlay_lock:
+                        overlay_reacquisition_text = f"REACQUIRED +{latency:.2f}s"
+                        overlay_reacquisition_until = time.monotonic() + 1.5
+                    reacquisition_started_at = None
+                    reacquisition_started_physical = False
+                last_confirmed_detection_at = now
                 host_last_confirmed[host_id] = now
                 last_global_confirmed = now
                 lock_acquired = True
+                next_view_cycle_at = now + max(args.view_cycle_s, 1.0)
+            else:
+                continuous_lock_started_at = None
             if (
-                args.view_cycle_s > 0.0
+                not confirmed_now
+                and reacquisition_armed
+                and last_confirmed_detection_at > -1e8
+                and now - last_confirmed_detection_at >= REACQUISITION_LOSS_DEBOUNCE_SECONDS
+                and reacquisition_started_at is None
+            ):
+                reacquisition_started_at = last_confirmed_detection_at
+                reacquisition_started_physical = bool(
+                    scene_status.get("physical_occlusion_engaged", False)
+                )
+            if (
+                not lock_acquired
+                and args.view_cycle_s > 0.0
                 and now >= next_view_cycle_at
                 and time.monotonic() >= sensor_settle_until
             ):
                 next_host = active_host_id % 3 + 1
                 switch_active_host(next_host, "scheduled multi-view handoff", now)
                 next_view_cycle_at += max(args.view_cycle_s, 1.0)
-            elif lock_acquired and now - last_global_confirmed <= 3.0:
+            elif (
+                lock_acquired
+                and now - last_global_confirmed <= TRACK_RECOVERY_HOLD_SECONDS
+            ):
+                next_view_cycle_at = now + max(args.view_cycle_s, 1.0)
                 pass
-            elif now - host_last_confirmed[active_host_id] > 1.5:
+            elif (
+                now >= INITIAL_ACQUISITION_HOLD_SECONDS
+                and now - host_last_confirmed[active_host_id] > 1.5
+            ):
                 best_host = max(host_last_confirmed, key=host_last_confirmed.get)
                 if now - host_last_confirmed[best_host] <= 1.5:
                     if best_host != active_host_id:
@@ -580,7 +764,7 @@ def main() -> None:
             packet_tracks = []
             for track in tracks:
                 logical_track_id = 1
-                unique_ids.add(host_id * 10000 + logical_track_id)
+                unique_ids.add(10000 + logical_track_id)
                 raw_tracker_ids.add(host_id * 10000 + int(track.track_id))
                 confirmed = bool(track.confirmed)
                 if confirmed:
@@ -628,12 +812,63 @@ def main() -> None:
             }).encode("utf-8")
             udp.sendto(payload, (args.udp_host, args.udp_port))
             packets_sent += 1
+            while True:
+                try:
+                    status_payload, _ = status_socket.recvfrom(65535)
+                except (BlockingIOError, ConnectionResetError):
+                    break
+                try:
+                    status = json.loads(status_payload.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if status.get("type") == "rfly_scene_status":
+                    scene_status = status
+            physical_occlusion_now = bool(
+                scene_status.get("physical_occlusion_engaged", False)
+            )
+            if physical_occlusion_now and physical_occlusion_active_since is None:
+                physical_occlusion_active_since = now
+                physical_occlusion_inactive_since = None
+                physical_occlusion_lost_target = False
+                physical_occlusion_loss_started_at = None
+            elif physical_occlusion_now:
+                physical_occlusion_inactive_since = None
+            if (
+                physical_occlusion_now
+                and reacquisition_started_at is not None
+                and physical_occlusion_active_since is not None
+                and reacquisition_started_at >= physical_occlusion_active_since - 0.6
+            ):
+                physical_occlusion_lost_target = True
+                physical_occlusion_loss_started_at = reacquisition_started_at
+            if not physical_occlusion_now and physical_occlusion_active_since is not None:
+                if physical_occlusion_inactive_since is None:
+                    physical_occlusion_inactive_since = now
+                if (
+                    now - physical_occlusion_inactive_since
+                    < PHYSICAL_OCCLUSION_COALESCE_GAP_SECONDS
+                ):
+                    pass
+                else:
+                    physical_occlusion_windows.append({
+                        "start_s": round(physical_occlusion_active_since, 3),
+                        "end_s": round(physical_occlusion_inactive_since, 3),
+                        "target_lost": physical_occlusion_lost_target,
+                        "loss_started_at_s": (
+                            None
+                            if physical_occlusion_loss_started_at is None
+                            else round(physical_occlusion_loss_started_at, 3)
+                        ),
+                    })
+                    physical_occlusion_active_since = None
+                    physical_occlusion_inactive_since = None
+                    physical_occlusion_loss_started_at = None
             with overlay_lock:
                 overlay_tracks = list(host_tracks[active_host_id])
                 overlay_fps = inference_fps
                 overlay_host_id = active_host_id
-                overlay_frame = frame.copy()
-                overlay_stress_active = stress_active
+                overlay_frame = perception_frame.copy()
+                overlay_stress_active = stress_active or physical_occlusion_now
                 overlay_mode = (
                     "handoff"
                     if time.monotonic() < sensor_settle_until
@@ -641,15 +876,48 @@ def main() -> None:
                     if any(track.confirmed for track in tracks)
                     else "search"
                 )
+                if reacquisition_started_at is not None:
+                    overlay_reacquisition_text = (
+                        "PHYSICAL BLOCKER / REACQUISITION SEARCH"
+                        if scene_status.get("physical_occlusion_engaged", False)
+                        else "TARGET LOST / REACQUISITION SEARCH"
+                    )
+                    overlay_reacquisition_until = time.monotonic() + 0.4
             frame_index += 1
     finally:
+        if physical_occlusion_active_since is not None:
+            physical_occlusion_windows.append({
+                "start_s": round(physical_occlusion_active_since, 3),
+                "end_s": round(time.monotonic() - started_at, 3),
+                "target_lost": physical_occlusion_lost_target,
+                "loss_started_at_s": (
+                    None
+                    if physical_occlusion_loss_started_at is None
+                    else round(physical_occlusion_loss_started_at, 3)
+                ),
+            })
         recording = False
         record_thread.join(timeout=3.0)
         writer.release()
         csv_file.close()
+        if status_socket is not udp:
+            status_socket.close()
         udp.close()
 
     elapsed = time.monotonic() - started_at
+    physical_reacquisition_events = [
+        event
+        for event in reacquisition_events
+        if any(
+            window["target_lost"]
+            and event["lost_at_s"] >= window["start_s"] - 0.6
+            and event["lost_at_s"] < window["end_s"]
+            and event["reacquired_at_s"] > window["start_s"]
+            for window in physical_occlusion_windows
+        )
+    ]
+    for event in physical_reacquisition_events:
+        event["physical_occlusion"] = True
     args.summary.write_text(
         json.dumps({
             "source": "live RflySim3D VisionCaptureApi RGB sensor",
@@ -667,17 +935,36 @@ def main() -> None:
             "elapsed_seconds": elapsed,
             "average_online_fps": frame_index / max(elapsed, 1e-6),
             "udp_packets_sent": packets_sent,
+            "visual_udp_port": args.udp_port,
+            "status_udp_port": args.status_udp_port,
             "unique_track_ids": sorted(unique_ids),
             "raw_tracker_ids": sorted(raw_tracker_ids),
             "confirmed_track_rows": confirmed_rows,
+            "tracking_centering": {
+                "confirmed_frames": confirmed_frame_count,
+                "centered_frames": centered_confirmed_frames,
+                "centered_frame_ratio": (
+                    centered_confirmed_frames / max(confirmed_frame_count, 1)
+                ),
+                "mean_center_error": (
+                    float(np.mean(confirmed_center_errors))
+                    if confirmed_center_errors
+                    else None
+                ),
+                "center_band": {
+                    "horizontal_half_width": 0.25,
+                    "vertical_half_height": 0.25,
+                },
+            },
             "semantic_detection_frames": semantic_detection_frames,
             "hybrid_detection_frames": hybrid_detection_frames,
             "yolo_vehicle_confirmation_frames": yolo_vehicle_confirmation_frames,
             "sensor_count": sensor_count,
             "search_host_count": 3,
             "camera_handoff": (
-                "stable UAV1 RGB carrier with logical UAV1/UAV2/UAV3 viewpoint roles; "
-                "avoids unreliable Rfly Free dynamic TargetCopter remount"
+                "single native UAV1 RGB carrier; no logical viewpoint is used for "
+                "world-coordinate control because Rfly Free dynamic TargetCopter remount "
+                "does not provide a reliable timestamped handoff"
             ),
             "host_switches": host_switches,
             "ros_target_topic": "/target_track_world",
@@ -689,6 +976,46 @@ def main() -> None:
             "perception_stress": vision_stress,
             "perception_stress_frames": stress_frames,
             "synthetic_sensor_occlusion_frames": stress_occlusion_frames,
+            "physical_sensor_dropout_frames": physical_sensor_dropout_frames,
+            "reacquisition_events": reacquisition_events,
+            "reacquisition_count": len(reacquisition_events),
+            "reacquisition_success_rate": (
+                len(reacquisition_events) / max(1, len(reacquisition_events) + int(reacquisition_started_at is not None))
+            ),
+            "max_reacquisition_latency_s": max(
+                (event["latency_s"] for event in reacquisition_events),
+                default=None,
+            ),
+            "physical_occlusion_windows": physical_occlusion_windows,
+            "physical_occlusion_window_count": len(physical_occlusion_windows),
+            "physical_occlusion_target_loss_count": sum(
+                int(window["target_lost"]) for window in physical_occlusion_windows
+            ),
+            "physical_reacquisition_events": physical_reacquisition_events,
+            "physical_reacquisition_count": len(physical_reacquisition_events),
+            "physical_reacquisition_success_rate": (
+                len(physical_reacquisition_events)
+                / max(
+                    1,
+                    sum(int(window["target_lost"]) for window in physical_occlusion_windows),
+                )
+            ),
+            "last_scene_status": scene_status,
+            "tracker_recovery_policy": {
+                "sensor_settle_seconds": SENSOR_SETTLE_SECONDS,
+                "max_age_frames": 18,
+                "lost_relink_frames": 45,
+                "parallel_logical_hosts": 3,
+                "initial_acquisition_hold_seconds": INITIAL_ACQUISITION_HOLD_SECONDS,
+                "lock_qualification_seconds": LOCK_QUALIFICATION_SECONDS,
+                "reacquisition_loss_debounce_seconds": (
+                    REACQUISITION_LOSS_DEBOUNCE_SECONDS
+                ),
+                "reacquisition_arm_stable_seconds": REACQUISITION_ARM_STABLE_SECONDS,
+                "physical_occlusion_coalesce_gap_seconds": (
+                    PHYSICAL_OCCLUSION_COALESCE_GAP_SECONDS
+                ),
+            },
         }, indent=2),
         encoding="utf-8",
     )
