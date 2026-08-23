@@ -47,6 +47,35 @@ def test_task_uses_cached_world_target_before_legacy_scatter():
 
 
 def test_initial_position_parameter_accepts_floating_point_arrays():
-    source = inspect.getsource(PlannerNode.__init__)
+    """initial_positions must stay *initialized* (``[]`` default).
 
-    assert '"initial_positions", Parameter.Type.DOUBLE_ARRAY' in source
+    A type-only declaration (``Parameter.Type.DOUBLE_ARRAY`` without a
+    default value) leaves the parameter unset, so ``get_parameter()``
+    raises ParameterUninitializedException on every no-argument
+    PlannerNode() construction — which silently disabled link2/link3
+    in test_three_links.py / CI.  The empty-list default keeps the
+    parameter initialized and still infers DOUBLE_ARRAY, so
+    float-array overrides keep working (verified behaviorally below).
+    """
+    source = inspect.getsource(PlannerNode.__init__)
+    assert 'declare_parameter("initial_positions", [])' in source
+
+    import rclpy
+    from rclpy.parameter import Parameter
+
+    if not rclpy.ok():
+        rclpy.init()
+    node = rclpy.create_node("test_initial_positions_decl")
+    try:
+        node.declare_parameter("initial_positions", [])
+        param = node.get_parameter("initial_positions")
+        assert param.type_ == Parameter.Type.DOUBLE_ARRAY
+        assert list(param.value) == []
+        node.set_parameters(
+            [Parameter("initial_positions", value=[1.5, 2.5, 3.5, 4.5])]
+        )
+        assert list(node.get_parameter("initial_positions").value) == [
+            1.5, 2.5, 3.5, 4.5,
+        ]
+    finally:
+        node.destroy_node()
