@@ -47,35 +47,52 @@ def test_task_uses_cached_world_target_before_legacy_scatter():
 
 
 def test_initial_position_parameter_accepts_floating_point_arrays():
-    """initial_positions must stay *initialized* (``[]`` default).
+    """initial_positions must stay initialized *and* accept float overrides.
 
-    A type-only declaration (``Parameter.Type.DOUBLE_ARRAY`` without a
-    default value) leaves the parameter unset, so ``get_parameter()``
-    raises ParameterUninitializedException on every no-argument
-    PlannerNode() construction — which silently disabled link2/link3
-    in test_three_links.py / CI.  The empty-list default keeps the
-    parameter initialized and still infers DOUBLE_ARRAY, so
-    float-array overrides keep working (verified behaviorally below).
+    Two failure modes are being guarded against:
+
+    1. A type-only declaration (``Parameter.Type.DOUBLE_ARRAY`` without a
+       default value) leaves the parameter unset, so ``get_parameter()``
+       raises ParameterUninitializedException on every no-argument
+       PlannerNode() construction — which silently disabled link2/link3
+       in test_three_links.py / CI.
+    2. A bare ``[]`` default infers BYTE_ARRAY on ROS2 Humble, so a
+       statically-typed DOUBLE_ARRAY declaration rejects the float-array
+       overrides that swarm_sim.launch.py passes
+       (e.g. ``[10.0, 10.0, 20.0, 10.0, 30.0, 10.0]``).
+
+    The dynamic-typing descriptor (same pattern as tracker_node
+    ``sources``) satisfies both: the empty-list default stays valid and
+    float arrays are accepted.
     """
     source = inspect.getsource(PlannerNode.__init__)
-    assert 'declare_parameter("initial_positions", [])' in source
+    assert "ParameterDescriptor(dynamic_typing=True)" in source
+    assert "declare_parameter" in source
 
     import rclpy
+    from rcl_interfaces.msg import ParameterDescriptor
     from rclpy.parameter import Parameter
 
     if not rclpy.ok():
         rclpy.init()
     node = rclpy.create_node("test_initial_positions_decl")
     try:
-        node.declare_parameter("initial_positions", [])
-        param = node.get_parameter("initial_positions")
-        assert param.type_ == Parameter.Type.DOUBLE_ARRAY
-        assert list(param.value) == []
+        node.declare_parameter(
+            "initial_positions",
+            [],
+            descriptor=ParameterDescriptor(dynamic_typing=True),
+        )
+        # No-override construction leaves an initialized empty list.
+        assert list(node.get_parameter("initial_positions").value) == []
+        # Float-array overrides (swarm_sim.launch.py) are accepted.
         node.set_parameters(
             [Parameter("initial_positions", value=[1.5, 2.5, 3.5, 4.5])]
         )
         assert list(node.get_parameter("initial_positions").value) == [
             1.5, 2.5, 3.5, 4.5,
         ]
+        # Resetting to the empty list (planning.yaml ``[]``) is accepted too.
+        node.set_parameters([Parameter("initial_positions", value=[])])
+        assert list(node.get_parameter("initial_positions").value) == []
     finally:
         node.destroy_node()

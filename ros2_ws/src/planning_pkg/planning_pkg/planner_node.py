@@ -24,6 +24,7 @@ import numpy as np
 from rclpy.executors import ExternalShutdownException
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
@@ -94,13 +95,23 @@ class PlannerNode(Node):
         self.declare_parameter("rfly_pose_topic", "/drone_pose_external")
 
         # Initial drone layout
-        # NOTE: keep the ``[]`` default. Declaring with only
-        # ``Parameter.Type.DOUBLE_ARRAY`` leaves the parameter
-        # *uninitialized*, so ``get_parameter()`` raises
-        # ParameterUninitializedException on every no-argument
-        # construction (e.g. test_three_links.py PlannerNode()) —
-        # that silently disabled link2/link3 in CI.
-        self.declare_parameter("initial_positions", [])       # flat [x0, y0, x1, y1, ...]
+        # ROS2 Humble infers a bare ``[]`` default as BYTE_ARRAY, so a
+        # statically-typed DOUBLE_ARRAY declaration would reject the
+        # float-array overrides that swarm_sim.launch.py passes (e.g.
+        # [10.0, 10.0, 20.0, 10.0, ...]).  A type-only
+        # ``Parameter.Type.DOUBLE_ARRAY`` declaration is no better: it
+        # leaves the parameter *uninitialized*, so ``get_parameter()``
+        # raises ParameterUninitializedException on every no-argument
+        # construction (e.g. test_three_links.py PlannerNode()) — which
+        # silently disabled link2/link3 in CI.  Dynamic typing (same
+        # pattern as tracker_node ``sources``) keeps the documented
+        # empty-list default valid while accepting float arrays from
+        # launch files and YAML.
+        self.declare_parameter(
+            "initial_positions",           # flat [x0, y0, x1, y1, ...]
+            [],
+            descriptor=ParameterDescriptor(dynamic_typing=True),
+        )
         self.declare_parameter("obstacle_cells", [])
         self.declare_parameter("explicit_target_cells", [])
 

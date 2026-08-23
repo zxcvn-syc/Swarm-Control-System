@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # 自动拉起：3台无人机 (UAV: ID 0, 1, 2，飞行高度 Z=2.0 米)
     uav_planner = Node(
-        package='astar_navigation_project',
+        package='planning_pkg',
         executable='planner_node',
         name='uav_planner_node',
         output='screen',
@@ -21,7 +21,7 @@ def generate_launch_description():
 
     # 自动拉起：2台无人车 (UGV: ID 3, 4，地面行驶高度 Z=0.0 米)
     ugv_planner = Node(
-        package='astar_navigation_project',
+        package='planning_pkg',
         executable='planner_node',
         name='ugv_planner_node',
         output='screen',
