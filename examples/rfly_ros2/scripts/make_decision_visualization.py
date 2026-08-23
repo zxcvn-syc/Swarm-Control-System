@@ -100,8 +100,19 @@ def path_from_records(records: list[dict], collection: str, entity_id=None) -> l
 
 def draw_path(panel, points: list[tuple[float, float]], color, width: int = 2) -> None:
     pixels = [world_to_panel(x, y, panel.shape[1], panel.shape[0]) for x, y in points]
-    for start, end in zip(pixels, pixels[1:]):
+    for (start, end), (world_start, world_end) in zip(
+        zip(pixels, pixels[1:]), zip(points, points[1:])
+    ):
+        if any(
+            value < -2.0 or value > WORLD_SIZE + 2.0
+            for value in (*world_start, *world_end)
+        ):
+            continue
         cv2.line(panel, start, end, color, width, cv2.LINE_AA)
+
+
+def is_world_visible(x: float, y: float) -> bool:
+    return 0.0 <= x <= WORLD_SIZE and 0.0 <= y <= WORLD_SIZE
 
 
 def current_stage(record: dict) -> str:
@@ -166,6 +177,7 @@ def draw_map(panel, record: dict, history: list[dict]) -> None:
     cv2.putText(panel, "CVTrack DECISION REPLAY", (24, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (240, 245, 248), 2, cv2.LINE_AA)
     cv2.putText(panel, "WORLD VIEW / HISTORY + DATA SOURCES", (25, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (142, 170, 184), 1, cv2.LINE_AA)
     draw_stage_timeline(panel, record, history)
+    cv2.putText(panel, "RED truth | CYAN visual | GREEN control | GREY ground | ORANGE blocker", (25, 108), cv2.FONT_HERSHEY_SIMPLEX, 0.26, (156, 181, 190), 1, cv2.LINE_AA)
 
     for value in range(0, 221, 20):
         cv2.line(panel, world_to_panel(value, 0.0, width, height), world_to_panel(value, WORLD_SIZE, width, height), (34, 50, 57), 1)
@@ -232,22 +244,33 @@ def draw_map(panel, record: dict, history: list[dict]) -> None:
                 cv2.line(panel, camera_point, point, (120, 120, 220), 1, cv2.LINE_AA)
                 cv2.putText(panel, "LOS / BLOCKER", (camera_point[0] + 5, camera_point[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (160, 160, 228), 1, cv2.LINE_AA)
     if target_visual:
-        point = world_to_panel(float(target_visual["x"]), float(target_visual["y"]), width, height)
-        cv2.circle(panel, point, 8, (68, 213, 237), 2)
+        visual_x = float(target_visual["x"])
+        visual_y = float(target_visual["y"])
+        if is_world_visible(visual_x, visual_y):
+            point = world_to_panel(visual_x, visual_y, width, height)
+            cv2.circle(panel, point, 8, (68, 213, 237), 2)
     if target_control:
         control_x = float(target_control["x"])
         control_y = float(target_control["y"])
-        control_point = world_to_panel(control_x, control_y, width, height)
-        cv2.circle(panel, control_point, 8, (73, 226, 116), -1)
-        vx = float(target_control.get("vx", 0.0))
-        vy = float(target_control.get("vy", 0.0))
-        for step in (0.5, 1.0, 1.5, 2.0, 2.5):
-            next_point = world_to_panel(control_x + vx * step, control_y + vy * step, width, height)
-            cv2.line(panel, control_point, next_point, (73, 226, 116), 1, cv2.LINE_AA)
-            control_point = next_point
-        lead = float(record.get("prediction_lead_s", 1.0))
-        predicted = world_to_panel(control_x + vx * lead, control_y + vy * lead, width, height)
-        cv2.arrowedLine(panel, world_to_panel(control_x, control_y, width, height), predicted, (73, 226, 116), 3, cv2.LINE_AA, 0, 0.25)
+        if is_world_visible(control_x, control_y):
+            control_point = world_to_panel(control_x, control_y, width, height)
+            cv2.circle(panel, control_point, 8, (73, 226, 116), -1)
+            vx = float(target_control.get("vx", 0.0))
+            vy = float(target_control.get("vy", 0.0))
+            for step in (0.5, 1.0, 1.5, 2.0, 2.5):
+                next_x = control_x + vx * step
+                next_y = control_y + vy * step
+                if not is_world_visible(next_x, next_y):
+                    break
+                next_point = world_to_panel(next_x, next_y, width, height)
+                cv2.line(panel, control_point, next_point, (73, 226, 116), 1, cv2.LINE_AA)
+                control_point = next_point
+            lead = float(record.get("prediction_lead_s", 1.0))
+            predicted_x = control_x + vx * lead
+            predicted_y = control_y + vy * lead
+            if is_world_visible(predicted_x, predicted_y):
+                predicted = world_to_panel(predicted_x, predicted_y, width, height)
+                cv2.arrowedLine(panel, world_to_panel(control_x, control_y, width, height), predicted, (73, 226, 116), 3, cv2.LINE_AA, 0, 0.25)
 
     ground_cars = record.get("ground_cars") or {}
     ground_goals = record.get("ground_goals") or {}

@@ -184,27 +184,39 @@ def apply_vision_stress(
     return output, occlusion_active
 
 
-def apply_physical_visibility_dropout(frame):
+def apply_physical_visibility_dropout(frame, focus_box=None):
     height, width = frame.shape[:2]
     output = frame.copy()
-    blurred = cv2.GaussianBlur(output, (31, 31), 0)
+    blurred = cv2.GaussianBlur(output, (23, 23), 0)
     hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-    hsv[:, :, 1] = (hsv[:, :, 1] * 0.12).astype(np.uint8)
+    hsv[:, :, 1] = (hsv[:, :, 1] * 0.24).astype(np.uint8)
     blurred = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     mask = np.zeros((height, width), dtype=np.uint8)
+    if focus_box is not None:
+        center = (
+            int((focus_box.x1 + focus_box.x2) * 0.5),
+            int((focus_box.y1 + focus_box.y2) * 0.5),
+        )
+        axes = (
+            max(70, int(focus_box.w * 1.8)),
+            max(52, int(focus_box.h * 2.4)),
+        )
+    else:
+        center = (width // 2, int(height * 0.52))
+        axes = (int(width * 0.23), int(height * 0.17))
     cv2.ellipse(
         mask,
-        (width // 2, int(height * 0.52)),
-        (int(width * 0.34), int(height * 0.26)),
+        center,
+        axes,
         0,
         0,
         360,
         255,
         -1,
     )
-    feather = cv2.GaussianBlur(mask, (21, 21), 0).astype(np.float32) / 255.0
+    feather = cv2.GaussianBlur(mask, (17, 17), 0).astype(np.float32) / 255.0
     feather = feather[:, :, None]
-    return (output * (1.0 - feather) + blurred * feather).astype(np.uint8)
+    return (output * (1.0 - 0.82 * feather) + blurred * (0.82 * feather)).astype(np.uint8)
 
 
 def draw_status(
@@ -277,10 +289,13 @@ def draw_status(
         ))
         color = (40, 220, 110) if track.confirmed else (40, 180, 240)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        label_y = y1 - 7
+        if label_y < 106:
+            label_y = min(frame.shape[0] - 8, max(106, y2 + 22))
         cv2.putText(
             frame,
             f"TARGET 1 {track.box.score:.2f}",
-            (x1, max(68, y1 - 7)),
+            (x1, label_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
             color,
@@ -482,6 +497,7 @@ def main() -> None:
     overlay_handoff_until = 0.0
     overlay_reacquisition_text = ""
     overlay_reacquisition_until = 0.0
+    first_frame_ready = threading.Event()
     host_tracks = {host_id: [] for host_id in (1, 2, 3)}
     host_last_confirmed = {host_id: -1e9 for host_id in (1, 2, 3)}
     active_host_id = 1
@@ -491,6 +507,7 @@ def main() -> None:
     last_global_confirmed = -1e9
     host_switches = []
     last_yolo_at = -1e9
+    display_inference_fps = 0.0
     stress_frames = 0
     stress_occlusion_frames = 0
     physical_sensor_dropout_frames = 0
@@ -509,6 +526,7 @@ def main() -> None:
     physical_occlusion_inactive_since = None
     physical_occlusion_lost_target = False
     physical_occlusion_loss_started_at = None
+    physical_dropout_focus_box = None
     physical_reacquisition_events = []
     next_view_cycle_at = max(float(args.view_cycle_s), 0.0)
 
@@ -546,6 +564,8 @@ def main() -> None:
         nonlocal recorded_frames
         next_frame_at = time.monotonic()
         while recording:
+            if not first_frame_ready.wait(0.05):
+                continue
             now = time.monotonic()
             if now < next_frame_at:
                 time.sleep(min(next_frame_at - now, 0.01))
@@ -574,7 +594,15 @@ def main() -> None:
                     if time.monotonic() <= overlay_reacquisition_until
                     else ""
                 )
-            display_frame = visible_frame
+            if float(np.mean(display_frame)) < 3.0 and float(np.std(display_frame)) < 3.0:
+                display_frame = visible_frame
+            else:
+                display_frame, _ = apply_vision_stress(
+                    display_frame,
+                    max(time.monotonic() - started_at, 0.0),
+                    recorded_frames,
+                    vision_stress,
+                )
             visible_motion_text = "TRACK TRAIL active"
             draw_status(
                 display_frame,
@@ -633,11 +661,20 @@ def main() -> None:
                 and now - physical_occlusion_active_since
                 <= PHYSICAL_SENSOR_DROPOUT_SECONDS
             )
-            perception_frame = (
-                apply_physical_visibility_dropout(frame)
-                if physical_dropout_active
-                else frame
-            )
+            if physical_dropout_active:
+                raw_focus_boxes = blue_target_detections(
+                    frame,
+                    saturation_floor=saturation_floor,
+                )
+                if raw_focus_boxes:
+                    physical_dropout_focus_box = raw_focus_boxes[0]
+                perception_frame = apply_physical_visibility_dropout(
+                    frame,
+                    physical_dropout_focus_box,
+                )
+            else:
+                physical_dropout_focus_box = None
+                perception_frame = frame
             if physical_dropout_active:
                 physical_sensor_dropout_frames += 1
             stress_active = stress_active or physical_occlusion_now
@@ -677,7 +714,13 @@ def main() -> None:
                 if track.state == 0 and track.misses == 0
             ]
             elapsed_step = max(time.monotonic() - step_started, 1e-6)
-            inference_fps = 1.0 / elapsed_step
+            instantaneous_fps = 1.0 / elapsed_step
+            display_inference_fps = (
+                instantaneous_fps
+                if display_inference_fps <= 0.0
+                else 0.18 * instantaneous_fps + 0.82 * display_inference_fps
+            )
+            inference_fps = display_inference_fps
             host_tracks[host_id] = list(tracks)
             confirmed_tracks = [track for track in tracks if track.confirmed]
             confirmed_now = bool(confirmed_tracks)
@@ -867,7 +910,7 @@ def main() -> None:
                 overlay_tracks = list(host_tracks[active_host_id])
                 overlay_fps = inference_fps
                 overlay_host_id = active_host_id
-                overlay_frame = perception_frame.copy()
+                overlay_frame = frame.copy()
                 overlay_stress_active = stress_active or physical_occlusion_now
                 overlay_mode = (
                     "handoff"
@@ -883,6 +926,7 @@ def main() -> None:
                         else "TARGET LOST / REACQUISITION SEARCH"
                     )
                     overlay_reacquisition_until = time.monotonic() + 0.4
+                first_frame_ready.set()
             frame_index += 1
     finally:
         if physical_occlusion_active_since is not None:

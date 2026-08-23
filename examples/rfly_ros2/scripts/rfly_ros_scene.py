@@ -46,6 +46,14 @@ CAMERA_SEARCH_MAX_ALTITUDE_M = 84.0
 CAMERA_OCCLUSION_ALTITUDE_M = 76.0
 RFLY_CAMERA_COMMAND_PERIOD_S = 0.14
 RFLY_RENDER_UPDATE_PERIOD_S = 0.08
+CAMERA_FOV_SLEW_DEG_PER_UPDATE = 1.8
+CAMERA_MAX_STEP_M = 1.45
+CAMERA_MAX_ACCELERATION_STEP_M = 0.18
+CAMERA_MAX_SPEED_M = 1.8
+CAMERA_SEARCH_YAW_STEP_DEG = 2.5
+CAMERA_MAX_YAW_STEP_DEG = 3.0
+CAMERA_MAX_YAW_ACCELERATION_DEG = 0.65
+MAX_VISUAL_SPEED_MPS = 28.0
 STATIC_SCENE_BOOTSTRAP_DELAY_S = 0.80
 INITIAL_SEARCH_ASSIST_SECONDS = 30.0
 CAMERA_CARRIER_ID = 1
@@ -451,6 +459,7 @@ class RflyRosScene(Node):
         max_yaw_rate: float,
         max_yaw_acceleration: float,
         min_turn_radius: float,
+        min_speed: float = 0.0,
     ) -> None:
         if dt <= 0.0:
             return
@@ -462,6 +471,8 @@ class RflyRosScene(Node):
         speed_target = min(max(desired_speed, 0.0), max_speed * turn_speed_scale)
         speed_delta_limit = (acceleration if speed_target >= speed else braking) * dt
         speed += max(min(speed_target - speed, speed_delta_limit), -speed_delta_limit)
+        if speed_target > 0.0:
+            speed = max(speed, min_speed)
         physical_yaw_limit = min(
             max_yaw_rate,
             max(speed, 0.8) / max(min_turn_radius, 1.0),
@@ -651,6 +662,7 @@ class RflyRosScene(Node):
                 max_yaw_rate=TARGET_MAX_YAW_RATE_RPS,
                 max_yaw_acceleration=0.62,
                 min_turn_radius=TARGET_MIN_TURN_RADIUS_M,
+                min_speed=4.5,
             )
             self.last_target_time = t
             states.append(
@@ -777,17 +789,6 @@ class RflyRosScene(Node):
                     goal_y,
                     dt,
                 )
-                if self.physical_occlusion_requested:
-                    motion["x"] = goal_x
-                    motion["y"] = goal_y
-                    motion["yaw"] = math.atan2(
-                        target_y - float(motion["y"]),
-                        target_x - float(motion["x"]),
-                    )
-                    motion["yaw_rate"] = 0.0
-                    motion["speed"] = 0.0
-                    motion["vx"] = 0.0
-                    motion["vy"] = 0.0
             else:
                 self.advance_forward_vehicle(
                     motion,
@@ -1112,6 +1113,8 @@ class RflyRosScene(Node):
                                 self.ground_car_speeds[car_id] * math.sin(ground_yaw),
                             )
                             self.collision_resolution_brakes += 1
+                        if str(entity["kind"]) == "target":
+                            continue
                         motion = entity.get("motion")
                         if isinstance(motion, dict):
                             motion["speed"] = float(motion.get("speed", 0.0)) * 0.35
@@ -1225,14 +1228,19 @@ class RflyRosScene(Node):
         target_fov = min(
             max(float(fov_deg), CAMERA_LOCK_FOV_DEG), CAMERA_SEARCH_FOV_DEG
         )
-        if abs(target_fov - self.current_camera_fov_deg) < 0.1:
+        fov_error = target_fov - self.current_camera_fov_deg
+        if abs(fov_error) < 0.1:
             return
+        next_fov = self.current_camera_fov_deg + max(
+            min(fov_error, CAMERA_FOV_SLEW_DEG_PER_UPDATE),
+            -CAMERA_FOV_SLEW_DEG_PER_UPDATE,
+        )
         self.ue.sendUE4Cmd(
-            f"RflyCameraFovDegrees {target_fov:.1f}",
+            f"RflyCameraFovDegrees {next_fov:.1f}",
             self.rfly_window_id,
         )
-        self.current_camera_fov_deg = target_fov
-        self.locked_camera_fov = target_fov < CAMERA_SEARCH_FOV_DEG
+        self.current_camera_fov_deg = next_fov
+        self.locked_camera_fov = next_fov < CAMERA_SEARCH_FOV_DEG - 0.1
 
     def update_camera_uav(
         self,
@@ -1296,8 +1304,8 @@ class RflyRosScene(Node):
                 measured_vx = (measurement_x - float(previous["x"])) / delta
                 measured_vy = (measurement_y - float(previous["y"])) / delta
                 measured_speed = math.hypot(measured_vx, measured_vy)
-                if measured_speed > 28.0:
-                    scale = 28.0 / measured_speed
+                if measured_speed > MAX_VISUAL_SPEED_MPS:
+                    scale = MAX_VISUAL_SPEED_MPS / measured_speed
                     measured_vx *= scale
                     measured_vy *= scale
                 filtered_x = 0.28 * measurement_x + 0.72 * float(previous["x"])
@@ -1340,8 +1348,8 @@ class RflyRosScene(Node):
             image_error_x = float(visual_state["normalized_x"]) - 0.5
             image_error_y = float(visual_state["normalized_y"]) - 0.5
             yaw_correction = max(min(1.15 * image_error_x, 0.24), -0.24)
-            forward_correction = max(min(-6.5 * image_error_y, 4.0), -4.0)
-            lateral_correction = max(min(1.8 * image_error_x, 1.5), -1.5)
+            forward_correction = max(min(-9.0 * image_error_y, 5.0), -5.0)
+            lateral_correction = max(min(2.2 * image_error_x, 1.8), -1.8)
             forward_x = math.cos(camera_yaw)
             forward_y = math.sin(camera_yaw)
             right_x = -forward_y
@@ -1429,27 +1437,52 @@ class RflyRosScene(Node):
                 CAMERA_SEARCH_MAX_ALTITUDE_M,
             )
             base_x, base_y, base_yaw = self.search_waypoint(self.active_host_id, t)
-            self.camera_search_yaw += math.radians(2.5)
+            self.camera_search_yaw += math.radians(CAMERA_SEARCH_YAW_STEP_DEG)
             desired_yaw = base_yaw + self.camera_search_yaw
             desired_x = base_x
             desired_y = base_y
-        desired_step_x = max(min(0.12 * (desired_x - camera_x), 0.95), -0.95)
-        desired_step_y = max(min(0.12 * (desired_y - camera_y), 0.95), -0.95)
+        desired_step_x = max(
+            min(0.18 * (desired_x - camera_x), CAMERA_MAX_STEP_M),
+            -CAMERA_MAX_STEP_M,
+        )
+        desired_step_y = max(
+            min(0.18 * (desired_y - camera_y), CAMERA_MAX_STEP_M),
+            -CAMERA_MAX_STEP_M,
+        )
         velocity_x, velocity_y = self.camera_velocity
-        velocity_x += max(min(desired_step_x - velocity_x, 0.10), -0.10)
-        velocity_y += max(min(desired_step_y - velocity_y, 0.10), -0.10)
+        velocity_x += max(
+            min(
+                desired_step_x - velocity_x,
+                CAMERA_MAX_ACCELERATION_STEP_M,
+            ),
+            -CAMERA_MAX_ACCELERATION_STEP_M,
+        )
+        velocity_y += max(
+            min(
+                desired_step_y - velocity_y,
+                CAMERA_MAX_ACCELERATION_STEP_M,
+            ),
+            -CAMERA_MAX_ACCELERATION_STEP_M,
+        )
+        velocity_norm = math.hypot(velocity_x, velocity_y)
+        if velocity_norm > CAMERA_MAX_SPEED_M:
+            velocity_x *= CAMERA_MAX_SPEED_M / velocity_norm
+            velocity_y *= CAMERA_MAX_SPEED_M / velocity_norm
         move_x, move_y = velocity_x, velocity_y
         self.camera_velocity = (velocity_x, velocity_y)
         camera_x += move_x
         camera_y += move_y
         yaw_error = (desired_yaw - camera_yaw + math.pi) % (2.0 * math.pi) - math.pi
         desired_yaw_rate = max(
-            min(0.28 * yaw_error, math.radians(3.0)),
-            math.radians(-3.0),
+            min(0.28 * yaw_error, math.radians(CAMERA_MAX_YAW_STEP_DEG)),
+            math.radians(-CAMERA_MAX_YAW_STEP_DEG),
         )
         self.camera_yaw_rate += max(
-            min(desired_yaw_rate - self.camera_yaw_rate, math.radians(0.65)),
-            math.radians(-0.65),
+            min(
+                desired_yaw_rate - self.camera_yaw_rate,
+                math.radians(CAMERA_MAX_YAW_ACCELERATION_DEG),
+            ),
+            math.radians(-CAMERA_MAX_YAW_ACCELERATION_DEG),
         )
         camera_yaw += self.camera_yaw_rate
         self.camera_state = (camera_x, camera_y, camera_yaw)
@@ -1616,10 +1649,16 @@ class RflyRosScene(Node):
         camera_forward_y = 1.2 * math.sin(yaw)
         camera_altitude = altitude - 0.35
         scale = camera_altitude / ray[2]
-        return (
+        projected = (
             camera_x + camera_forward_x + ray[0] * scale,
             camera_y + camera_forward_y + ray[1] * scale,
         )
+        if not (
+            -8.0 <= projected[0] <= GRID_SIZE + 8.0
+            and -8.0 <= projected[1] <= GRID_SIZE + 8.0
+        ):
+            return None
+        return projected
 
     def receive_visual_tracks(self, now: float) -> None:
         packets = []
@@ -1669,7 +1708,7 @@ class RflyRosScene(Node):
                         raw_vx = (projected[0] - float(previous["x"])) / delta
                         raw_vy = (projected[1] - float(previous["y"])) / delta
                         raw_speed = math.hypot(raw_vx, raw_vy)
-                        if raw_speed <= 38.0:
+                        if raw_speed <= MAX_VISUAL_SPEED_MPS:
                             projected = (
                                 0.28 * projected[0] + 0.72 * float(previous["x"]),
                                 0.28 * projected[1] + 0.72 * float(previous["y"]),
