@@ -140,9 +140,20 @@ class EnclosureNode(Node):
         return list(getattr(message, "drones", getattr(message, "states", [])))
 
     def _merged_drones(self):
-        """Merge batch drones with pose overlays (pose takes priority)."""
-        merged = {int(s.drone_id): s for s in self._batch_drones}
-        merged.update(self._pose_drones)
+        """Merge batch drones with pose overlays (pose takes priority).
+
+        Batch states are keyed by ``(platform_type, drone_id)`` so UAVs and
+        UGVs may reuse the same numeric ids without overwriting each other
+        (e.g. UAV 0/1/2 on the monitor layer and UGV 0/1 on the block layer).
+        Pose overlays are UAV states, so they are keyed as ``(0, drone_id)``.
+        """
+        merged = {
+            (int(getattr(s, "platform_type", 0)), int(s.drone_id)): s
+            for s in self._batch_drones
+        }
+        merged.update(
+            {(0, drone_id): state for drone_id, state in self._pose_drones.items()}
+        )
         return list(merged.values())
 
     def tick(self):
