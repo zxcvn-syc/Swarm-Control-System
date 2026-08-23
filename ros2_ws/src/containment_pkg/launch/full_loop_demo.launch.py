@@ -64,6 +64,7 @@ def generate_launch_description():
             "block_radius": 15.0,
             "min_dist": 5.0,
             "update_period": 1.0,
+            "target_track_topic": "/target_track",
         }],
     )
 

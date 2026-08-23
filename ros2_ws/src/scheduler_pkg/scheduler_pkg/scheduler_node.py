@@ -221,10 +221,11 @@ class SchedulerNode(Node):
             tasks.append(task)
 
         agents = []
-        # Mirror the per-drone platform_type alongside agent construction
-        # so the caller can map ``d_idx`` back to a platform.
-        platforms: List[int] = []
-        for d_id, (x, y, platform_type) in self._drones.items():
+        # Use the same sorted order as ``drone_ids`` in ``tick``.  ROS
+        # messages need not arrive in ID order, so dictionary insertion
+        # order is not a safe mapping from auction-agent index to drone ID.
+        for d_id in drone_ids:
+            x, y, platform_type = self._drones[d_id]
             category, speed = self._PLATFORM_AGENT_PROFILE.get(
                 platform_type, ("UAV", 2.0)
             )
@@ -238,7 +239,6 @@ class SchedulerNode(Node):
                 speed=speed,
             )
             agents.append(agent)
-            platforms.append(platform_type)
 
         engine = AuctionEngine(agents, tasks)
         result = engine.bid_allocation()
@@ -252,7 +252,7 @@ class SchedulerNode(Node):
                 t_idx = target_ids.index(target_id)
                 pairs.append((d_idx, t_idx))
 
-        return pairs, platforms
+        return pairs
 
     def tick(self) -> None:
         now = time.monotonic()
@@ -285,13 +285,9 @@ class SchedulerNode(Node):
 
         if self.strategy == "auction":
             try:
-                pairs, auction_platforms = self._run_auction_assign(
+                pairs = self._run_auction_assign(
                     drone_ids, drone_xy, target_ids, target_xy, target_priorities
                 )
-                # Trust the auction engine's authoritative per-drone mapping
-                # when available; fall back to the cache otherwise.
-                if auction_platforms:
-                    drone_platforms = list(auction_platforms)
             except Exception as e:
                 self.get_logger().warn(f"auction_assign failed ({e}); falling back to greedy.")
                 pairs = self._run_greedy_assign(drone_ids, drone_xy, target_ids, target_xy, target_priorities)

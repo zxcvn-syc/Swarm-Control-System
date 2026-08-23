@@ -49,7 +49,7 @@ class EnclosureNode(Node):
         self.declare_parameter("update_period", 1.0)
         self.declare_parameter("pose_topic", "/uav1/current_pose")
         self.declare_parameter("pose_drone_id", 1)
-        self.declare_parameter("target_track_topic", "/target_track")
+        self.declare_parameter("target_track_topic", "/target_track_world")
         self.declare_parameter("enclosure_target_topic", "/enclosure_targets")
 
         self._targets = []

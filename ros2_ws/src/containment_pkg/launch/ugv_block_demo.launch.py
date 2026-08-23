@@ -48,6 +48,9 @@ def generate_launch_description():
             executable="enclosure_node",
             name="enclosure_node",
             output="screen",
-            parameters=["config/containment.yaml"],
+            parameters=[
+                "config/containment.yaml",
+                {"target_track_topic": "/target_track"},
+            ],
         ),
     ])

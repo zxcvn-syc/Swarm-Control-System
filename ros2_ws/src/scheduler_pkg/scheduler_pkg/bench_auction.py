@@ -43,14 +43,12 @@ _SCHEDULER_PKG_DIR = _HERE  # this script lives next to agent.py etc.
 # cwd, or via `python3 -m scheduler_pkg.bench_auction`.
 if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))  # lets us `import scheduler_pkg.*`
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))         # lets us `import agent/task/...`
 
 # pylint: disable=wrong-import-position
-from agent import Agent  # noqa: E402
-from task import Task  # noqa: E402
-from auction_engine import AuctionEngine  # noqa: E402
-import assign as assign_mod  # noqa: E402  (greedy_assign / hungarian_assign)
+from scheduler_pkg.agent import Agent  # noqa: E402
+from scheduler_pkg.task import Task  # noqa: E402
+from scheduler_pkg.auction_engine import AuctionEngine  # noqa: E402
+from scheduler_pkg import assign as assign_mod  # noqa: E402
 import logging  # noqa: E402  (used to silence noisy library loggers)
 
 # AuctionEngine.generate_utility_matrix() prints the whole N x M matrix via
@@ -235,7 +233,16 @@ def _baseline_commit() -> str:
         return "unknown"
 
 
+def _configure_utf8_stdout() -> None:
+    """Keep the Chinese Markdown report printable on Windows terminals."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+
 def main(argv=None) -> int:
+    _configure_utf8_stdout()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--quick", action="store_true",
                         help="Run a single (16 agents, 20 tasks) cell only.")
@@ -289,9 +296,13 @@ def main(argv=None) -> int:
                               f"FAILED: {exc!r}")
                 med = _median(samples)
                 results[strategy][n_a][n_t] = med
-                print(f"[bench] {strategy:9s} | {n_a:>2} agents x {n_t:>2} "
-                      f"tasks | median = {med:7.3f} ms "
-                      f"(min {min(samples):.3f} / max {max(samples):.3f})")
+                if samples:
+                    print(f"[bench] {strategy:9s} | {n_a:>2} agents x {n_t:>2} "
+                          f"tasks | median = {med:7.3f} ms "
+                          f"(min {min(samples):.3f} / max {max(samples):.3f})")
+                else:
+                    print(f"[bench] {strategy:9s} | {n_a:>2} agents x {n_t:>2} "
+                          "tasks | no successful samples")
 
     meta = {
         "baseline": _baseline_commit(),

@@ -8,6 +8,12 @@ enclosure_node:
     block_radius: 15.0     # UGV block layer (inner ring)
     min_dist: 5.0
     update_period: 1.0
+    # Meter-unit tracks produced by perception_pkg/coord_transform_node.
+    # Set to /target_track only for legacy pixel-space replay.
+    target_track_topic: /target_track_world
+    # World coordinates are authoritative by default.  Enable this legacy
+    # fallback only when the transform node is intentionally unavailable.
+    enclosure_target_topic: ""
     # Real-time pose subscription (from planning_pkg/uav_pose_pub)
     pose_topic: "/uav1/current_pose"
     pose_drone_id: 1
