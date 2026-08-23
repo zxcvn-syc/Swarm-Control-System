@@ -22,7 +22,7 @@ setup(
         ),
         (
             'share/' + package_name + '/launch',
-            ['launch/containment.launch.py', 'launch/ugv_block_demo.launch.py', 'launch/full_loop_demo.launch.py']
+            ['launch/containment.launch.py', 'launch/ugv_block_demo.launch.py', 'launch/full_loop_demo.launch.py', 'launch/rfly_enclosure.launch.py']
         ),
         (
             'share/' + package_name + '/config',
@@ -44,6 +44,7 @@ setup(
             'mock_platform_pub = containment_pkg.mock_platform_pub:main',
             'target_pub = containment_pkg.target_pub:main',
             'enclosure_command_bridge = containment_pkg.enclosure_command_bridge:main',
+            'platform_state_merger = containment_pkg.platform_state_merger:main',
         ],
     },
 )
