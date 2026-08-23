@@ -56,6 +56,12 @@ def make_pose(x, y, z=0.0):
 
 @pytest.fixture
 def node():
+    # Ensure a clean default context for every test: rclpy.init() can only
+    # be called once per process, and rclpy.shutdown() does not always
+    # destroy the global default context, so we explicitly bring it down
+    # before re-initialising.
+    if rclpy.ok():
+        rclpy.shutdown()
     rclpy.init()
     instance = EnclosureNode()
     yield instance
@@ -231,12 +237,15 @@ def test_drone_and_car_get_different_layer_radii(node):
     assert cmds[101].enclosure_radius == pytest.approx(15.0)
 
 
-def test_layered_standby_is_per_layer(node):
-    """Extra platforms standby within their own layer only."""
+def test_layered_extra_platforms_all_active(node):
+    """All platforms in a containment layer stay active, regardless of
+    their number vs. the number of targets (c2a32bc: standby is no longer
+    applied within monitor/block layers).
+    """
     tracks = TargetTrackArray()
     tracks.tracks = [make_track(0.0, 0.0)]
     drones = DroneStateArray()
-    # 2 UAVs + 2 UGVs vs 1 target -> one standby in each layer
+    # 2 UAVs + 2 UGVs vs 1 target -> every platform should still be active.
     drones.drones = [
         make_drone(20.0, 0.0, 1),
         make_drone(30.0, 0.0, 2),
@@ -249,12 +258,19 @@ def test_layered_standby_is_per_layer(node):
     node.on_drone(drones)
     assert node.tick()
     cmds = {int(c.drone_id): c for c in published[-1].commands}
-    # first drone of each layer active
+    # All four platforms must be active with their layer's radius.
+    assert cmds[1].layer == LAYER_MONITOR
+    assert cmds[2].layer == LAYER_MONITOR
+    assert cmds[101].layer == LAYER_BLOCK
+    assert cmds[102].layer == LAYER_BLOCK
     assert cmds[1].enclosure_radius == pytest.approx(25.0)
+    assert cmds[2].enclosure_radius == pytest.approx(25.0)
     assert cmds[101].enclosure_radius == pytest.approx(15.0)
-    # second of each layer standby (NaN target, radius 0)
-    assert cmds[2].enclosure_radius == 0.0
-    assert cmds[102].enclosure_radius == 0.0
+    assert cmds[102].enclosure_radius == pytest.approx(15.0)
+    # No NaN coordinates for any active platform.
+    for did in (1, 2, 101, 102):
+        assert math.isfinite(cmds[did].target_x)
+        assert math.isfinite(cmds[did].target_y)
 
 
 def test_three_uav_two_car_scene_publishes_all_layers(node):
