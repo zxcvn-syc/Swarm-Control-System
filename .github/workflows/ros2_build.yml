@@ -71,9 +71,11 @@ jobs:
       # ----- Bare-metal fallback ------------------------------------
       # If Docker is unavailable in the runner, fall back to the
       # original apt install + colcon workflow so the job still
-      # exercises every step.
+      # exercises every step.  Only runs when the Docker path failed;
+      # with ``if: always()`` these steps executed even on success and
+      # their (expected) failures produced confusing error annotations.
       - name: Fallback - install ROS2 Humble
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           sudo apt-get update
@@ -99,7 +101,7 @@ jobs:
             ros-humble-mavros-msgs
 
       - name: Fallback - install Python deps
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           pip install --break-system-packages \
@@ -107,7 +109,7 @@ jobs:
             "opencv-python<4.11"
 
       - name: Fallback - build workspace
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           cd ros2_ws
@@ -116,7 +118,7 @@ jobs:
         shell: bash
 
       - name: Fallback - run integration test (5x)
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           source /opt/ros/humble/setup.bash
