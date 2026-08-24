@@ -63,7 +63,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           # Minimal CV / numerical stack for the test runner; CI doesn't need to
           # pull a YOLO model or run the tracker.
-          pip install numpy scipy opencv-python-headless pyyaml
+          pip install numpy scipy opencv-python-headless pyyaml pytest
           pip install -e . --no-deps
 
       - name: Run tests (skip slow)
