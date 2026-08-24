@@ -51,3 +51,9 @@
     appearance:
       enabled: false                # OSNet ReID (deepsort_cascade only)
       weights: ""
+
+    # UAV state synchronization (P1-C)
+    # tracker_node subscribes to this topic and overrides the
+    # TargetTrackArray.header.stamp with DroneStateArray.header.stamp
+    # so the downstream enclosure_node closed loop stays consistent.
+    drone_states_topic: "/drone_states"

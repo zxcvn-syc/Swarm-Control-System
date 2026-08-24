@@ -31,7 +31,8 @@ jobs:
             -v "$PWD":/workspace \
             -w /workspace \
             swarm-ci:humble \
-            bash -c "source /opt/ros/humble/setup.bash && \
+            bash -c "set -o pipefail && \
+                     source /opt/ros/humble/setup.bash && \
                      cd ros2_ws && \
                      colcon build --packages-select planning_pkg scheduler_pkg containment_pkg perception_pkg swarm_interfaces 2>&1 | tail -20"
 
@@ -44,10 +45,12 @@ jobs:
             bash -c "source /opt/ros/humble/setup.bash && \
                      source ros2_ws/install/setup.bash && \
                      cd ros2_ws && \
+                     FAIL=0; \
                      for i in 1 2 3 4 5; do \
                        echo \"=== Run \$i ===\"; \
-                       python3 test_three_links.py && echo PASS || echo FAIL; \
-                     done"
+                       python3 test_three_links.py && echo PASS || FAIL=1; \
+                     done; \
+                     exit \$FAIL"
 
       - name: Run pytest inside Docker
         run: |
@@ -55,16 +58,24 @@ jobs:
             -v "$PWD":/workspace \
             -w /workspace \
             swarm-ci:humble \
-            bash -c "source /opt/ros/humble/setup.bash && \
+            bash -c "set -o pipefail && \
+                     source /opt/ros/humble/setup.bash && \
                      source ros2_ws/install/setup.bash && \
-                     python3 -m pytest ros2_ws/src/planning_pkg/tests/ ros2_ws/src/scheduler_pkg/tests/ ros2_ws/src/containment_pkg/tests/ ros2_ws/src/perception_pkg/tests/ -v 2>&1 | tail -40"
+                     FAIL=0; \
+                     for pkg in planning_pkg scheduler_pkg containment_pkg perception_pkg; do \
+                       echo \"=== \$pkg ===\"; \
+                       python3 -m pytest ros2_ws/src/\$pkg/tests/ -v --tb=short 2>&1 | tail -80 || FAIL=1; \
+                     done; \
+                     exit \$FAIL"
 
       # ----- Bare-metal fallback ------------------------------------
       # If Docker is unavailable in the runner, fall back to the
       # original apt install + colcon workflow so the job still
-      # exercises every step.
+      # exercises every step.  Only runs when the Docker path failed;
+      # with ``if: always()`` these steps executed even on success and
+      # their (expected) failures produced confusing error annotations.
       - name: Fallback - install ROS2 Humble
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           sudo apt-get update
@@ -86,10 +97,11 @@ jobs:
             ros-humble-std-msgs \
             ros-humble-sensor-msgs \
             ros-humble-cv-bridge \
-            ros-humble-image-transport
+            ros-humble-image-transport \
+            ros-humble-mavros-msgs
 
       - name: Fallback - install Python deps
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           pip install --break-system-packages \
@@ -97,7 +109,7 @@ jobs:
             "opencv-python<4.11"
 
       - name: Fallback - build workspace
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           cd ros2_ws
@@ -106,14 +118,16 @@ jobs:
         shell: bash
 
       - name: Fallback - run integration test (5x)
-        if: always()
+        if: failure()
         continue-on-error: true
         run: |
           source /opt/ros/humble/setup.bash
           source ros2_ws/install/setup.bash
           cd ros2_ws
+          FAIL=0
           for i in 1 2 3 4 5; do
             echo "=== Run $i ==="
-            python3 test_three_links.py && echo "PASS" || echo "FAIL"
+            python3 test_three_links.py && echo "PASS" || FAIL=1
           done
+          exit $FAIL
         shell: bash

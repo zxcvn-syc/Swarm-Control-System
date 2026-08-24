@@ -1,0 +1,30 @@
+D* Lite 随机障碍物响应耗时测试报告
+=====================================
+
+生成时间: 2026-08-24 01:36:06
+Commit Hash: bd38bb26bc00f5dbf54c468ee5b1b53b8f86793f
+CPU 型号: Intel(R) Core(TM) i7-14700HX
+ROS 版本: humble
+
+测试配置:
+  - 测试程序: ros2 run planning_pkg dstar_benchmark（planning_pkg/dstar_benchmark_node.py）
+  - 规划器: planning_pkg/dstar_lite.py 的 DStarLite.plan()（仓库实现）
+  - 输出路径: ROS2 参数 output_path（可配置）
+  - grid 尺寸: 50x50
+  - 起点: (5, 5)
+  - 终点: (45, 45)
+  - 障碍物生成规则: 每轮随机生成 5~15 个障碍物，避开起终点半径 2 范围
+  - 测试轮数: 10 轮
+
+原始测试输出:
+Average: 0.959208 ms
+Round 1: 1.871099 ms
+Round 2: 1.586889 ms
+Round 3: 0.670639 ms
+Round 4: 1.065140 ms
+Round 5: 0.699940 ms
+Round 6: 0.701002 ms
+Round 7: 0.652062 ms
+Round 8: 0.722689 ms
+Round 9: 0.689808 ms
+Round 10: 0.932815 ms

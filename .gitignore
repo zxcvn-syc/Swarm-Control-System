@@ -39,9 +39,10 @@ env/
 output/
 *.tar.gz
 
-# Local WorkBuddy workspace data
-.workbuddy/
-
 # Generated test videos
 videos/*.mp4
 videos/generate_test_video.py
+
+# Local public datasets and extracted demo inputs
+/data/
+/datasets/

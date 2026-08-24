@@ -1,0 +1,92 @@
+[INFO] [1787226310.414569578] [grid_map_node]: grid_map_node up: subscribes /grid_map_nav + /grid_obstacles, publishes /grid_map (UInt8MultiArray)
+[INFO] [1787226311.301712080] [grid_map_node]: metric grid.obstacles=0, grid.injected_cells=0, grid.size=40x40
+[INFO] [1787226312.301384903] [grid_map_node]: metric grid.obstacles=0, grid.injected_cells=0, grid.size=40x40
+[INFO] [1787226313.096007731] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226313.295315127] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226313.300832230] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226313.497589771] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226313.695355593] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226313.895611372] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226314.096182046] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226314.295414643] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226314.301885429] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226314.497986881] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226314.698109762] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226314.895729888] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226315.099393806] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226315.297016632] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226315.301774648] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226315.495303945] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226315.696633506] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226315.897082581] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226316.095610290] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226316.297073548] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226316.301040079] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226316.495707655] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226316.698301293] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226316.896195214] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226317.098866951] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226317.295370695] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226317.302210275] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226317.497003950] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226317.695964651] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226317.897373511] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226318.097332995] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226318.296286296] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226318.302599386] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226318.495211199] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226318.696688856] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226318.895418462] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226319.095223649] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226319.296526510] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226319.301416924] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226319.496256098] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226319.696631574] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226319.897097850] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226320.095598760] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226320.297000719] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226320.300973949] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226320.495947021] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226320.695366414] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226320.896079585] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226321.095949571] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226321.296152151] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226321.301127263] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226321.495178652] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226321.696120118] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226321.895327616] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226322.095414798] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226322.295826374] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226322.300991983] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226322.497297831] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226322.695735942] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226322.895320833] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226323.096189001] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226323.295500397] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226323.301610690] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226323.496488563] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226323.696894739] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226323.895782742] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226324.098180884] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226324.295248719] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226324.301032417] [grid_map_node]: metric grid.obstacles=102, grid.injected_cells=102, grid.size=40x40
+[INFO] [1787226324.496390082] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226324.696969156] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+[INFO] [1787226324.894913475] [grid_map_node]: /grid_obstacles: stored 102 obstacle cells (40x40)
+Traceback (most recent call last):
+  File "/home/hhh/Downloads/cvtrack-closed-loop-verify-20260820/ros2_ws/install_closed_loop_validation/lib/planning_pkg/grid_map_node", line 33, in <module>
+    sys.exit(load_entry_point('planning_pkg==0.1.0', 'console_scripts', 'grid_map_node')())
+  File "/home/hhh/Downloads/cvtrack-closed-loop-verify-20260820/ros2_ws/install_closed_loop_validation/lib/python3.10/site-packages/planning_pkg/grid_map_node.py", line 220, in main
+    rclpy.spin(node)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+    executor.spin_once()
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 681, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+[ros2run]: Process exited with failure 1

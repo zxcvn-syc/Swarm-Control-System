@@ -12,7 +12,24 @@ _PKG_PARENT = Path(__file__).resolve().parents[1]
 if str(_PKG_PARENT) not in sys.path:
     sys.path.insert(0, str(_PKG_PARENT))
 
+import rclpy
+
+import scheduler_pkg.scheduler_node as scheduler_node
 from scheduler_pkg.scheduler_node import SchedulerNode, normalize_strategy, uint32
+
+
+# ============================================================
+# rclpy fixture — initializes ROS2 before any test runs
+# ============================================================
+@pytest.fixture(autouse=True)
+def rclpy_fixture():
+    """Ensure rclpy is initialized before each test and shutdown after."""
+    if rclpy.ok():
+        rclpy.shutdown()
+    rclpy.init()
+    yield
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
 def track(target_id, x, y, confidence=0.5, is_confirmed=False):
@@ -25,8 +42,14 @@ def track(target_id, x, y, confidence=0.5, is_confirmed=False):
     )
 
 
-def drone(drone_id, x, y, available=True):
-    return SimpleNamespace(drone_id=drone_id, x=x, y=y, available=available)
+def drone(drone_id, x, y, available=True, platform_type=0):
+    return SimpleNamespace(
+        drone_id=drone_id,
+        x=x,
+        y=y,
+        available=available,
+        platform_type=platform_type,
+    )
 
 
 def target_array(*tracks):
@@ -55,8 +78,13 @@ def test_on_target_replaces_snapshot_and_calculates_priority(monkeypatch):
 
 def test_on_drone_replaces_snapshot_and_filters_unavailable(monkeypatch):
     node = make_node(monkeypatch)
-    node.on_drone(drone_array(drone(1, 2.0, 3.0), drone(2, 9.0, 9.0, False)))
-    assert node._drones == {1: (2.0, 3.0)}
+    node.on_drone(
+        drone_array(
+            drone(1, 2.0, 3.0),
+            drone(2, 9.0, 9.0, False, platform_type=1),
+        )
+    )
+    assert node._drones == {1: (2.0, 3.0, 0)}
 
     node.on_drone(drone_array())
     assert node._drones == {}
@@ -67,8 +95,8 @@ def test_empty_drone_snapshot_seeds_default_grid(monkeypatch):
     node.num_drones = 8
     node._seed_default_drones()
     assert len(node._drones) == 8
-    assert node._drones[0] == (0.0, 0.0)
-    assert node._drones[7] == (5.0, 10.0)
+    assert node._drones[0] == (0.0, 0.0, 0)
+    assert node._drones[7] == (5.0, 10.0, 0)
 
 
 def test_tick_publishes_one_assignment_per_target(monkeypatch):
@@ -83,6 +111,56 @@ def test_tick_publishes_one_assignment_per_target(monkeypatch):
     assert len(published) == 2
     assert {message.target_id for message in published} == {10, 20}
     assert {message.drone_id for message in published} <= {3, 4}
+
+
+def test_auction_uses_sorted_drone_ids_for_platform_mapping(monkeypatch):
+    node = make_node(monkeypatch, strategy="auction")
+    node._drones = {
+        2: (20.0, 0.0, 1),
+        1: (10.0, 0.0, 0),
+    }
+    node._targets = {10: (1.0, 1.0, 1.0)}
+    observed_agents = []
+
+    class FakeAuctionEngine:
+        def __init__(self, agents, _tasks):
+            observed_agents.extend(agents)
+
+        def bid_allocation(self):
+            return {"T010": "UGV2"}
+
+    monkeypatch.setattr(scheduler_node, "AuctionEngine", FakeAuctionEngine)
+
+    pairs = node._run_auction_assign(
+        [1, 2],
+        None,
+        [10],
+        None,
+        None,
+    )
+
+    assert [agent.aid for agent in observed_agents] == ["UAV1", "UGV2"]
+    assert pairs == [(1, 0)]
+
+
+def test_tick_publishes_platform_specific_task_types(monkeypatch):
+    node = make_node(monkeypatch, strategy="auction")
+    node._drones = {
+        2: (20.0, 0.0, 1),
+        1: (10.0, 0.0, 0),
+    }
+    node._targets = {
+        10: (1.0, 1.0, 1.0),
+        20: (2.0, 2.0, 1.0),
+    }
+    node._run_auction_assign = lambda *_args: [(0, 0), (1, 1)]
+    published = []
+    node.pub_task.publish = published.append
+
+    node.tick()
+
+    tasks_by_drone = {message.drone_id: message.task_type for message in published}
+    assert tasks_by_drone == {1: "track_aerial", 2: "track_ground"}
 
 
 def test_uint32_wraps_negative_and_large_values():

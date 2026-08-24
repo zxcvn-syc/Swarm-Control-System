@@ -1,4 +1,5 @@
 import numpy as np
+
 from .logger_config import logger
 
 class AuctionEngine:

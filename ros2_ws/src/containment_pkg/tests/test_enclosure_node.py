@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 rclpy = pytest.importorskip("rclpy")
@@ -54,6 +56,12 @@ def make_pose(x, y, z=0.0):
 
 @pytest.fixture
 def node():
+    # Ensure a clean default context for every test: rclpy.init() can only
+    # be called once per process, and rclpy.shutdown() does not always
+    # destroy the global default context, so we explicitly bring it down
+    # before re-initialising.
+    if rclpy.ok():
+        rclpy.shutdown()
     rclpy.init()
     instance = EnclosureNode()
     yield instance
@@ -94,7 +102,8 @@ def test_tick_publishes_once_until_next_input(node):
     assert published[-1].commands[0].target_x == 8.0 + 25.0
 
 
-def test_multiple_targets_and_drones_publish_standby_for_extra_drone(node):
+def test_multiple_targets_and_drones_all_active(node):
+    """All platforms in a containment layer should be assigned a ring point."""
     tracks = TargetTrackArray()
     tracks.tracks = [make_track(0.0, 0.0, 1), make_track(50.0, 0.0, 2)]
     drones = DroneStateArray()
@@ -105,7 +114,10 @@ def test_multiple_targets_and_drones_publish_standby_for_extra_drone(node):
     node.on_drone(drones)
     assert node.tick()
     assert len(published[-1].commands) == 3
-    assert published[-1].commands[-1].enclosure_radius == 0.0
+    for cmd in published[-1].commands:
+        assert cmd.enclosure_radius > 0.0
+        assert math.isfinite(cmd.target_x)
+        assert math.isfinite(cmd.target_y)
 
 
 # ---------------------------------------------------------------------------
@@ -225,12 +237,15 @@ def test_drone_and_car_get_different_layer_radii(node):
     assert cmds[101].enclosure_radius == pytest.approx(15.0)
 
 
-def test_layered_standby_is_per_layer(node):
-    """Extra platforms standby within their own layer only."""
+def test_layered_extra_platforms_all_active(node):
+    """All platforms in a containment layer stay active, regardless of
+    their number vs. the number of targets (c2a32bc: standby is no longer
+    applied within monitor/block layers).
+    """
     tracks = TargetTrackArray()
     tracks.tracks = [make_track(0.0, 0.0)]
     drones = DroneStateArray()
-    # 2 UAVs + 2 UGVs vs 1 target -> one standby in each layer
+    # 2 UAVs + 2 UGVs vs 1 target -> every platform should still be active.
     drones.drones = [
         make_drone(20.0, 0.0, 1),
         make_drone(30.0, 0.0, 2),
@@ -243,12 +258,19 @@ def test_layered_standby_is_per_layer(node):
     node.on_drone(drones)
     assert node.tick()
     cmds = {int(c.drone_id): c for c in published[-1].commands}
-    # first drone of each layer active
+    # All four platforms must be active with their layer's radius.
+    assert cmds[1].layer == LAYER_MONITOR
+    assert cmds[2].layer == LAYER_MONITOR
+    assert cmds[101].layer == LAYER_BLOCK
+    assert cmds[102].layer == LAYER_BLOCK
     assert cmds[1].enclosure_radius == pytest.approx(25.0)
+    assert cmds[2].enclosure_radius == pytest.approx(25.0)
     assert cmds[101].enclosure_radius == pytest.approx(15.0)
-    # second of each layer standby (NaN target, radius 0)
-    assert cmds[2].enclosure_radius == 0.0
-    assert cmds[102].enclosure_radius == 0.0
+    assert cmds[102].enclosure_radius == pytest.approx(15.0)
+    # No NaN coordinates for any active platform.
+    for did in (1, 2, 101, 102):
+        assert math.isfinite(cmds[did].target_x)
+        assert math.isfinite(cmds[did].target_y)
 
 
 def test_three_uav_two_car_scene_publishes_all_layers(node):
@@ -298,3 +320,37 @@ def test_command_layer_reserved_standby(node):
     assert cmds[1].enclosure_radius == pytest.approx(25.0)
     assert cmds[200].layer == LAYER_COMMAND
     assert cmds[200].enclosure_radius == 0.0
+
+
+# ---------------------------------------------------------------------------
+# UGV block-layer dynamic containment (target moves -> block recomputes)
+# ---------------------------------------------------------------------------
+
+def test_ugv_block_layer_tracks_moving_target(node):
+    """When the target moves, the UGV block-layer point follows it."""
+    car = make_car(15.0, 0.0, 101)  # UGV on the block layer
+    drones = DroneStateArray()
+    drones.drones = [car]
+    published = []
+    node._publisher = type("Publisher", (), {"publish": published.append})()
+
+    # Target at origin -> UGV block point at (15, 0)
+    t1 = TargetTrackArray()
+    t1.tracks = [make_track(0.0, 0.0, 1)]
+    node.on_target_track(t1)
+    node.on_drone(drones)
+    assert node.tick()
+    first = {int(c.drone_id): c for c in published[-1].commands}[101]
+    assert first.layer == LAYER_BLOCK
+    assert first.target_x == pytest.approx(15.0)
+    assert first.enclosure_radius == pytest.approx(15.0)
+
+    # Target moves to (10, 0) -> block point should follow to (25, 0)
+    t2 = TargetTrackArray()
+    t2.tracks = [make_track(10.0, 0.0, 1)]
+    node.on_target_track(t2)
+    assert node.tick()
+    second = {int(c.drone_id): c for c in published[-1].commands}[101]
+    assert second.layer == LAYER_BLOCK
+    assert second.target_x == pytest.approx(25.0)
+    assert second.enclosure_radius == pytest.approx(15.0)

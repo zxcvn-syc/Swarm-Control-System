@@ -1,4 +1,4 @@
-"""three_links.launch.py — bring up the full five-node integration.
+"""three_links.launch.py — bring up the full eight-node integration.
 Launches:
 * ``tracker_node``           (perception_pkg)    → /target_track + /enclosure_targets
 * ``coord_transform_node``   (perception_pkg)    → /target_track_world (pixel→world)
@@ -8,6 +8,11 @@ Launches:
                                                      → /drone_states + /planned_path
 * ``enclosure_node``         (containment_pkg)   ← /enclosure_targets + /drone_states
                                                      → /enclosure_command
+* ``ugv_state_publisher``    (planning_pkg)      → /ugv_states
+* ``px4_offboard_bridge``    (planning_pkg)      ← /planned_path
+                                                     → /uav0/mavros/setpoint_raw/local
+* ``sitl_pose_bridge``       (planning_pkg)      ← /uav0/mavros/local_position/pose
+                                                     → /drone_pose_external
 The integration test (``ros2_ws/test_three_links.py``) consumes the
 same topic map; the values in this file are the binding truth and are
 duplicated in ``docs/integration/interface_alignment.md`` (table
@@ -41,6 +46,7 @@ from __future__ import annotations
 from typing import List
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -89,6 +95,18 @@ def generate_launch_description() -> LaunchDescription:
             default_value="5.0",
             description="Voronoi min-dist (m).",
         ),
+        DeclareLaunchArgument(
+            "video_replay_fixture",
+            default_value="true",
+            choices=["true", "false"],
+            description="Publish replay-camera calibration, pose, and obstacle inputs for a local video demo.",
+        ),
+        DeclareLaunchArgument(
+            "enable_control_bridges",
+            default_value="false",
+            choices=["true", "false"],
+            description="Start PX4/MAVROS-facing bridge nodes. Disabled by default for replay and desktop validation.",
+        ),
     ]
 
     params_common = {
@@ -110,10 +128,7 @@ def generate_launch_description() -> LaunchDescription:
                 "loop_video": True,
                 "track_topic": "/target_track",
                 "tracker.kind": "deepsort_cascade",
-                # Publish to both /target_track + /enclosure_targets.
-                "enclosure.enabled": True,
-                "enclosure.topic": "/enclosure_targets",
-                "enclosure.publish_rate_hz": 5.0,
+                "enclosure.enabled": False,
             },
         ],
     )
@@ -153,6 +168,7 @@ def generate_launch_description() -> LaunchDescription:
                 "drone_topic": "/drone_states",
                 "output_topic": "/task_assignment",
                 "default_task_type": "track",
+                "target_topic": "/target_track_world",
             },
         ],
     )
@@ -196,8 +212,55 @@ def generate_launch_description() -> LaunchDescription:
                 "enclosure_radius": LaunchConfiguration("enclosure_radius"),
                 "min_dist": LaunchConfiguration("min_dist"),
                 "update_period": 1.0,
+                "target_track_topic": "/target_track_world",
+                # In this topology world-frame tracks are the only
+                # authoritative target source; raw pixel targets are not
+                # allowed to overwrite them through the legacy fallback.
+                "enclosure_target_topic": "",
             },
         ],
+    )
+
+    grid_map_node = Node(
+        package="planning_pkg",
+        executable="grid_map_node",
+        name="grid_map_node",
+        output="screen",
+    )
+
+    replay_fixture = Node(
+        package="perception_pkg",
+        executable="video_replay_fixture",
+        name="video_replay_fixture",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("video_replay_fixture")),
+        parameters=[{"publish_rate_hz": LaunchConfiguration("publish_rate_hz")}],
+    )
+
+    ugv_state_pub = Node(
+        package="planning_pkg",
+        executable="ugv_state_pub",
+        name="ugv_state_publisher",
+        output="screen",
+        parameters=[{"num_ugv": 2}],
+    )
+
+    px4_offboard_bridge = Node(
+        package="planning_pkg",
+        executable="px4_offboard_bridge",
+        name="px4_offboard_bridge",
+        output="screen",
+        parameters=[{}],
+        condition=IfCondition(LaunchConfiguration("enable_control_bridges")),
+    )
+
+    sitl_pose_bridge = Node(
+        package="planning_pkg",
+        executable="sitl_pose_bridge",
+        name="sitl_pose_bridge",
+        output="screen",
+        parameters=[{"platform_type": 0}],
+        condition=IfCondition(LaunchConfiguration("enable_control_bridges")),
     )
 
     return LaunchDescription(
@@ -207,5 +270,10 @@ def generate_launch_description() -> LaunchDescription:
             scheduler_node,
             planner_node,
             enclosure_node,
+            grid_map_node,
+            replay_fixture,
+            ugv_state_pub,
+            px4_offboard_bridge,
+            sitl_pose_bridge,
         ]
     )

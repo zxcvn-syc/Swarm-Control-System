@@ -21,8 +21,10 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from rclpy.executors import ExternalShutdownException
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
@@ -93,7 +95,23 @@ class PlannerNode(Node):
         self.declare_parameter("rfly_pose_topic", "/drone_pose_external")
 
         # Initial drone layout
-        self.declare_parameter("initial_positions", [])       # flat [x0, y0, x1, y1, ...]
+        # ROS2 Humble infers a bare ``[]`` default as BYTE_ARRAY, so a
+        # statically-typed DOUBLE_ARRAY declaration would reject the
+        # float-array overrides that swarm_sim.launch.py passes (e.g.
+        # [10.0, 10.0, 20.0, 10.0, ...]).  A type-only
+        # ``Parameter.Type.DOUBLE_ARRAY`` declaration is no better: it
+        # leaves the parameter *uninitialized*, so ``get_parameter()``
+        # raises ParameterUninitializedException on every no-argument
+        # construction (e.g. test_three_links.py PlannerNode()) — which
+        # silently disabled link2/link3 in CI.  Dynamic typing (same
+        # pattern as tracker_node ``sources``) keeps the documented
+        # empty-list default valid while accepting float arrays from
+        # launch files and YAML.
+        self.declare_parameter(
+            "initial_positions",           # flat [x0, y0, x1, y1, ...]
+            [],
+            descriptor=ParameterDescriptor(dynamic_typing=True),
+        )
         self.declare_parameter("obstacle_cells", [])
         self.declare_parameter("explicit_target_cells", [])
 
@@ -168,6 +186,7 @@ class PlannerNode(Node):
 
         self._drone_path: Dict[int, List[Tuple[int, int]]] = {d: [] for d in self._drone_order}
         self._dstar: Dict[int, _DStarLite] = {}
+        self._target_world: Dict[int, Tuple[float, float]] = {}
 
         self._last_log_t: float = 0.0
         self._pending_obstacle_changes: List[Tuple[Tuple[int, int], int]] = []
@@ -477,6 +496,10 @@ class PlannerNode(Node):
         tid = int(msg.target_id)
         if did in self._drone_target and did in self._explicit_target_set():
             target = self._drone_target[did]
+        elif tid in self._target_world:
+            world_x, world_y = self._target_world[tid]
+            target = self._world_to_cell((world_x, world_y))
+            self._drone_target[did] = target
         else:
             target = self._scatter_target(tid)
             self._drone_target[did] = target
@@ -558,12 +581,25 @@ class PlannerNode(Node):
             self._drone_xy[did] = (float(d.x), float(d.y))
 
     def on_target_world(self, msg: TargetTrackArray) -> None:
-        if not msg.tracks:
+        frame_id = str(getattr(getattr(msg, "header", None), "frame_id", "")).strip()
+        if frame_id != "world":
+            self._target_world = {}
             return
-        self.get_logger().debug(
-            f"/target_track_world: {len(msg.tracks)} track(s) "
-            f"frame={msg.header.frame_id if msg.header else 'none'}"
-        )
+
+        targets: Dict[int, Tuple[float, float]] = {}
+        for track in msg.tracks:
+            try:
+                x = float(track.x)
+                y = float(track.y)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                targets[int(track.target_id)] = (x, y)
+        self._target_world = targets
+        if targets:
+            self.get_logger().debug(
+                f"/target_track_world: {len(targets)} validated target(s)"
+            )
 
     # ----------------------------------------------------------------
     # State Publishing
@@ -700,7 +736,7 @@ def main(args: Optional[List[str]] = None) -> None:
     node = PlannerNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

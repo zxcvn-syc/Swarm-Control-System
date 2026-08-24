@@ -37,6 +37,12 @@ groups:
   CPU pipelines).
 * ``frame_id`` -- the ``header.frame_id`` stamped on outgoing messages
   (typically the UAV body frame the camera is rigidly mounted to).
+* ``drone_states_topic`` -- the ``swarm_interfaces/DroneStateArray``
+  topic subscribed for closed-loop time synchronization (default
+  ``/drone_states``).  When a message arrives the cached
+  ``header.stamp`` overrides the outgoing ``TargetTrackArray``
+  timestamp so the downstream ``enclosure_node`` can reason about
+  UAV/perception freshness without clock-skew assumptions.
 
 Notes
 -----
@@ -108,11 +114,23 @@ from std_msgs.msg import Header
 from swarm_interfaces.msg import TargetTrack, TargetTrackArray
 from swarm_interfaces.msg import EnclosureTarget, EnclosureTargetArray
 from swarm_interfaces.msg import TargetTrackDebug
+from swarm_interfaces.msg import DroneStateArray
 
 import diagnostic_msgs.msg as diag_msgs
 
 
 log = logging.getLogger(__name__)
+
+
+def _publish_if_active(publisher: Any, message: Any) -> bool:
+    """Publish unless shutdown has invalidated the ROS context."""
+    try:
+        publisher.publish(message)
+        return True
+    except Exception:
+        if rclpy.ok():
+            raise
+        return False
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -382,6 +400,16 @@ def _declare_parameters(node: Node) -> None:
     node.declare_parameter('enable_debug_topics', True)
     node.declare_parameter('metrics_period_ms', 1000)
 
+    # UAV state synchronization (P1-C)
+    #
+    # Subscribing to /drone_states lets tracker_node align the
+    # ``header.stamp`` on outgoing ``TargetTrackArray`` with the latest
+    # UAV state timestamp, which enclosure_node uses to gate the
+    # closed-loop control.  The topic name is exposed as a parameter so
+    # a launch file or YAML config can repoint it (e.g. when running in
+    # simulation with a different UAV namespace).
+    node.declare_parameter('drone_states_topic', '/drone_states')
+
 
 def _build_runner_overrides(node: Node) -> dict:
     """Translate ROS2 parameters into the cvtrack-runner override dict.
@@ -574,7 +602,14 @@ class MultiSourceAggregator:
     def publish_local(self, msg: TargetTrackArray) -> None:
         """Forward local tracker output only while fusion is disabled."""
         if not self._enabled:
-            self._publisher.publish(msg)
+            try:
+                self._publisher.publish(msg)
+            except Exception:
+                # SIGINT can invalidate the rclpy context between a timer
+                # callback and publish(). Do not hide genuine publish errors
+                # while the node is otherwise still active.
+                if rclpy.ok():
+                    raise
 
     def _source_callback(self, source: str, msg: TargetTrackArray) -> None:
         with self._lock:
@@ -805,6 +840,36 @@ class TrackerNode(Node):
                 )
             self.get_logger().info(f'Enclosure publisher enabled on {enclosure_topic}')
 
+        # --- UAV state synchronization -------------------------------------
+        # Subscribe to /drone_states so we can stamp the outgoing
+        # TargetTrackArray header with the same time the UAV state was
+        # produced.  enclosure_node consumes this stamp to decide whether
+        # the perception output is fresh enough for the closed-loop
+        # control.  The subscription is always created (even when fusion
+        # is active) because the stamp override is just as valuable when
+        # we are republishing fused tracks.
+        self._drone_states_topic = self.get_parameter('drone_states_topic').value
+        # Lock guards the _latest_drone_state dict so the publish tick
+        # and the subscription callback do not race on swap-out.  The
+        # state itself is small (one DroneState per UAV, typically < 8)
+        # so copying it on each read is cheap.
+        self._drone_state_lock = threading.Lock()
+        self._latest_drone_state: dict[int, dict[str, Any]] = {}
+        # Cache the most recent DroneStateArray header so _publish_tick
+        # can stamp outgoing messages even when the drones[] vector is
+        # empty (e.g. during pre-takeoff) — the timestamp still tells
+        # the enclosure_node when the swarm last published state.
+        self._latest_drone_state_header: Optional[Header] = None
+        self._drone_state_sub = self.create_subscription(
+            DroneStateArray,
+            self._drone_states_topic,
+            self._on_drone_state,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE),
+        )
+        self.get_logger().info(
+            f'UAV state subscription enabled on {self._drone_states_topic}'
+        )
+
         # Input wiring -----------------------------------------------------
         self._video_cap = None
         self._cv_bridge = CvBridge() if _HAS_CV_BRIDGE else None
@@ -815,10 +880,10 @@ class TrackerNode(Node):
         self._latest_records_frame_idx: Optional[int] = None
         self._latest_records_header: Optional[Header] = None
         self._frame_seq = 0  # monotonic counter used as ``frame_idx``
-        # Publish timer is created below, after input wiring.  Initialise
-        # to None so ``_init_video_input`` (which runs first) can branch
-        # on whether to drive the capture off the publish timer or its
-        # own timer.
+        # Input and inference are driven by paired timers below.  Keeping
+        # capture to one source frame per inference tick is essential for
+        # replay: a zero-period capture timer drains a file before the
+        # publish timer can consume its frames.
         self._timer: Optional[Any] = None
         self._video_timer: Optional[Any] = None
 
@@ -837,7 +902,13 @@ class TrackerNode(Node):
 
             if self._publish_rate > 0.0:
                 period = 1.0 / self._publish_rate
-                self._timer = self.create_timer(period, self._publish_tick)
+            elif self._input_mode == 'video':
+                period = 1.0 / max(self._video_fps, 1.0)
+            else:
+                period = 0.01
+            if self._input_mode == 'video':
+                self._video_timer = self.create_timer(period, self._video_tick)
+            self._timer = self.create_timer(period, self._publish_tick)
         else:
             self.get_logger().info(
                 'local detector input disabled while multi-source fusion is active'
@@ -877,12 +948,6 @@ class TrackerNode(Node):
         self._video_fps = fps
         self.get_logger().info(f'video source opened at {fps:.1f} FPS')
 
-        # Drive the capture off the same publish timer (or a fast timer
-        # if publishing is rate-limited to 0).
-        if self._timer is None:
-            self._video_timer = self.create_timer(0.0, self._video_tick)
-        else:
-            self._video_timer = None
 
     def _init_topic_input(self) -> None:
         if not _HAS_CV_BRIDGE:
@@ -939,6 +1004,62 @@ class TrackerNode(Node):
         return frame, src_header
 
     # ------------------------------------------------------------------
+    # UAV state synchronization
+    # ------------------------------------------------------------------
+    def _on_drone_state(self, msg: DroneStateArray) -> None:
+        """Cache the latest UAV states so ``_publish_tick`` can stamp messages.
+
+        ``enclosure_node`` requires ``TargetTrackArray.header.stamp`` to
+        align with the UAV state timestamp so the closed-loop can reject
+        stale perception output.  We snapshot every drone into a
+        ``{drone_id: state_dict}`` dictionary keyed by ``drone_id`` so
+        callers can also query individual UAV positions without scanning
+        the message repeatedly.
+
+        The dictionary form (instead of stashing the raw ROS message)
+        keeps the cache independent of ``swarm_interfaces`` at the point
+        of use and lets unit tests inject a precomputed cache without
+        needing to construct a full ``DroneStateArray``.
+        """
+        snapshot: dict[int, dict[str, Any]] = {}
+        for state in getattr(msg, 'drones', []) or []:
+            snapshot[int(state.drone_id)] = {
+                'drone_id': int(state.drone_id),
+                'x': float(state.x),
+                'y': float(state.y),
+                'z': float(state.z),
+                'vx': float(state.vx),
+                'vy': float(state.vy),
+                'vz': float(state.vz),
+                'available': bool(state.available),
+                'platform_type': int(state.platform_type),
+                'stamp': _copy_header(getattr(msg, 'header', None)).stamp,
+            }
+        with self._drone_state_lock:
+            self._latest_drone_state = snapshot
+            header = getattr(msg, 'header', None)
+            self._latest_drone_state_header = (
+                _copy_header(header) if header is not None else None
+            )
+
+    def _drone_state_snapshot(self) -> tuple[
+        dict[int, dict[str, Any]], Optional[Header]
+    ]:
+        """Return ``(drone_state_dict, drone_state_header)`` atomically.
+
+        Both pieces travel together — the snapshot is the
+        ``DroneStateArray.header`` plus the ``drones[]`` array.  The
+        header is cached separately so ``_publish_tick`` can fall back to
+        it even if ``drones[]`` was empty (e.g. all UAVs disarmed).
+        """
+        with self._drone_state_lock:
+            return (
+                dict(self._latest_drone_state),
+                _copy_header(self._latest_drone_state_header)
+                if self._latest_drone_state_header is not None else None,
+            )
+
+    # ------------------------------------------------------------------
     # Publishing
     # ------------------------------------------------------------------
     def _publish_tick(self) -> None:
@@ -952,12 +1073,27 @@ class TrackerNode(Node):
             self.get_logger().error(f'cvtrack runner failed: {exc}')
             return
 
+        # Resolve the outgoing header.  The priority is:
+        #   1. ``DroneStateArray.header.stamp`` when /drone_states is
+        #      active (this is the synchronization point for the
+        #      enclosure_node closed loop).
+        #   2. The source ``sensor_msgs/Image`` header when running in
+        #      ``input_mode=topic``.
+        #   3. The local ROS2 clock otherwise (video / replay modes
+        #      where no upstream stamp is available).
+        _, drone_state_header = self._drone_state_snapshot()
         if src_header is not None:
             header = _copy_header(src_header, self._frame_id)
         else:
             header = Header()
             header.stamp = self.get_clock().now().to_msg()
             header.frame_id = self._frame_id
+        if drone_state_header is not None:
+            # Override only the timestamp — ``frame_id`` is owned by the
+            # camera body and should stay as set above.  Cloning the
+            # header first avoids mutating the cached value if other
+            # call paths read it concurrently.
+            header.stamp = drone_state_header.stamp
 
         msg = TargetTrackArray()
         msg.header = header
@@ -1038,7 +1174,7 @@ class TrackerNode(Node):
         dbg.kf_covariance = kf_cov
         dbg.motion_mode_reasons = mm_reasons
         dbg.appearance_scores = app_scores
-        self._debug_pub.publish(dbg)
+        _publish_if_active(self._debug_pub, dbg)
 
     def _publish_metrics(self) -> None:
         """Publish /tracking_metrics DiagnosticArray at the metrics period."""
@@ -1046,7 +1182,7 @@ class TrackerNode(Node):
             return
         arr = self._metrics_recorder.diagnostic_array()
         arr.header.stamp = self.get_clock().now().to_msg()
-        self._metrics_pub.publish(arr)
+        _publish_if_active(self._metrics_pub, arr)
 
     def _publish_enclosure(self) -> None:
         """Publish targets for enclosure control group."""
@@ -1103,7 +1239,7 @@ class TrackerNode(Node):
         msg.enclosure_radius = 50.0  # Default, can be made configurable
         msg.min_enclosure_dist = 20.0
 
-        self._enclosure_publisher.publish(msg)
+        _publish_if_active(self._enclosure_publisher, msg)
 
     def _make_enclosure_target(self, rec) -> "EnclosureTarget":
         """Create an EnclosureTarget message from a track record."""

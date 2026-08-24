@@ -2,6 +2,7 @@ import time
 
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from swarm_interfaces.msg import (
@@ -48,6 +49,8 @@ class EnclosureNode(Node):
         self.declare_parameter("update_period", 1.0)
         self.declare_parameter("pose_topic", "/uav1/current_pose")
         self.declare_parameter("pose_drone_id", 1)
+        self.declare_parameter("target_track_topic", "/target_track_world")
+        self.declare_parameter("enclosure_target_topic", "/enclosure_targets")
 
         self._targets = []
         self._batch_drones = []      # from DroneStateArray
@@ -56,12 +59,25 @@ class EnclosureNode(Node):
         self._last_update_time = None
         self._update_count = 0
 
-        self._target_track_sub = self.create_subscription(
-            TargetTrackArray, "/target_track", self.on_target_track, 10
-        )
-        self._enclosure_target_sub = self.create_subscription(
-            EnclosureTargetArray, "/enclosure_targets", self.on_enclosure_targets, 10
-        )
+        target_track_topic = str(
+            self.get_parameter("target_track_topic").value
+        ).strip()
+        enclosure_target_topic = str(
+            self.get_parameter("enclosure_target_topic").value
+        ).strip()
+        self._target_track_sub = None
+        self._enclosure_target_sub = None
+        if target_track_topic:
+            self._target_track_sub = self.create_subscription(
+                TargetTrackArray, target_track_topic, self.on_target_track, 10
+            )
+        if enclosure_target_topic:
+            self._enclosure_target_sub = self.create_subscription(
+                EnclosureTargetArray,
+                enclosure_target_topic,
+                self.on_enclosure_targets,
+                10,
+            )
         self._drone_sub = self.create_subscription(
             DroneStateArray, "/drone_states", self.on_drone, 10
         )
@@ -124,9 +140,20 @@ class EnclosureNode(Node):
         return list(getattr(message, "drones", getattr(message, "states", [])))
 
     def _merged_drones(self):
-        """Merge batch drones with pose overlays (pose takes priority)."""
-        merged = {int(s.drone_id): s for s in self._batch_drones}
-        merged.update(self._pose_drones)
+        """Merge batch drones with pose overlays (pose takes priority).
+
+        Batch states are keyed by ``(platform_type, drone_id)`` so UAVs and
+        UGVs may reuse the same numeric ids without overwriting each other
+        (e.g. UAV 0/1/2 on the monitor layer and UGV 0/1 on the block layer).
+        Pose overlays are UAV states, so they are keyed as ``(0, drone_id)``.
+        """
+        merged = {
+            (int(getattr(s, "platform_type", 0)), int(s.drone_id)): s
+            for s in self._batch_drones
+        }
+        merged.update(
+            {(0, drone_id): state for drone_id, state in self._pose_drones.items()}
+        )
         return list(merged.values())
 
     def tick(self):
@@ -171,13 +198,12 @@ class EnclosureNode(Node):
             return []
         drone_xy = np.array([[state.x, state.y] for state in states], dtype=float)
         points, radii = voronoi_enclose(target_xy, drone_xy, radius, min_dist)
-        active_count = min(len(states), len(target_xy))
+        # All platforms in a containment layer are active: they form a
+        # cooperative ring around the target(s).  Standby is only used for
+        # command-layer platforms awaiting manual override.
         results = []
         for index, state in enumerate(states):
-            if index < active_count:
-                results.append((state, points[index], radii[index]))
-            else:
-                results.append((state, None, 0.0))
+            results.append((state, points[index], radii[index]))
         return results
 
     def _recalculate(self, states):
@@ -240,6 +266,8 @@ def main(args=None):
     node = EnclosureNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
