@@ -49,6 +49,7 @@ setup(
             "px4_offboard_bridge = planning_pkg.px4_offboard_bridge:main",
             "sitl_pose_bridge = planning_pkg.sitl_pose_bridge:main",
             "rflysim_follower = planning_pkg.rflysim_follower:main",
+            "dstar_benchmark = planning_pkg.dstar_benchmark_node:main",
         ],
     },
 )
