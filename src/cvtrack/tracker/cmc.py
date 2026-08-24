@@ -20,9 +20,6 @@ from typing import Optional, Protocol
 import cv2
 import numpy as np
 
-from cvtrack.types import Box
-
-
 log = logging.getLogger(__name__)
 
 

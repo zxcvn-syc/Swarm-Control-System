@@ -245,7 +245,7 @@ def main() -> int:
         lines.append("> ReID configuration skipped - OSNet MSMT17 weights could not be downloaded.\n")
     (out_root / "COMPARE_REPORT.md").write_text("\n".join(lines))
 
-    summary = [{"label": l, "stats": s} for l, s in results]
+    summary = [{"label": label, "stats": stats} for label, stats in results]
     (out_root / "summary.json").write_text(json.dumps(summary, indent=2))
 
     print("\n" + "\n".join(lines))

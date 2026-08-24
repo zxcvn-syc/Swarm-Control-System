@@ -1,0 +1,87 @@
+{
+  "clear_grasslands": {
+    "map_name": "Grasslands",
+    "weather_type": 0,
+    "weather_name": "clear",
+    "occlusion_level": 0.0,
+    "dynamic_obstacles": 0,
+    "bump_scale": 0.28,
+    "vision_stress": {"fog_alpha": 0.0, "rain_density": 0, "snow_density": 0, "blur_kernel": 0, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0}
+  },
+  "rain_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 5,
+    "weather_name": "rain",
+    "occlusion_level": 0.35,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.42,
+    "wind_speed_mps": 4.0,
+    "wind_direction_deg": 20.0,
+    "physical_occlusion": {"enabled": true, "period_s": 12.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.08, "rain_density": 120, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  },
+  "strong_wind_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 1,
+    "weather_name": "strong wind",
+    "occlusion_level": 0.35,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.52,
+    "wind_speed_mps": 14.0,
+    "wind_direction_deg": 35.0,
+    "physical_occlusion": {"enabled": true, "period_s": 13.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.03, "rain_density": 0, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  },
+  "rain_wind_3ddisplay": {
+    "map_name": "Grasslands",
+    "weather_type": 0,
+    "weather_name": "visual rain and strong wind",
+    "occlusion_level": 0.42,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.62,
+    "wind_speed_mps": 14.0,
+    "wind_direction_deg": 35.0,
+    "physical_occlusion": {"enabled": true, "period_s": 12.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.12, "rain_density": 360, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  },
+  "fog_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 0,
+    "weather_name": "fog",
+    "occlusion_level": 0.30,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.34,
+    "physical_occlusion": {"enabled": true, "period_s": 12.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.28, "rain_density": 0, "snow_density": 0, "blur_kernel": 5, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  },
+  "snow_3ddisplay": {
+    "map_name": "3DDisplay",
+    "weather_type": 0,
+    "weather_name": "snow",
+    "occlusion_level": 0.25,
+    "dynamic_obstacles": 2,
+    "bump_scale": 0.38,
+    "physical_occlusion": {"enabled": true, "period_s": 14.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.12, "rain_density": 0, "snow_density": 90, "blur_kernel": 3, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  },
+  "city_clear": {
+    "map_name": "OldFactory",
+    "weather_type": 0,
+    "weather_name": "clear",
+    "occlusion_level": 0.45,
+    "dynamic_obstacles": 4,
+    "bump_scale": 0.30,
+    "physical_occlusion": {"enabled": true, "period_s": 12.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.04, "rain_density": 0, "snow_density": 0, "blur_kernel": 0, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  },
+  "mountain_clear": {
+    "map_name": "MountainTerrain",
+    "weather_type": 0,
+    "weather_name": "clear",
+    "occlusion_level": 0.38,
+    "dynamic_obstacles": 3,
+    "bump_scale": 0.48,
+    "physical_occlusion": {"enabled": true, "period_s": 13.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "vision_stress": {"fog_alpha": 0.10, "rain_density": 0, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
+  }
+}
