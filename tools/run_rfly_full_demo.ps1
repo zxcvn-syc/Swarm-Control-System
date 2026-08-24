@@ -100,6 +100,19 @@ try {
     $remoteTelemetry = Join-Path $OutputRoot "scene_telemetry.jsonl"
     & scp -q -i $SshKey "$sshTarget`:$remoteLog/scene_telemetry.jsonl" $remoteTelemetry
     & scp -q -i $SshKey "$sshTarget`:$remoteLog/capture_summary.json" (Join-Path $OutputRoot "capture_summary.json")
+    & scp -q -i $SshKey "$sshTarget`:$remoteLog/evidence_manifest.json" (Join-Path $OutputRoot "evidence_manifest.json")
+    $evidenceFiles = @(
+        "task_assignment.yaml",
+        "planned_path.yaml",
+        "enclosure_command.yaml",
+        "target_track_world.yaml",
+        "target_track_truth.yaml",
+        "drone_states.yaml",
+        "ground_vehicle_states.yaml"
+    )
+    foreach ($evidenceFile in $evidenceFiles) {
+        & scp -q -i $SshKey "$sshTarget`:$remoteLog/$evidenceFile" (Join-Path $OutputRoot $evidenceFile)
+    }
     $decisionVideo = Join-Path $OutputRoot "decision_god_view.mp4"
     $decisionSummary = Join-Path $OutputRoot "decision_god_view.json"
     $detectionData = Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json

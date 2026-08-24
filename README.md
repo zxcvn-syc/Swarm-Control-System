@@ -98,6 +98,11 @@ RflySim 单 RGB 搜索、视觉触发跟踪和 ROS2 空地封控示例见
 [`examples/rfly_ros2/README.md`](examples/rfly_ros2/README.md)。该示例明确区分图像检测、
 单目投影审计和仿真真值辅助控制，不能作为未经辅助的纯视觉世界坐标证明。
 
+真机部署前的证据清单和 PX4 控制前置门见
+[`examples/rfly_ros2/REAL_DEPLOYMENT_ZH.md`](examples/rfly_ros2/REAL_DEPLOYMENT_ZH.md)。
+门控默认拒绝 ARM、Offboard 和 setpoint 控制；它只在新鲜 MAVROS 状态、米制地面标定、
+完整闭环证据和现场人工审批同时满足时输出授权判定，且不执行任何飞控命令。
+
 ## 快速上手
 
 ```bash

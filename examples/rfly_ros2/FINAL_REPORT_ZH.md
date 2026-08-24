@@ -23,7 +23,7 @@
 - `decision_god_view.mp4`：左侧 UAV 视角、右侧上帝视角、目标与无人机轨迹、预测、地面封控和障碍物。
 - `validation.json`：全部验收项通过的机器可读结果。
 - `detection_summary.json`、`tracks.csv`：检测、跟踪与重捕获证据。
-- `scene_telemetry.jsonl`、`capture_summary.json`：Rfly/ROS2 遥测和话题采样结果。
+- `scene_telemetry.jsonl`、`capture_summary.json`、`evidence_manifest.json`：Rfly/ROS2 遥测、话题采样和首条有效 payload 证据。
 - `decision_god_view.json`：决策回放的帧数、分辨率和自动估计的遥测时间偏移。
 - `keyframes/`：搜索、锁定、遮挡重捕获和封控阶段关键帧。
 
@@ -56,6 +56,9 @@
 ## 坐标和飞控边界
 
 这是视觉触发的 Rfly 空地协同控制演示，不是 PX4 或真机飞控验证。
+
+真机推进前的人工审批、MAVROS 新鲜状态、米制地面标定和闭环证据门控见
+[`REAL_DEPLOYMENT_ZH.md`](REAL_DEPLOYMENT_ZH.md)。门控工具只输出授权判定，不发送 ARM、Offboard 或 setpoint 命令。
 
 - Rfly Free 当前稳定提供单条原生 UAV1 RGB 流。UAV2/UAV3 的搜索和集合是场景级协同状态，不能描述为已验证的多相机原生视角交接。
 - 蓝色车辆检测、BoT-SORT 跟踪、丢失和重捕获由实时 RGB 输入产生。`target_visual` 保留视觉投影以供审计。

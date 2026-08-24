@@ -15,7 +15,8 @@
 - `scripts/run_ros_chain.sh`：在 ROS VM 中启动场景、调度、规划、封控及证据采集。
 - `scripts/make_decision_visualization.py`：生成左侧 UAV 视角、右侧上帝视角的决策回放。
 - `scripts/validate_rfly_run.py`：验证视频动态性、跟踪、居中、ROS2 消息、物理遮挡/重捕获和车辆分离。
-- `tools/run_rfly_full_demo.ps1`：Windows 一键编排入口。
+- `../../tools/px4_control_gate.py`：真机前置审核门，失败即拒绝控制授权，不执行 ARM/Offboard。
+- `../../tools/run_rfly_full_demo.ps1`：Windows 一键编排入口。
 
 ## 场景预设
 
@@ -45,11 +46,14 @@
   -Python "C:\Users\911MT\AppData\Local\Programs\Python\Python311\python.exe"
 ```
 
-成功时输出目录包含 `uav_live.mp4`、`decision_god_view.mp4`、`validation.json`、`detection_summary.json`、`tracks.csv`、`scene_telemetry.jsonl` 和 `capture_summary.json`。录制的 UAV 画面保留原始 RGB 可读性，遮挡退化只作用于检测输入；视频状态栏仍显示物理遮挡和重捕获阶段。
+成功时输出目录包含 `uav_live.mp4`、`decision_god_view.mp4`、`validation.json`、`detection_summary.json`、`tracks.csv`、`scene_telemetry.jsonl`、`capture_summary.json` 和 `evidence_manifest.json`。录制的 UAV 画面保留原始 RGB 可读性，遮挡退化只作用于检测输入；视频状态栏仍显示物理遮挡和重捕获阶段。
 
 Windows 编排脚本会在存在物理遮挡事件时，根据首个视频/ROS 遮挡事件自动估计时间偏移，并把 `telemetry_offset_s` 写入 `decision_god_view.json`；没有物理遮挡的场景使用显式的 `0.0s` 默认值，不能把它当作跨主机时钟同步证明。
 
 若脚本提示没有遥测，检查 VM 的 SSH 连通性、`RFLY_*_BRIDGE_*` 环境变量和 relay 进程。若视频静止或黑屏，重启 RflySim3D 后先运行短时采集确认传感器持续更新。
+
+真机部署审核顺序和 PX4 控制门输入格式见
+[`REAL_DEPLOYMENT_ZH.md`](REAL_DEPLOYMENT_ZH.md)。
 
 ## 控制边界
 

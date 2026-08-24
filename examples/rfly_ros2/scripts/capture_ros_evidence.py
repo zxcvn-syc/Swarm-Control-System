@@ -39,6 +39,7 @@ class EvidenceRecorder(Node):
         self.output_dir = output_dir
         self.pending = set(TOPICS)
         self.received: dict[str, int] = {name: 0 for name in TOPICS}
+        self.first_payload_files: dict[str, str] = {}
         self._evidence_subscriptions = []
         for name, (topic, type_name) in TOPICS.items():
             message_type = get_message(type_name)
@@ -55,11 +56,29 @@ class EvidenceRecorder(Node):
         self.received[name] += 1
         if name not in self.pending or not has_payload(message):
             return
-        (self.output_dir / f"{name}.yaml").write_text(
+        evidence_file = self.output_dir / f"{name}.yaml"
+        evidence_file.write_text(
             message_to_yaml(message),
             encoding="utf-8",
         )
+        self.first_payload_files[name] = evidence_file.name
         self.pending.remove(name)
+
+    def manifest(self) -> dict:
+        return {
+            "schema": "cvtrack-rfly-evidence-v1",
+            "topics": {
+                name: {
+                    "topic": topic,
+                    "type": type_name,
+                    "received": self.received[name],
+                    "first_payload_file": self.first_payload_files.get(name),
+                    "has_payload_evidence": name in self.first_payload_files,
+                }
+                for name, (topic, type_name) in TOPICS.items()
+            },
+            "pending": sorted(self.pending),
+        }
 
 
 def parse_args() -> argparse.Namespace:
@@ -83,7 +102,13 @@ def main() -> None:
             "duration_s": round(time.monotonic() - started, 3),
             "pending": sorted(node.pending),
             "received": node.received,
+            "message_counts": node.received,
+            "manifest": "evidence_manifest.json",
         }
+        (args.output_dir / "evidence_manifest.json").write_text(
+            json.dumps(node.manifest(), indent=2),
+            encoding="utf-8",
+        )
         (args.output_dir / "capture_summary.json").write_text(
             json.dumps(summary, indent=2),
             encoding="utf-8",
