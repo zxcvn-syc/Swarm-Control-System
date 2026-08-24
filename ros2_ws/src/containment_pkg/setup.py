@@ -41,6 +41,7 @@ setup(
     entry_points={
         'console_scripts': [
             'enclosure_node = containment_pkg.enclosure_node:main',
+            'mock_platform_pub = containment_pkg.mock_platform_pub:main',
         ],
     },
 )

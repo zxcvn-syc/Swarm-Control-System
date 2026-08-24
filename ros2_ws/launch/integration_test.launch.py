@@ -4,9 +4,8 @@ Brings up:
 
 1. ``tracker_node`` (perception_pkg)   — driven from a local video.
 2. ``scheduler_node`` (scheduler_pkg)   — consumes tracker output.
-3. ``planner_node`` (planning_pkg)   — real A*/D*Lite path planning.
-4. ``coord_transform_node`` (perception_pkg) — pixel→world coordinate transform.
-5. ``enclosure_node`` (containment_pkg) — closes the third link.
+3. ``planner_stub_node`` (planner_stub) — fills the empty planning_pkg slot.
+4. ``enclosure_node`` (containment_pkg) — closes the third link.
 
 Plus auxiliary nodes that *only exist to make the link visible to the
 outside world*:
@@ -77,14 +76,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             "scheduler_strategy",
             default_value="greedy",
-            choices=["greedy", "hungarian", "auction"],
+            choices=["greedy", "hungarian"],
             description="scheduler_node assignment strategy.",
-        ),
-        DeclareLaunchArgument(
-            "planner",
-            default_value="astar",
-            choices=["astar", "dstar_lite"],
-            description="Path planner to use (forwarded into planning_pkg).",
         ),
         DeclareLaunchArgument(
             "enclosure_radius",
@@ -152,42 +145,24 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    coord_transform_node = Node(
-        package="perception_pkg",
-        executable="coord_transform_node",
-        name="coord_transform_node",
-        output="screen",
-        parameters=[
-            {
-                "enabled": True,
-                "input_topic": "/target_track",
-                "output_topic": "/target_track_world",
-                "ground_altitude": 0.0,
-                "camera_mount_pitch": 0.0,
-                "max_pose_age_s": 0.5,
-            },
-        ],
-    )
-
-    planner_node = Node(
-        package="planning_pkg",
-        executable="planner_node",
-        name="planner_node",
+    planner_stub_node = Node(
+        package="planner_stub",
+        executable="planner_stub_node",
+        name="planner_stub_node",
         output="screen",
         parameters=[
             {
                 **params_common,
-                "planner": LaunchConfiguration("planner"),
-                "grid_size": 100,
+                "max_speed": 2.0,
                 "tick_period": 0.5,
-                "log_interval_sec": 5.0,
-                "publish_path": True,
-                "sim_tick_speed": 1.0,
-                "task_topic": "/task_assignment",
-                "grid_topic": "/grid_map",
-                "target_track_world_topic": "/target_track_world",
+                "altitude": 5.0,
+                "min_sep": 3.0,
+                "frame_id": "world",
+                "seed_grid_spacing": 6.0,
+                "assignment_topic": "/task_assignment",
+                "target_topic": "/target_track",
                 "drone_states_topic": "/drone_states",
-                "planned_path_topic": "/planned_path",
+                "drone_state_topic": "/drone_state",
             },
         ],
     )
@@ -242,9 +217,8 @@ def generate_launch_description() -> LaunchDescription:
         args
         + [
             tracker_node,
-            coord_transform_node,
             scheduler_node,
-            planner_node,
+            planner_stub_node,
             enclosure_node,
             # OpaqueFunction spawns the integration test runner so the
             # LaunchConfiguration substitutions for window_sec /

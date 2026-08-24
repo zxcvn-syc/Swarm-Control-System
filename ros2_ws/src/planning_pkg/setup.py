@@ -24,9 +24,6 @@ setup(
         "console_scripts": [
             "planner_node = planning_pkg.planner_node:main",
             "grid_map_node = planning_pkg.grid_map_node:main",
-            "ugv_state_pub = planning_pkg.ugv_state_publisher:main",
-            "px4_offboard_bridge = planning_pkg.px4_offboard_bridge:main",
-            "sitl_pose_bridge = planning_pkg.sitl_pose_bridge:main",
         ],
     },
 )

@@ -4,7 +4,12 @@ rclpy = pytest.importorskip("rclpy")
 pytest.importorskip("swarm_interfaces")
 pytest.importorskip("geometry_msgs")
 
-from containment_pkg.enclosure_node import EnclosureNode
+from containment_pkg.enclosure_node import (
+    LAYER_BLOCK,
+    LAYER_COMMAND,
+    LAYER_MONITOR,
+    EnclosureNode,
+)
 from geometry_msgs.msg import PoseStamped
 from swarm_interfaces.msg import DroneState, DroneStateArray, TargetTrack, TargetTrackArray
 
@@ -24,6 +29,18 @@ def make_drone(x, y, drone_id=1):
     item.y = y
     item.z = 10.0
     item.available = True
+    item.platform_type = 0  # PLATFORM_DRONE
+    return item
+
+
+def make_car(x, y, car_id=100):
+    item = DroneState()
+    item.drone_id = car_id
+    item.x = x
+    item.y = y
+    item.z = 0.0
+    item.available = True
+    item.platform_type = 1  # PLATFORM_CAR
     return item
 
 
@@ -169,3 +186,115 @@ def test_pose_dynamic_update_triggers_recalculate(node):
     # No new input — should not publish again
     assert not node.tick()
     assert len(published) == 2
+
+
+# ---------------------------------------------------------------------------
+# Layered enclosure tests (three-layer containment)
+# ---------------------------------------------------------------------------
+
+def test_layer_of_maps_platform_type(node):
+    """UAVs go to the monitor layer, UGVs to the block layer."""
+    assert node._layer_of(make_drone(0.0, 0.0)) == LAYER_MONITOR
+    assert node._layer_of(make_car(0.0, 0.0)) == LAYER_BLOCK
+
+
+def test_layer_of_defaults_to_monitor_for_missing_field(node):
+    """Legacy states without platform_type fall back to the monitor layer."""
+    fake = type("FakeState", (), {"drone_id": 9, "x": 0.0, "y": 0.0, "z": 1.0})()
+    assert node._layer_of(fake) == LAYER_MONITOR
+
+
+def test_drone_and_car_get_different_layer_radii(node):
+    """Monitor layer uses 25.0, block layer uses 15.0, layer field is set."""
+    tracks = TargetTrackArray()
+    tracks.tracks = [make_track(0.0, 0.0)]
+    drones = DroneStateArray()
+    drones.drones = [make_drone(20.0, 0.0, 1), make_car(18.0, 0.0, 101)]
+    published = []
+    node._publisher = type("Publisher", (), {"publish": published.append})()
+    node.on_target_track(tracks)
+    node.on_drone(drones)
+    assert node.tick()
+    cmds = {int(c.drone_id): c for c in published[-1].commands}
+    assert cmds[1].layer == LAYER_MONITOR
+    assert cmds[101].layer == LAYER_BLOCK
+    # Target at origin; drone at (20,0) -> monitor point (25,0); car -> (15,0)
+    assert cmds[1].target_x == pytest.approx(25.0)
+    assert cmds[101].target_x == pytest.approx(15.0)
+    assert cmds[1].enclosure_radius == pytest.approx(25.0)
+    assert cmds[101].enclosure_radius == pytest.approx(15.0)
+
+
+def test_layered_standby_is_per_layer(node):
+    """Extra platforms standby within their own layer only."""
+    tracks = TargetTrackArray()
+    tracks.tracks = [make_track(0.0, 0.0)]
+    drones = DroneStateArray()
+    # 2 UAVs + 2 UGVs vs 1 target -> one standby in each layer
+    drones.drones = [
+        make_drone(20.0, 0.0, 1),
+        make_drone(30.0, 0.0, 2),
+        make_car(18.0, 0.0, 101),
+        make_car(16.0, 0.0, 102),
+    ]
+    published = []
+    node._publisher = type("Publisher", (), {"publish": published.append})()
+    node.on_target_track(tracks)
+    node.on_drone(drones)
+    assert node.tick()
+    cmds = {int(c.drone_id): c for c in published[-1].commands}
+    # first drone of each layer active
+    assert cmds[1].enclosure_radius == pytest.approx(25.0)
+    assert cmds[101].enclosure_radius == pytest.approx(15.0)
+    # second of each layer standby (NaN target, radius 0)
+    assert cmds[2].enclosure_radius == 0.0
+    assert cmds[102].enclosure_radius == 0.0
+
+
+def test_three_uav_two_car_scene_publishes_all_layers(node):
+    """Full 3-UAV + 2-car mock scene: all platforms get a layer command."""
+    tracks = TargetTrackArray()
+    tracks.tracks = [make_track(0.0, 0.0), make_track(40.0, 0.0, 2)]
+    drones = DroneStateArray()
+    drones.drones = [
+        make_drone(20.0, 0.0, 0),
+        make_drone(30.0, 0.0, 1),
+        make_drone(60.0, 0.0, 2),
+        make_car(18.0, 0.0, 100),
+        make_car(50.0, 0.0, 101),
+    ]
+    published = []
+    node._publisher = type("Publisher", (), {"publish": published.append})()
+    node.on_target_track(tracks)
+    node.on_drone(drones)
+    assert node.tick()
+    cmds = {int(c.drone_id): c for c in published[-1].commands}
+    assert len(cmds) == 5
+    assert cmds[0].layer == LAYER_MONITOR
+    assert cmds[100].layer == LAYER_BLOCK
+    assert cmds[101].layer == LAYER_BLOCK
+
+
+def test_command_layer_reserved_standby(node):
+    """A platform marked for the command layer waits on standby (reserved)."""
+    tracks = TargetTrackArray()
+    tracks.tracks = [make_track(0.0, 0.0)]
+    drones = DroneStateArray()
+    cmd_state = DroneState()
+    cmd_state.drone_id = 200
+    cmd_state.x = 10.0
+    cmd_state.y = 0.0
+    cmd_state.z = 2.0
+    cmd_state.available = True
+    cmd_state.platform_type = 2  # command-layer platform (reserved)
+    drones.drones = [make_drone(20.0, 0.0, 1), cmd_state]
+    published = []
+    node._publisher = type("Publisher", (), {"publish": published.append})()
+    node.on_target_track(tracks)
+    node.on_drone(drones)
+    assert node.tick()
+    cmds = {int(c.drone_id): c for c in published[-1].commands}
+    assert cmds[1].layer == LAYER_MONITOR
+    assert cmds[1].enclosure_radius == pytest.approx(25.0)
+    assert cmds[200].layer == LAYER_COMMAND
+    assert cmds[200].enclosure_radius == 0.0

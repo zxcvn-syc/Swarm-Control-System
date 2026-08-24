@@ -1,0 +1,18 @@
+CVTrack RflySim3D Final Delivery
+
+Scenario: rain_wind_3ddisplay
+Run: rfly_full_demo_20260823_211000
+Video: 55.97 s, 1280x720, 30 FPS, 1679 frames
+Video motion sampling: 100.0%
+Online vision: 1407 frames, 22.69 FPS
+Confirmed tracking: 1369 rows, centered ratio 81.4%
+Physical occlusion: 4/4 losses reacquired, max 1.078 s
+Vehicle overlap: 0; minimum clearance: 0.001147 m
+ROS: 7 topic classes received; vision stream max packet count 1407
+Decision replay telemetry offset: 15.3 s
+
+The first RGB frame is gated before recording. The recorder uses the latest Rfly RGB frame; local occlusion degradation is used only by detector input.
+
+Control boundary: target_control_source=vision uses image detections projected with simulated camera pose. This is not pure monocular world mapping and not PX4/MAVROS/real-flight control.
+
+See docs/FINAL_REPORT_ZH.md and docs/STRATEGY_ZH.md.
