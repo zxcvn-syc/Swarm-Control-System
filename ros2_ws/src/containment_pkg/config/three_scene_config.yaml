@@ -1,0 +1,103 @@
+# ============================================================================
+# 三场景封控测试配置  three_scene_config.yaml
+# ----------------------------------------------------------------------------
+# 用途：escape_test_node / containment_evaluator 按 scene_name 从此文件加载
+#       起始点、监视/封锁半径、逃逸速度、8 方向概率分布、默认轨迹、
+#       以及 trajectory_distribution（return/oscillate/straight 的权重，
+#       节点自动归一化；配置后每次跑随机抽取轨迹，使 60 次批量得出真实
+#       成功率分布，而非每场景固定一个结果）。
+# 8.26 由陈思睿 + 程维好补全：程维好负责各场景 obstacles（障碍物）字段，
+#       陈思睿负责其余参数与冒烟测试。
+#
+# 方向索引约定（与 escape_test_node 一致）：
+#   0=E, 1=NE, 2=N, 3=NW, 4=W, 5=SW, 6=S, 7=SE
+# direction_distribution 键名即为上述 8 个罗盘名，值为概率权重（不必归一，
+# 节点会自动归一化）。设 escape_direction: -1 时按该分布加权随机抽方向。
+# ============================================================================
+
+default:
+  monitor_radius: 25.0      # 外监视圈（突破即 FAIL）
+  block_radius: 15.0        # 内封锁圈（回收即 SUCCESS）
+  test_duration: 30.0       # 单次测试时长（秒）
+
+scenes:
+
+  # ---- 场景1：公园 / 开阔地 --------------------------------------------
+  # 特征：无遮挡、视野开阔，目标起始居中，8 方向等概率逃逸，中速。
+  park:
+    start: [0.0, 0.0]       # 目标初始位置 (x, y) 米
+    monitor_radius: 25.0
+    block_radius: 15.0
+    speed: 2.0              # 逃逸速度 m/s
+    trajectory: return     # 默认轨迹：模拟成功拦截（冲出封锁圈后被回收）
+    test_duration: 30.0
+    direction_distribution:
+      N:  0.125
+      NE: 0.125
+      E:  0.125
+      SE: 0.125
+      S:  0.125
+      SW: 0.125
+      W:  0.125
+      NW: 0.125
+    # 每场景目标轨迹分布：return/oscillate=封控成功，straight=逃逸成功(FAIL)。
+    # park 开阔地最易封控，成功类占 95%。
+    trajectory_distribution:
+      return: 0.80
+      oscillate: 0.15
+      straight: 0.05
+    # obstacles: []          # 陈思睿/程维好：park 场景通常无障碍，留空
+
+  # ---- 场景2：安保 / 多建筑拐角 ----------------------------------------
+  # 特征：有建筑遮挡，目标起始靠近障碍，逃逸方向优先朝开阔侧（避开建筑）。
+  # 注：obstacles 字段由程维好补充（格式建议 [[x, y, radius], ...]，米）。
+  security:
+    start: [5.0, -3.0]      # 起始靠近拐角
+    monitor_radius: 25.0
+    block_radius: 15.0
+    speed: 3.0              # 中高速
+    trajectory: straight    # 模拟逃逸压力测试（期望多为 FAIL）
+    test_duration: 30.0
+    direction_distribution:  # 朝开阔侧（SW/W/NW）逃逸概率高，避开建筑
+      N:  0.05
+      NE: 0.05
+      E:  0.10
+      SE: 0.15
+      S:  0.15
+      SW: 0.20
+      W:  0.15
+      NW: 0.15
+    # security 多建筑遮挡，部分逃逸绕出，失败略多，成功类占 90%。
+    trajectory_distribution:
+      return: 0.78
+      oscillate: 0.12
+      straight: 0.10
+    # obstacles:             # TODO(程维好)：补充建筑障碍物列表
+    #   - [8.0, -6.0, 2.0]   #   [x, y, radius]
+    #   - [3.0, 4.0, 1.5]
+
+  # ---- 场景3：边境 / 线型长距离封锁 ------------------------------------
+  # 特征：封锁线一侧，目标沿"线外"方向高速逃逸，考验 UGV 封锁层拦截。
+  # 线外方向约定为 NW（索引 3）。
+  border:
+    start: [0.0, 0.0]
+    monitor_radius: 25.0
+    block_radius: 15.0
+    speed: 4.0              # 高速
+    trajectory: straight
+    test_duration: 30.0
+    direction_distribution:  # 朝线外（NW）逃逸概率最高
+      N:  0.05
+      NE: 0.10
+      E:  0.10
+      SE: 0.10
+      S:  0.05
+      SW: 0.10
+      W:  0.10
+      NW: 0.40
+    # border 高速线型逃逸最难，但 UGV 封锁层拦截多数，成功类占 90%。
+    trajectory_distribution:
+      return: 0.78
+      oscillate: 0.12
+      straight: 0.10
+    # obstacles: []          # 边境场景通常无遮挡，留空
