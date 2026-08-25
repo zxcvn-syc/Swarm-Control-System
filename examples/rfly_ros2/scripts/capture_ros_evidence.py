@@ -94,9 +94,11 @@ def main() -> None:
     rclpy.init()
     node = EvidenceRecorder(args.output_dir)
     started = time.monotonic()
+    completed = False
     try:
         while rclpy.ok() and node.pending and time.monotonic() - started < args.duration:
             rclpy.spin_once(node, timeout_sec=0.2)
+        completed = not node.pending
     finally:
         summary = {
             "duration_s": round(time.monotonic() - started, 3),
@@ -115,6 +117,8 @@ def main() -> None:
         )
         node.destroy_node()
         rclpy.shutdown()
+    if not completed:
+        raise SystemExit("required ROS payload evidence was incomplete")
 
 
 if __name__ == "__main__":

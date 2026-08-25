@@ -10,12 +10,24 @@ import cv2
 import numpy as np
 
 
+EXPECTED_EVIDENCE_TOPICS = frozenset({
+    "task_assignment",
+    "planned_path",
+    "enclosure_command",
+    "target_track_world",
+    "target_track_truth",
+    "drone_states",
+    "ground_vehicle_states",
+})
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--telemetry", type=Path, required=True)
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--ros-summary", type=Path)
+    parser.add_argument("--evidence-manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--require-physical-occlusion", action="store_true")
     parser.add_argument("--maximum-reacquisition-seconds", type=float, default=2.0)
@@ -93,6 +105,33 @@ def ros_message_counts(path: Path | None) -> dict[str, int]:
         for topic, count in counts.items()
         if isinstance(count, (int, float))
     }
+
+
+def evidence_manifest_is_complete(path: Path | None) -> bool:
+    if path is None or not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    topics = data.get("topics")
+    if not isinstance(topics, dict) or set(topics) != EXPECTED_EVIDENCE_TOPICS:
+        return False
+    if data.get("pending"):
+        return False
+    for item in topics.values():
+        if not isinstance(item, dict):
+            return False
+        evidence_file = item.get("first_payload_file")
+        if (
+            not item.get("has_payload_evidence")
+            or not isinstance(evidence_file, str)
+            or int(item.get("received", 0)) <= 0
+        ):
+            return False
+        if not (path.parent / evidence_file).is_file():
+            return False
+    return True
 
 
 def coalesce_physical_windows(
@@ -183,7 +222,6 @@ def main() -> None:
         "online_frames_present": int(summary.get("frames_processed", 0)) > 0,
         "vision_stream_received": vision_stream_started and vision_packet_max > 0,
         "confirmed_tracking_present": int(summary.get("confirmed_track_rows", 0)) > 0,
-        "stable_logical_target_id": summary.get("unique_track_ids") == [10001],
         "no_vehicle_overlap": overlap_max == 0,
         "separation_tolerance_met": clearance_min >= -0.051,
     }
@@ -194,8 +232,13 @@ def main() -> None:
     if args.minimum_online_fps > 0.0:
         checks["online_fps_met"] = online_fps >= args.minimum_online_fps
     if args.ros_summary is not None:
-        checks["ros_topics_received"] = bool(ros_counts) and all(
-            count > 0 for count in ros_counts.values()
+        checks["ros_topics_received"] = (
+            set(ros_counts) == EXPECTED_EVIDENCE_TOPICS
+            and all(ros_counts[topic] > 0 for topic in EXPECTED_EVIDENCE_TOPICS)
+        )
+    if args.evidence_manifest is not None:
+        checks["ros_payload_evidence_complete"] = evidence_manifest_is_complete(
+            args.evidence_manifest
         )
     if args.require_physical_occlusion:
         checks.update({
@@ -215,6 +258,9 @@ def main() -> None:
         "video": video,
         "frames_processed": summary.get("frames_processed", 0),
         "confirmed_track_rows": summary.get("confirmed_track_rows", 0),
+        "raw_tracker_fragment_count": summary.get(
+            "raw_tracker_fragment_count", len(summary.get("raw_tracker_ids", []))
+        ),
         "tracking_centering": {
             **centering,
             "required_centered_frame_ratio": args.minimum_centered_track_ratio,

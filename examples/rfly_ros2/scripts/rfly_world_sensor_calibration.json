@@ -1,0 +1,40 @@
+{
+  "schema": "rfly_world_sensor_affine_v1",
+  "feature_order": [
+    "bias",
+    "sensor_x",
+    "sensor_y",
+    "image_ground_x",
+    "image_ground_y"
+  ],
+  "world_x_coefficients": [
+    2.426982399920239,
+    0.7179483628485224,
+    0.18393148159101258,
+    0.1434031718455907,
+    -0.018033842397188332
+  ],
+  "world_y_coefficients": [
+    7.6837814394972614,
+    -0.12976487129647352,
+    0.9487515167494194,
+    0.5367651484568617,
+    -0.007890300814502482
+  ],
+  "observation_count": 1932,
+  "inlier_count": 1876,
+  "holdout_error_m": {
+    "median": 0.9172917070663567,
+    "p95": 2.3917290847732526
+  },
+  "image_ground_coverage_m": {
+    "x_range": 209.85239424063082,
+    "y_range": 128.76119491006625
+  },
+  "acceptance": {
+    "maximum_holdout_median_error": 5.0,
+    "maximum_holdout_p95_error": 12.0,
+    "minimum_image_ground_range_m": 35.0,
+    "passed": true
+  }
+}

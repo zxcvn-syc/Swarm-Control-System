@@ -1,0 +1,58 @@
+{
+  "schema": "rfly_world_sensor_affine_v1",
+  "feature_order": [
+    "bias",
+    "sensor_x",
+    "sensor_y",
+    "image_ground_x",
+    "image_ground_y"
+  ],
+  "world_x_coefficients": [
+    -7.214429803583683,
+    0.8427506774110123,
+    0.164166063269633,
+    0.054631550636254994,
+    -0.22337215701325575
+  ],
+  "world_y_coefficients": [
+    10.733002380123416,
+    -0.19716022808830247,
+    0.9815612310410129,
+    0.5707643012276612,
+    0.12098071599702062
+  ],
+  "observation_count": 552,
+  "inlier_count": 512,
+  "training_error_m": {
+    "mean": 1.412645861632814,
+    "median": 1.3550506029768616,
+    "p95": 2.7295636786040807,
+    "max": 3.9388672418386204
+  },
+  "holdout_error_m": {
+    "mean": 1.4199815810334433,
+    "median": 1.3806794802934956,
+    "p95": 2.5000953344667662,
+    "max": 3.862091318880069
+  },
+  "image_ground_coverage_m": {
+    "x": {
+      "min": -68.42789110721762,
+      "max": 101.26077591502252,
+      "range": 169.68866702224014,
+      "standard_deviation": 54.50237545382751
+    },
+    "y": {
+      "min": -77.52831295024814,
+      "max": 49.929192419381025,
+      "range": 127.45750536962916,
+      "standard_deviation": 34.8765452189279
+    }
+  },
+  "acceptance": {
+    "maximum_holdout_median_error": 5.0,
+    "maximum_holdout_p95_error": 12.0,
+    "minimum_image_ground_range_m": 35.0,
+    "passed": true
+  }
+}
