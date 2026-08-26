@@ -1,0 +1,49 @@
+extends: default
+
+# Placeholder preset for the upcoming multi-sensor pipeline (v7+).
+#
+# The v6 release ships a sensor abstraction layer under
+# ``cvtrack.sensors`` (see ``Sensor`` / ``VideoSensor``), but the main
+# pipeline still consumes a single ``VideoReader``.  This preset is the
+# staging area for the fields the multi-sensor path will read once it
+# lands.  Treat the keys below as advisory -- they will not be consumed
+# by ``cvtrack.config._validate`` until the multi-sensor path is wired
+# in (tracked separately).
+#
+# Future intended schema:
+#
+#   sensors:
+#     - kind: video                # one of: video, lidar, imu
+#       uri:  /data/front.mp4      # file path, RTSP URL, or device node
+#       intrinsics:                # optional, only for sensors that need it
+#         fx: 800.0
+#         fy: 800.0
+#         cx: 640.0
+#         cy: 360.0
+#       extrinsics:                # optional 4x4 world-from-sensor matrix
+#         world_T_sensor: null
+#       role: front_camera         # semantic label for downstream fusion
+#     - kind: video
+#       uri:  /data/side.mp4
+#       role: side_camera
+#
+# Until that path is implemented, this preset is structurally identical
+# to ``default`` and is safe to pass via ``--config multi_sensor``.
+
+detector:
+  weights: yolov8s.pt
+  imgsz: 320
+
+tracker:
+  kind: botsort
+  cmc: true
+  high_conf: 0.35
+  new_track_conf: 0.20
+
+appearance:
+  enabled: false
+
+pipeline:
+  # Multi-sensor processing will eventually live here (sync policy, frame
+  # rate alignment, time-stamp fusion).  Empty in v6.
+  sensors: []

@@ -13,8 +13,9 @@ Two implementations live here:
          paper's default).
       2. For pairs that pass the gate, score the cosine distance between the
          detection embedding and the track's ReID gallery mean.
-      3. Associate in age order: fresh lost tracks (age = 1) match first,
-         older lost tracks match later.  This is what the paper calls the
+      3. Associate in age order: tracks updated in the previous frame
+         (age = 1) match first, older lost tracks match later.  This is what
+         the paper calls the
          *matching cascade* and is what suppresses identity switching when
          an object occludes for a long stretch.
 
@@ -220,6 +221,8 @@ class DeepSortCascade:
         appearance_thresh: float = DEEPSORT_APPEARANCE_GATE,
         iou_thresh: float = 0.30,
         maha_gate: float = DEEPSORT_CASCADE_MAHALANOBIS_GATE,
+        gallery_size: int = 50,
+        gallery_ema_alpha: float = 0.05,
     ) -> None:
         self.kf = KalmanCV2D(dt=dt)
         self.dt = dt
@@ -230,6 +233,8 @@ class DeepSortCascade:
         self.appearance_thresh = float(appearance_thresh)
         self.iou_thresh = float(iou_thresh)
         self.maha_gate = float(maha_gate)
+        self.gallery_size = max(1, int(gallery_size))
+        self.gallery_ema_alpha = float(gallery_ema_alpha)
         self.tracks: List[Track] = []
         DeepSortCascade._id_seq += 1
         self._next_id_start = DeepSortCascade._id_seq
@@ -301,6 +306,12 @@ class DeepSortCascade:
         det_embeddings: Optional[List[Optional[np.ndarray]]] = None,
         galleries: Optional[Dict[int, Gallery]] = None,
     ) -> List[Track]:
+        if galleries is not None:
+            for track in self.tracks:
+                gallery = galleries.get(track.track_id)
+                if gallery is not None:
+                    track.embedding_mean = gallery.mean
+
         # 1. Predict.
         for t in self.tracks:
             t.predict(self.kf)
@@ -329,9 +340,8 @@ class DeepSortCascade:
                 # (same as DeepSORT paper).
                 if not tr.confirmed:
                     continue
-                if tr.misses <= 0:
-                    continue
-                tracks_by_age.setdefault(int(tr.misses), []).append(i)
+                cascade_age = int(tr.misses) + 1
+                tracks_by_age.setdefault(cascade_age, []).append(i)
 
             for age in sorted(tracks_by_age.keys()):
                 tier = tracks_by_age[age]
@@ -354,6 +364,9 @@ class DeepSortCascade:
                     track_idx = tier[r]
                     det_idx = remain_dets[c]
                     self.tracks[track_idx].update(self.kf, detections[det_idx])
+                    self._update_gallery(
+                        self.tracks[track_idx], det_idx, det_embeddings, galleries
+                    )
                     matched_tracks.add(track_idx)
                     matched_dets.add(det_idx)
 
@@ -385,6 +398,9 @@ class DeepSortCascade:
                 track_idx = unmatched_tracks_idx[r]
                 det_idx = unmatched_dets_idx[c]
                 self.tracks[track_idx].update(self.kf, detections[det_idx])
+                self._update_gallery(
+                    self.tracks[track_idx], det_idx, det_embeddings, galleries
+                )
                 matched_tracks.add(track_idx)
                 matched_dets.add(det_idx)
 
@@ -410,22 +426,34 @@ class DeepSortCascade:
                 trail_scores=[det.score],
             )
             self.tracks.append(new_track)
-            # Bootstrap the gallery with the matching detection embedding.
-            if (
-                galleries is not None
-                and det_embeddings is not None
-                and j < len(det_embeddings)
-                and det_embeddings[j] is not None
-            ):
-                g = galleries.get(new_track.track_id)
-                if g is None:
-                    g = Gallery(size=50, ema_alpha=0.05)
-                    galleries[new_track.track_id] = g
-                g.add(det_embeddings[j])
-                new_track.embedding_mean = g.mean
+            self._update_gallery(new_track, j, det_embeddings, galleries)
 
         self._prune()
         return [t for t in self.tracks if t.confirmed]
+
+    def _update_gallery(
+        self,
+        track: Track,
+        detection_index: int,
+        det_embeddings: Optional[Sequence[Optional[np.ndarray]]],
+        galleries: Optional[Dict[int, Gallery]],
+    ) -> None:
+        if galleries is None or det_embeddings is None:
+            return
+        if detection_index >= len(det_embeddings):
+            return
+        embedding = det_embeddings[detection_index]
+        if embedding is None:
+            return
+        gallery = galleries.get(track.track_id)
+        if gallery is None:
+            gallery = Gallery(
+                size=self.gallery_size,
+                ema_alpha=self.gallery_ema_alpha,
+            )
+            galleries[track.track_id] = gallery
+        gallery.add(embedding)
+        track.embedding_mean = gallery.mean
 
     def _cascade_cost(
         self,
@@ -454,10 +482,6 @@ class DeepSortCascade:
                     a = tier_app[i, j]
                     if a <= self.appearance_thresh:
                         # Pure appearance cost when within the appearance gate.
-                        cost[i, j] = a
-                    else:
-                        # Outside the appearance gate: only acceptable via the
-                        # IoU fallback (we set a very high cost here).
                         cost[i, j] = a
                 else:
                     # No appearance: use IoU as the within-gate cost.

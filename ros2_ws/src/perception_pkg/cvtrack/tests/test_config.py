@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cvtrack.config import _deep_merge, _validate, load_config
+from cvtrack.config import _configs_dir, _deep_merge, _validate, load_config
 from cvtrack.runner import _settings_from_config
 
 
@@ -58,6 +58,15 @@ def test_validate_accepts_sensors_top_level():
     _validate({"sensors": []})
 
 
+def test_validate_world_projection_config():
+    _validate({"world_projection": {"enabled": True, "calibration_file": "site.yaml"}})
+
+
+def test_validate_rejects_unknown_world_projection_key():
+    with pytest.raises(ValueError):
+        _validate({"world_projection": {"enabled": True, "mystery": 1}})
+
+
 def test_validate_reid_enabled_no_weights_is_ok():
     """v6: enabling ReID without weights is allowed; OSNet hub weights are used."""
     # The pipeline auto-tries OSNet (torch.hub), disabling ReID gracefully
@@ -76,9 +85,7 @@ def test_validate_rejects_non_string_weights():
 
 def test_bundled_presets_load_clean():
     """Smoke test: the configs bundled with the repo load without raising."""
-    from cvtrack.config import _configs_dir
-
-    for name in ("default", "drone", "street", "multi_sensor"):
+    for name in ("default", "drone", "street", "multi_sensor", "world_projection"):
         cfg = load_config(name, configs_dir=_configs_dir())
         assert cfg.raw.get("tracker"), f"{name} must define a tracker section"
 
@@ -101,3 +108,17 @@ def test_runner_settings_honor_nested_tracker_values():
     assert settings.include_tentative is True
     assert settings.use_appearance is False
     assert settings.enable_prediction is False
+
+
+def test_packaged_presets_match_repo_mirrors():
+    package_dir = Path(_configs_dir())
+    repo_dir = Path(__file__).resolve().parents[1] / "configs"
+
+    for name in (
+        "default.yaml",
+        "drone.yaml",
+        "street.yaml",
+        "multi_sensor.yaml",
+        "world_projection.yaml",
+    ):
+        assert (package_dir / name).read_text().rstrip() == (repo_dir / name).read_text().rstrip()

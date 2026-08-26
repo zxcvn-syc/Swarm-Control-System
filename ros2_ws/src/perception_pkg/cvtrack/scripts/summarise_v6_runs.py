@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -51,7 +50,6 @@ def summarise(run_dir: Path, gt_run_dir: Path | None = None) -> dict:
 
     # Per-track length.
     per_track_frames: dict[int, set] = defaultdict(set)
-    n_confirmed = 0
     for frame, tid, _ in obs:
         per_track_frames[tid].add(frame)
 

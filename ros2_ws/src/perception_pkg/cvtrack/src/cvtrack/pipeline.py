@@ -25,24 +25,29 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import cv2
 import numpy as np
 
 from cvtrack.appearance.gallery import Gallery
 from cvtrack.config import Config, load_config, merge_cli
 from cvtrack.detector.factory import make_detector
-from cvtrack.io import FutureTrailCsvWriter, TrackCsvWriter, VideoReader, VideoWriter
+from cvtrack.geometry import CalibrationError, GroundPlaneProjector
+from cvtrack.io import (
+    FutureTrailCsvWriter,
+    TrackCsvWriter,
+    VideoReader,
+    VideoWriter,
+    WorldTrackCsvWriter,
+)
 from cvtrack.tracker.botsort import BoTSortTracker
-from cvtrack.tracker.cmc import make_cmc
 from cvtrack.tracker.deepsort import DeepSortCascade, DeepSortLite
 from cvtrack.tracker.kalman import (
     predict_n_steps,
     predict_n_steps_with_covariance,
 )
 from cvtrack.tracker.smoother import rts_smooth_2d
-from cvtrack.types import Box, Track
+from cvtrack.types import Track
 from cvtrack.viz.renderer import (
     add_overlay,
     draw_box,
@@ -82,15 +87,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--config", default=None,
                     help="path or name of a YAML preset (e.g. configs/drone.yaml)")
-    ap.add_argument("--source", default="",
-                    help="path to input video (default: synthesise sample.mp4)")
+    ap.add_argument("--source", required=True,
+                    help="path to input video")
     ap.add_argument("--out-dir", default="output",
                     help="output directory for tracked.mp4 / tracks.csv / etc. "
                          "(default: ./output)")
     ap.add_argument("--weights", default="")
     ap.add_argument("--imgsz", type=int, default=None)
     ap.add_argument("--conf", type=float, default=None)
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", default=None)
     ap.add_argument("--classes", default=None,
                     help="comma-separated COCO IDs to keep")
     ap.add_argument("--min-conf", type=float, default=None)
@@ -98,7 +103,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--nms-iou", type=float, default=None)
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--max-seconds", type=float, default=0.0)
-    ap.add_argument("--detector", choices=["yolo", "mog2", "auto"], default="auto")
+    ap.add_argument("--detector", choices=["yolo", "mog2", "auto"], default=None)
     ap.add_argument("--include-tentative", action="store_true")
     ap.add_argument("--max-age", type=int, default=None)
     ap.add_argument("--n-init", type=int, default=None)
@@ -106,10 +111,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--start-frame", type=int, default=0)
     ap.add_argument("--tracker", choices=["deepsort", "deepsort_cascade", "botsort"], default=None,
                     help="tracker kind (v6 adds deepsort_cascade with appearance cascade + IoU fallback)")
-    ap.add_argument("--predict-horizon", type=int, default=15,
+    ap.add_argument("--predict-horizon", type=int, default=None,
                     help="number of frames to project each track's KF into the future")
     ap.add_argument("--write-future-csv", action="store_true",
                     help="enable per-step future projection CSV with sigma_x/sigma_y columns")
+    ap.add_argument(
+        "--world-calibration",
+        default=None,
+        help="YAML ground-plane calibration; writes tracks_world.csv in metres",
+    )
     ap.add_argument("--no-cmc", action="store_true")
     ap.add_argument("--high-conf", type=float, default=None)
     ap.add_argument("--new-track-conf", type=float, default=None)
@@ -123,11 +133,11 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="enable ReID second-stage matching")
     ap.add_argument("--reid-weights", default=None,
                     help="path to OSNet pretrained weights (.pth)")
-    ap.add_argument("--reid-model", default="osnet_x1_0",
+    ap.add_argument("--reid-model", default=None,
                     help="OSNet variant (osnet_x0_25 / osnet_x0_5 / osnet_x1_0)")
     ap.add_argument("--reid-weight", type=float, default=None,
                     help="weight of ReID cost in second-stage fusion (0..1)")
-    ap.add_argument("--cmc-method", choices=["sparse_of", "ecc"], default="sparse_of")
+    ap.add_argument("--cmc-method", choices=["sparse_of", "ecc"], default=None)
     ap.add_argument("--save-reid", action="store_true",
                     help="write tracks_reid.json with per-track embeddings")
     ap.add_argument("--no-video", action="store_true",
@@ -170,6 +180,12 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     """Translate CLI flags to a config-overlay dict matching the YAML schema."""
     out: Dict[str, Any] = {}
     detector: Dict[str, Any] = {}
+    if args.detector is not None:
+        detector["backend"] = args.detector
+    if args.weights:
+        detector["weights"] = args.weights
+    if args.device is not None:
+        detector["device"] = args.device
     if args.imgsz is not None:
         detector["imgsz"] = args.imgsz
     if args.conf is not None:
@@ -205,8 +221,10 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         tracker["n_init"] = args.n_init
     if args.no_cmc:
         tracker["cmc"] = False
-    tracker["stationary_prune"] = not args.no_stationary_prune
-    tracker["cmc_method"] = args.cmc_method
+    if args.no_stationary_prune:
+        tracker["stationary_prune"] = False
+    if args.cmc_method is not None:
+        tracker["cmc_method"] = args.cmc_method
     if tracker:
         out["tracker"] = tracker
 
@@ -217,7 +235,7 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         appearance["enabled"] = True
     if args.reid_weights:
         appearance["weights"] = args.reid_weights
-    if args.reid_model:
+    if args.reid_model is not None:
         appearance["model"] = args.reid_model
     if args.reid_weight is not None:
         appearance["match_weight"] = args.reid_weight
@@ -227,7 +245,6 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     viz: Dict[str, Any] = {}
     if args.save_trail:
         viz["save_trail"] = True
-        viz["save_trails_json"] = True
     if viz:
         out["viz"] = viz
 
@@ -236,8 +253,16 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         output["write_video"] = False
     if args.save_reid:
         output["write_reid_json"] = True
+    if args.write_future_csv:
+        output["write_future_csv"] = True
     if output:
         out["output"] = output
+
+    if args.world_calibration is not None:
+        out["world_projection"] = {
+            "enabled": True,
+            "calibration_file": args.world_calibration,
+        }
 
     pipeline: Dict[str, Any] = {}
     if args.max_frames:
@@ -248,6 +273,8 @@ def _args_to_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         pipeline["start_frame"] = args.start_frame
     if args.include_tentative:
         pipeline["include_tentative"] = True
+    if args.predict_horizon is not None:
+        pipeline["predict_horizon"] = args.predict_horizon
     if args.id_explosion_warn != 0.5:
         pipeline["id_explosion_warn"] = args.id_explosion_warn
     if pipeline:
@@ -300,13 +327,6 @@ def run(args: argparse.Namespace) -> int:
         else:
             merged[k] = v
 
-    # Top-level scalar overrides.
-    if args.device:
-        merged.setdefault("detector", {})["device"] = args.device
-    if args.detector and args.detector != "auto":
-        merged.setdefault("detector", {})["backend"] = args.detector
-    if args.weights:
-        merged["detector"]["weights"] = args.weights
     merged.setdefault("detector", {})["weights"] = resolve_weights(
         merged["detector"].get("weights", "yolov8s.pt")
     )
@@ -320,15 +340,7 @@ def run(args: argparse.Namespace) -> int:
     # -------- source ---------------------------------------------------
     source = args.source
     if not source:
-        source = os.path.join(args.out_dir, "sample.mp4")
-        if not os.path.exists(source):
-            sys.path.insert(0, args.out_dir)
-            try:
-                from make_sample_video import generate
-                log.info("no source given, synthesising %s", source)
-                generate(args.out_dir)
-            except Exception as exc:
-                raise SystemExit(f"no --source and sample synthesis failed: {exc}")
+        raise SystemExit("--source is required")
 
     reader = VideoReader(source)
     info = reader.info()
@@ -342,6 +354,25 @@ def run(args: argparse.Namespace) -> int:
     except (TypeError, ValueError):
         configured_dt = source_dt
     dt = configured_dt if np.isfinite(configured_dt) and configured_dt > 0.0 else source_dt
+    world_cfg = merged.get("world_projection", {})
+    world_projector: Optional[GroundPlaneProjector] = None
+    if world_cfg.get("enabled", False):
+        calibration_file = world_cfg.get("calibration_file")
+        if not calibration_file:
+            raise SystemExit(
+                "world_projection is enabled but no calibration_file was supplied; "
+                "refusing to treat pixels as metres"
+            )
+        try:
+            world_projector = GroundPlaneProjector.from_file(calibration_file)
+        except CalibrationError as exc:
+            raise SystemExit(f"invalid world calibration: {exc}") from exc
+        log.info(
+            "world projection enabled: frame_id=%s calibration=%s rmse=%.3f m",
+            world_projector.frame_id,
+            world_projector.source,
+            world_projector.reprojection_rmse_m,
+        )
     pipe_cfg = merged.get("pipeline", {})
     max_frames_cap = int(pipe_cfg.get("max_frames", args.max_frames) or 0)
     if max_frames_cap <= 0:
@@ -424,7 +455,7 @@ def run(args: argparse.Namespace) -> int:
             high_conf=float(tr_cfg.get("high_conf", 0.35)),
             new_track_conf=float(tr_cfg.get("new_track_conf", 0.20)),
             lost_relink_frames=int(tr_cfg.get("lost_relink_frames", 30)),
-            cmc_method=str(tr_cfg.get("cmc_method", args.cmc_method)),
+            cmc_method=str(tr_cfg.get("cmc_method") or "sparse_of"),
             appearance_reid_weight=(reid_match_weight if (reid_enabled and reid_extractor)
                                     else 0.0),
         )
@@ -445,6 +476,8 @@ def run(args: argparse.Namespace) -> int:
             use_appearance=use_appearance,
             appearance_thresh=float(tr_cfg.get("appearance_thresh", 0.5)),
             iou_thresh=float(tr_cfg.get("iou_thresh", 0.30)),
+            gallery_size=reid_gallery_size,
+            gallery_ema_alpha=reid_ema_alpha,
         )
         log.info(
             "tracker=DeepSortCascade use_appearance=%s appearance_thresh=%.2f iou>=%.2f",
@@ -466,12 +499,25 @@ def run(args: argparse.Namespace) -> int:
 
     # -------- writers --------------------------------------------------
     out_cfg = merged.get("output", {})
+    viz_cfg = merged.get("viz", {})
+    save_trail = bool(viz_cfg.get("save_trail", False))
+    fps_overlay = bool(viz_cfg.get("fps_overlay", True))
+    write_tracks_csv = bool(out_cfg.get("write_csv", True))
+    write_smoothed_csv = bool(out_cfg.get("write_smoothed_csv", False) or save_trail)
+    write_trails_json = bool(out_cfg.get("write_trails_json", False) or save_trail)
     csv_path = os.path.join(args.out_dir, "tracks.csv")
-    csv_w = TrackCsvWriter(csv_path)
+    csv_w = TrackCsvWriter(csv_path) if write_tracks_csv else None
     future_csv_path = os.path.join(args.out_dir, "tracks_future.csv")
-    write_future_csv = bool(args.write_future_csv or out_cfg.get("write_future_csv", False))
+    write_future_csv = bool(out_cfg.get("write_future_csv", False))
     future_csv_w = FutureTrailCsvWriter(future_csv_path) if write_future_csv else None
-    future_steps = max(0, int(getattr(args, "predict_horizon", 15) or 0))
+    world_csv_path = os.path.join(args.out_dir, "tracks_world.csv")
+    write_world_csv = bool(out_cfg.get("write_world_csv", True))
+    world_csv_w = (
+        WorldTrackCsvWriter(world_csv_path)
+        if world_projector is not None and write_world_csv
+        else None
+    )
+    future_steps = max(0, int(pipe_cfg.get("predict_horizon", 15) or 0))
 
     writer: Optional[VideoWriter] = None
     if out_cfg.get("write_video", True) and not args.no_video:
@@ -480,12 +526,15 @@ def run(args: argparse.Namespace) -> int:
         )
 
     track_birth: Dict[int, int] = {}
+    track_archive: Dict[int, Track] = {}
     seen_track_ids: set = set()
     frame_idx = 0
     fps_avg = 0.0
     n_frames = 0
     vx_idx = 4 if isinstance(tracker, BoTSortTracker) else 2
     vy_idx = 5 if isinstance(tracker, BoTSortTracker) else 3
+    last_world_positions: Dict[int, tuple[int, float, float]] = {}
+    invalid_world_projection_logged = False
 
     # -------- main loop ------------------------------------------------
     if start_frame > 0:
@@ -520,12 +569,10 @@ def run(args: argparse.Namespace) -> int:
             else:
                 tracks = tracker.step(detections)
 
-            # Refresh galleries and per-track embedding means.
-            # The matching between tracks and detections happens inside the
-            # tracker; here we approximate by associating the new embeddings
-            # to tracks by nearest-centre distance (cheap O(N*M) but N is
-            # the number of detections, typically tens per frame).
-            if reid_extractor is not None:
+            # BoT-SORT does not expose exact match indices yet, so keep its
+            # legacy nearest-centre gallery refresh. DeepSortCascade updates
+            # the exact matched gallery inside tracker.step().
+            if reid_extractor is not None and not isinstance(tracker, DeepSortCascade):
                 for t in tracks:
                     if not det_embeddings:
                         continue
@@ -550,6 +597,10 @@ def run(args: argparse.Namespace) -> int:
                             g.add(det_embeddings[best_idx])
                             t.embedding_mean = g.mean
 
+            for active_track in tracker.tracks:
+                track_archive[active_track.track_id] = active_track
+                track_birth.setdefault(active_track.track_id, frame_idx)
+
             fps_inst = 1.0 / max(time.time() - t0, 1e-6)
             fps_avg = (fps_avg * n_frames + fps_inst) / (n_frames + 1)
             n_frames += 1
@@ -557,8 +608,6 @@ def run(args: argparse.Namespace) -> int:
             include_tent = bool(pipe_cfg.get("include_tentative", args.include_tentative))
             visible = tracks if include_tent else [t for t in tracks if t.confirmed]
             for t in visible:
-                if t.track_id not in track_birth:
-                    track_birth[t.track_id] = frame_idx
                 if t.confirmed:
                     seen_track_ids.add(t.track_id)
 
@@ -590,16 +639,53 @@ def run(args: argparse.Namespace) -> int:
                     draw_predicted_future_trail(frame, t, n=future_steps)
 
                 draw_box(frame, t)
-                if out_cfg.get("save_trail", False) or args.save_trail:
+                if save_trail:
                     draw_trail(frame, t)
-                csv_w.write_row(
-                    frame_idx, t.track_id, t.label,
-                    t.pos[0], t.pos[1],
-                    float(t.mean[vx_idx]), float(t.mean[vy_idx]),
-                    t.confirmed,
-                )
+                if csv_w is not None:
+                    csv_w.write_row(
+                        frame_idx, t.track_id, t.label,
+                        t.pos[0], t.pos[1],
+                        float(t.mean[vx_idx]), float(t.mean[vy_idx]),
+                        t.confirmed,
+                    )
+                if world_csv_w is not None and world_projector is not None:
+                    image_x_px = t.box.cx
+                    image_y_px = t.box.y2
+                    world_x_m: Optional[float] = None
+                    world_y_m: Optional[float] = None
+                    world_vx_mps: Optional[float] = None
+                    world_vy_mps: Optional[float] = None
+                    world_valid = False
+                    try:
+                        projected = world_projector.project(image_x_px, image_y_px)
+                        world_x_m, world_y_m = projected.x_m, projected.y_m
+                        previous = last_world_positions.get(t.track_id)
+                        if previous is not None and frame_idx > previous[0]:
+                            elapsed_s = (frame_idx - previous[0]) / fps
+                            world_vx_mps = (world_x_m - previous[1]) / elapsed_s
+                            world_vy_mps = (world_y_m - previous[2]) / elapsed_s
+                        last_world_positions[t.track_id] = (frame_idx, world_x_m, world_y_m)
+                        world_valid = True
+                    except CalibrationError as exc:
+                        if not invalid_world_projection_logged:
+                            log.warning("world projection rejected a target: %s", exc)
+                            invalid_world_projection_logged = True
+                    world_csv_w.write_row(
+                        frame=frame_idx,
+                        timestamp_s=frame_idx / fps,
+                        track_id=t.track_id,
+                        label=t.label,
+                        image_x_px=image_x_px,
+                        image_y_px=image_y_px,
+                        world_x_m=world_x_m,
+                        world_y_m=world_y_m,
+                        world_vx_mps=world_vx_mps,
+                        world_vy_mps=world_vy_mps,
+                        world_valid=world_valid,
+                        frame_id=world_projector.frame_id,
+                    )
 
-            if out_cfg.get("fps_overlay", True):
+            if fps_overlay:
                 add_overlay(frame, fps_avg, len(visible), model_name)
             if writer is not None:
                 writer.write(frame)
@@ -609,16 +695,26 @@ def run(args: argparse.Namespace) -> int:
                 break
     finally:
         reader.close()
-        csv_w.close()
+        if csv_w is not None:
+            csv_w.close()
         if future_csv_w is not None:
             future_csv_w.close()
+        if world_csv_w is not None:
+            world_csv_w.close()
         if writer is not None:
             writer.close()
 
-    log.info("wrote %s (%d frames, avg fps %.1f)", os.path.join(args.out_dir, "tracked.mp4"),
-             frame_idx, fps_avg)
-    log.info("tracks -> %s", csv_path)
-    log.info("future tracks -> %s", future_csv_path)
+    if writer is not None:
+        log.info(
+            "wrote %s (%d frames, avg fps %.1f)",
+            os.path.join(args.out_dir, "tracked.mp4"), frame_idx, fps_avg,
+        )
+    if csv_w is not None:
+        log.info("tracks -> %s", csv_path)
+    if future_csv_w is not None:
+        log.info("future tracks -> %s", future_csv_path)
+    if world_csv_w is not None:
+        log.info("world tracks -> %s", world_csv_path)
 
     # -------- warning / optional exports ------------------------------
     n_ids = len(seen_track_ids)
@@ -633,10 +729,12 @@ def run(args: argparse.Namespace) -> int:
                 "or --drone.", n_ids, frame_idx, ratio, warn_threshold,
             )
 
-    if args.save_trail or out_cfg.get("save_trail", False):
-        _export_smoothed(tracker.tracks, track_birth,
+    archived_tracks = list(track_archive.values())
+    if write_smoothed_csv:
+        _export_smoothed(archived_tracks, track_birth,
                          os.path.join(args.out_dir, "tracks_smoothed.csv"))
-        _export_trails(tracker.tracks, track_birth,
+    if write_trails_json:
+        _export_trails(archived_tracks, track_birth,
                        os.path.join(args.out_dir, "tracks_trails.json"))
 
     if (args.save_reid or out_cfg.get("write_reid_json", False)) and reid_extractor is not None:

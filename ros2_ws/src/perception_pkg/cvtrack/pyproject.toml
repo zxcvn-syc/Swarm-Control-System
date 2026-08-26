@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cvtrack"
-version = "0.5.0"
+version = "6.0.0"
 description = "YOLOv8 + BoT-SORT tracking demo with optional ReID (OSNet)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,13 +35,11 @@ dependencies = [
     "matplotlib",
     "pandas",
     "motmetrics",
-    "torchreid>=0.2.5,<0.3",
 ]
 
 [project.optional-dependencies]
 reid = [
-    # NOTE: torchreid is now included in main dependencies (v0.2.5+).
-    # This section is kept for backward compatibility.
+    # Optional because the default geometric trackers run without ReID.
     "torchreid>=0.2.5,<0.3",
     "tensorboard>=2.14,<3",
     "gdown>=4,<7",
@@ -59,7 +57,7 @@ dev = [
 cvtrack = "cvtrack.pipeline:main"
 
 [project.urls]
-"Source" = "https://github.com/<owner>/cvtrack"
+"Source" = "https://github.com/hehong5/cvtrack"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
