@@ -35,5 +35,20 @@ echo "========================================" | tee -a "$LOG_FILE"
 
 cd "$ROS2_WS" || exit 1
 source install/setup.bash
-ros2 run scheduler_pkg reallocation_collector \
-    --ros-args -p log_dir:="$LOG_DIR" 2>&1 | tee -a "$LOG_FILE"
+
+# Prefer the installed entry point; fall back to python3 -m when colcon did
+# not regenerate it (ros2 run raises StopIteration on a stale install space).
+# Reported by Ma Ziyue 2026-08-26; fallback keeps 8.27 collection unblocked
+# regardless of install-space state on the operator's machine.
+if ros2 pkg executables scheduler_pkg 2>/dev/null | grep -qw reallocation_collector; then
+    LAUNCH_MODE="ros2run"
+    LAUNCH_CMD="ros2 run scheduler_pkg reallocation_collector"
+else
+    LAUNCH_MODE="python -m (entry point not found in install space)"
+    LAUNCH_CMD="python3 -m scheduler_pkg.reallocation_collector"
+    echo "[WARN] reallocation_collector 入口未注册到 ros2run（install 空间可能未刷新），" | tee -a "$LOG_FILE"
+    echo "[WARN] 自动降级为 python3 -m 启动，功能等价。" | tee -a "$LOG_FILE"
+fi
+echo "启动方式: $LAUNCH_MODE" | tee -a "$LOG_FILE"
+
+$LAUNCH_CMD --ros-args -p log_dir:="$LOG_DIR" 2>&1 | tee -a "$LOG_FILE"
