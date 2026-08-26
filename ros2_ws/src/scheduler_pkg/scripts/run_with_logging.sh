@@ -14,7 +14,11 @@
 # Run this BEFORE starting the enclosure test launch, keep it running
 # during all trials, then stop with Ctrl+C and archive the log dir.
 
-set -u
+# NOTE: do NOT use `set -u` here -- /opt/ros/humble/setup.bash (and
+# local_setup.sh) read possibly-unset vars like AMENT_TRACE_SETUP_FILES /
+# AMENT_PYTHON_EXECUTABLE, which aborts the whole script in a fresh
+# terminal (verified 2026-08-26 on Ubuntu 22.04 + Humble via SSH).
+# Without `set -u`, undefined vars simply expand empty, which is fine here.
 
 ROS2_WS=${1:-$HOME/ros2_ws}
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
