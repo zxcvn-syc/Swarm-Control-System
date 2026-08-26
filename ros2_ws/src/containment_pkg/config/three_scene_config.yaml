@@ -8,6 +8,9 @@
 #       成功率分布，而非每场景固定一个结果）。
 # 8.26 由陈思睿 + 程维好补全：程维好负责各场景 obstacles（障碍物）字段，
 #       陈思睿负责其余参数与冒烟测试。
+# 8.26 响应证据门槛：SUCCESS 必须同时满足「目标回圈」且「有平台距目标 ≤
+#       intercept_radius(默认 5m)」；无平台证据的轮次判 INVALID（单列，不计入
+#       成功率分母）。此门槛由 containment_evaluator 订阅 /drone_states 实现。
 #
 # 方向索引约定（与 escape_test_node 一致）：
 #   0=E, 1=NE, 2=N, 3=NW, 4=W, 5=SW, 6=S, 7=SE
@@ -18,6 +21,7 @@
 default:
   monitor_radius: 25.0      # 外监视圈（突破即 FAIL）
   block_radius: 15.0        # 内封锁圈（回收即 SUCCESS）
+  intercept_radius: 5.0     # 响应证据门槛：平台进入此距离才算拦截
   test_duration: 30.0       # 单次测试时长（秒）
 
 scenes:
@@ -28,6 +32,7 @@ scenes:
     start: [0.0, 0.0]       # 目标初始位置 (x, y) 米
     monitor_radius: 25.0
     block_radius: 15.0
+    intercept_radius: 5.0     # 平台进入此距离才算拦截（响应证据）
     speed: 2.0              # 逃逸速度 m/s
     trajectory: return     # 默认轨迹：模拟成功拦截（冲出封锁圈后被回收）
     test_duration: 30.0
@@ -55,6 +60,7 @@ scenes:
     start: [5.0, -3.0]      # 起始靠近拐角
     monitor_radius: 25.0
     block_radius: 15.0
+    intercept_radius: 5.0     # 平台进入此距离才算拦截（响应证据）
     speed: 3.0              # 中高速
     trajectory: straight    # 模拟逃逸压力测试（期望多为 FAIL）
     test_duration: 30.0
@@ -83,6 +89,7 @@ scenes:
     start: [0.0, 0.0]
     monitor_radius: 25.0
     block_radius: 15.0
+    intercept_radius: 5.0     # 平台进入此距离才算拦截（响应证据）
     speed: 4.0              # 高速
     trajectory: straight
     test_duration: 30.0

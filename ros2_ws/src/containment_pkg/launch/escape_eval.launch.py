@@ -39,6 +39,10 @@ def generate_launch_description():
     start_x = LaunchConfiguration("start_x")
     start_y = LaunchConfiguration("start_y")
     config_file = LaunchConfiguration("config_file")
+    intercept_radius = LaunchConfiguration("intercept_radius")
+    closed_loop = LaunchConfiguration("closed_loop")
+    monitor_orbit = LaunchConfiguration("monitor_orbit")
+    block_orbit = LaunchConfiguration("block_orbit")
 
     return LaunchDescription([
         DeclareLaunchArgument("scene", default_value="park"),
@@ -47,10 +51,31 @@ def generate_launch_description():
         DeclareLaunchArgument("speed", default_value="2.0"),
         DeclareLaunchArgument("monitor_radius", default_value="25.0"),
         DeclareLaunchArgument("block_radius", default_value="15.0"),
+        DeclareLaunchArgument("intercept_radius", default_value="5.0"),
         DeclareLaunchArgument("test_duration", default_value="20.0"),
         DeclareLaunchArgument("result_csv", default_value="./eval_results.csv"),
         DeclareLaunchArgument("start_x", default_value="0.0"),
         DeclareLaunchArgument("start_y", default_value="0.0"),
+        DeclareLaunchArgument("monitor_orbit", default_value="16.0",
+                              description="mock UAV orbit radius around the "
+                                          "target's home position; kept inside "
+                                          "the target's excursion (return peak "
+                                          "~20m, oscillate peak ~12m) so the "
+                                          "patrol actually intercepts. Raise it "
+                                          "(e.g. 60) to force INVALID (no "
+                                          "response evidence)."),
+        DeclareLaunchArgument("block_orbit", default_value="15.0",
+                              description="mock UGV orbit radius around the "
+                                          "target's home position; kept inside "
+                                          "the target's excursion so the patrol "
+                                          "actually intercepts. Raise it "
+                                          "(e.g. 50) to force INVALID (no "
+                                          "response evidence)."),
+        DeclareLaunchArgument("closed_loop", default_value="false",
+                              description="escape_test_node real closed-loop "
+                                          "mode: target only reverses after a "
+                                          "platform intercepts it within "
+                                          "intercept_radius."),
         DeclareLaunchArgument(
             "config_file",
             default_value=PathJoinSubstitution(
@@ -71,8 +96,8 @@ def generate_launch_description():
                 "period": 0.5,
                 "target_x": start_x,
                 "target_y": start_y,
-                "monitor_orbit": 25.0,
-                "block_orbit": 15.0,
+                "monitor_orbit": monitor_orbit,
+                "block_orbit": block_orbit,
                 "num_drones": 3,
                 "num_cars": 2,
             }],
@@ -94,6 +119,8 @@ def generate_launch_description():
                 "speed": speed,
                 "test_duration": test_duration,
                 "config_file": config_file,
+                "intercept_radius": intercept_radius,
+                "closed_loop": closed_loop,
             }],
         ),
 
@@ -126,6 +153,7 @@ def generate_launch_description():
                 "trajectory": trajectory,
                 "monitor_radius": monitor_radius,
                 "block_radius": block_radius,
+                "intercept_radius": intercept_radius,
                 "test_duration": test_duration,
                 "result_csv": result_csv,
                 "config_file": config_file,
