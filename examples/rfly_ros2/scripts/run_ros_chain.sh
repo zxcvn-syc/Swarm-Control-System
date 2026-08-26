@@ -91,12 +91,31 @@ cleanup() {
   for pid in "$EVIDENCE_PID" "$ENCLOSURE_PID" "$PLANNER_PID" "$SCHEDULER_PID" "$SCENE_PID"; do
     wait "$pid" 2>/dev/null || true
   done
-  rm -f "$PID_FILE"
 }
-trap cleanup EXIT INT TERM
+on_exit() {
+  local exit_code=$?
+  trap - EXIT
+  cleanup
+  rm -f "$PID_FILE"
+  exit "$exit_code"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 sleep 9
 ros2 topic list --no-daemon --spin-time 3 -t >"$LOG_ROOT/topics.txt"
 ros2 node list --no-daemon --spin-time 3 >"$LOG_ROOT/nodes.txt"
 
 sleep "$RUN_SECONDS"
+
+# Let the recorder write its manifest before the EXIT trap stops the scene.
+if ! wait "$EVIDENCE_PID"; then
+  echo "[run_ros_chain] evidence recorder exited unsuccessfully" >&2
+  exit 1
+fi
+if [[ ! -s "$LOG_ROOT/evidence_manifest.json" || ! -s "$LOG_ROOT/capture_summary.json" ]]; then
+  echo "[run_ros_chain] required evidence files were not written" >&2
+  exit 1
+fi
+printf '{"status":"ok","run_id":"%s"}\n' "$RUN_ID" >"$LOG_ROOT/run_complete.json"

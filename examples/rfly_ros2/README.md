@@ -4,7 +4,7 @@
 
 ## 已验证运行
 
-`outputs/rfly_full_demo_20260823_211000/` 为 `rain_wind_3ddisplay` 的最终已通过运行：55.97 秒、30 FPS、1407 个在线视觉帧（22.69 FPS）、1369 个确认跟踪帧、81.4% 目标居中率；4 次物理遮挡后的重捕获均成功，最长 1.078 秒；ROS2 的 7 类话题均收到有效消息，车辆重叠为零，最小安全间隙为 0.001147 m。
+`outputs/rfly_full_demo_20260823_211000/` 是一次 `rain_wind_3ddisplay` 运行：55.97 秒、30 FPS、1407 个在线视觉帧（22.69 FPS）、1369 个确认目标输出帧、81.4% 目标居中率；4 次物理遮挡后的重捕获均成功，最长 1.078 秒；16.99 秒 ROS2 采样窗口内 7 类话题均有消息计数，车辆重叠为零，最小安全间隙为 0.001147 m。固定逻辑目标标签不等同于原始 BoT-SORT ID 稳定性，且当前历史输出缺少完整 payload manifest，不能把它表述为完整 ROS 证据包。
 
 详细报告见 `FINAL_REPORT_ZH.md`。
 
@@ -27,7 +27,7 @@
 | `clear_grasslands` | Grasslands | 晴天、无动态障碍 |
 | `rain_3ddisplay` | 3DDisplay | 雨、风、动态大型遮挡 |
 | `strong_wind_3ddisplay` | 3DDisplay | 强风、动态大型遮挡 |
-| `rain_wind_3ddisplay` | Grasslands | 14 m/s 风、雨滴、雾化、模糊、动态大型遮挡 |
+| `rain_wind_3ddisplay` | Grasslands | 视觉雨滴/雾化/模糊、目标运动扰动、动态大型遮挡 |
 | `fog_3ddisplay` | 3DDisplay | 浓雾、模糊、动态大型遮挡 |
 | `snow_3ddisplay` | 3DDisplay | 雪、雾化、动态大型遮挡 |
 | `city_clear` | OldFactory | 城市/工厂障碍、动态大型遮挡 |
@@ -46,7 +46,7 @@
   -Python "C:\Users\911MT\AppData\Local\Programs\Python\Python311\python.exe"
 ```
 
-成功时输出目录包含 `uav_live.mp4`、`decision_god_view.mp4`、`validation.json`、`detection_summary.json`、`tracks.csv`、`scene_telemetry.jsonl`、`capture_summary.json` 和 `evidence_manifest.json`。录制的 UAV 画面保留原始 RGB 可读性，遮挡退化只作用于检测输入；视频状态栏仍显示物理遮挡和重捕获阶段。
+成功时输出目录包含 `uav_live.mp4`、`decision_god_view.mp4`、`validation.json`、`detection_summary.json`、`tracks.csv`、`scene_telemetry.jsonl`、`capture_summary.json`、`evidence_manifest.json` 和 7 类首条有效 payload YAML。编排器会逐一验证这些文件已从 VM 下载，验证器也会检查 manifest 与 YAML 是否完整。录制的 UAV 画面保留原始 RGB 可读性，遮挡退化只作用于检测输入；视频状态栏仍显示物理遮挡和重捕获阶段。
 
 Windows 编排脚本会在存在物理遮挡事件时，根据首个视频/ROS 遮挡事件自动估计时间偏移，并把 `telemetry_offset_s` 写入 `decision_god_view.json`；没有物理遮挡的场景使用显式的 `0.0s` 默认值，不能把它当作跨主机时钟同步证明。
 

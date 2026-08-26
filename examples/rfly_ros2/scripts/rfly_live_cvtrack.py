@@ -9,6 +9,7 @@ import socket
 import sys
 import threading
 import time
+from collections import deque
 import types
 from pathlib import Path
 
@@ -61,6 +62,9 @@ REACQUISITION_LOSS_DEBOUNCE_SECONDS = 0.35
 REACQUISITION_ARM_STABLE_SECONDS = 1.5
 STABLE_CAMERA_CARRIER_ID = 1
 SCENARIO_CONFIG_PATH = Path(__file__).with_name("scenario_presets.json")
+WORLD_SENSOR_MOUNT_TYPE = 2
+WORLD_SENSOR_UPDATE_INTERVAL_S = 0.10
+WORLD_SENSOR_POSITION_EPSILON_M = 0.20
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,6 +75,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument(
+        "--calibration-observations",
+        type=Path,
+        help="optional JSONL of RGB boxes paired with the latest scene status",
+    )
     parser.add_argument("--udp-host", default="127.0.0.1")
     parser.add_argument("--udp-port", type=int, default=35661)
     parser.add_argument(
@@ -89,8 +98,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--view-cycle-s",
         type=float,
-        default=0.0,
-        help="reserved for a multi-sensor setup; native Rfly RGB stays on UAV1",
+        default=3.0,
+        help="seconds to dwell at a search UAV before switching viewpoints",
     )
     return parser.parse_args()
 
@@ -307,18 +316,28 @@ def draw_status(
             cv2.line(frame, start, end, color, 2, cv2.LINE_AA)
 
 
+def box_is_inside_safe_margin(box: Box, frame_width: int, frame_height: int) -> bool:
+    margin = max(24, int(min(frame_width, frame_height) * 0.035))
+    return (
+        box.x1 >= margin
+        and box.y1 >= margin
+        and box.x2 <= frame_width - margin
+        and box.y2 <= frame_height - margin
+    )
+
+
 def blue_target_detections(frame, saturation_floor: int = 115):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, (84, saturation_floor, 52), (120, 255, 255))
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_CLOSE,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
     )
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
     )
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     frame_area = float(frame.shape[0] * frame.shape[1])
@@ -326,12 +345,11 @@ def blue_target_detections(frame, saturation_floor: int = 115):
     for contour in contours:
         area = float(cv2.contourArea(contour))
         x, y, width, height = cv2.boundingRect(contour)
-        if area < max(260.0, frame_area * 0.0002) or width < 18 or height < 14:
-            continue
-        if x <= 8 or y <= 8 or x + width >= frame.shape[1] - 8 or y + height >= frame.shape[0] - 8:
+        if area < max(80.0, frame_area * 0.00006) or width < 10 or height < 8:
             continue
         fill = area / max(float(width * height), 1.0)
-        if fill < 0.08:
+        aspect_ratio = width / max(float(height), 1.0)
+        if fill < 0.16 or not 0.45 <= aspect_ratio <= 2.8:
             continue
         candidates.append(
             Box(
@@ -393,7 +411,11 @@ def main() -> None:
     args = parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     vision_stress = load_vision_stress(args.scenario)
-    saturation_floor = 70 if float(vision_stress["fog_alpha"]) >= 0.10 else 105
+    saturation_floor = (
+        70
+        if float(vision_stress["fog_alpha"]) >= 0.10
+        else (80 if int(vision_stress["rain_density"]) > 0 else 105)
+    )
     detector = make_detector(
         "yolo",
         weights=str(args.weights.resolve()),
@@ -409,7 +431,7 @@ def main() -> None:
         return BoTSortTracker(
             dt=0.05,
             max_age=18,
-            n_init=1,
+            n_init=2,
             stationary_prune=False,
             use_cmc=True,
             iou_thresh=0.18,
@@ -424,7 +446,7 @@ def main() -> None:
     time.sleep(0.8)
     sensor = capture.VisSensor[0]
     sensor.TargetCopter = STABLE_CAMERA_CARRIER_ID
-    sensor.TargetMountType = 0
+    sensor.TargetMountType = WORLD_SENSOR_MOUNT_TYPE
     capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
     time.sleep(0.3)
     if not capture.sendReqToUE4(0, "127.0.0.1"):
@@ -454,11 +476,11 @@ def main() -> None:
         raise RuntimeError(f"Could not open {args.output}")
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setblocking(False)
-    status_socket = udp
+    status_socket = None
     if args.status_udp_port > 0:
         status_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         status_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        status_socket.bind(("127.0.0.1", args.status_udp_port))
+        status_socket.bind(("0.0.0.0", args.status_udp_port))
         status_socket.setblocking(False)
     csv_file = args.csv.open("w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
@@ -476,6 +498,12 @@ def main() -> None:
         "y2",
         "confirmed",
     ])
+    calibration_file = None
+    if args.calibration_observations is not None:
+        args.calibration_observations.parent.mkdir(parents=True, exist_ok=True)
+        calibration_file = args.calibration_observations.open(
+            "w", encoding="utf-8", buffering=1
+        )
 
     started_at = time.monotonic()
     frame_index = 0
@@ -484,7 +512,6 @@ def main() -> None:
     semantic_detection_frames = 0
     hybrid_detection_frames = 0
     yolo_vehicle_confirmation_frames = 0
-    unique_ids: set[int] = set()
     raw_tracker_ids: set[int] = set()
     overlay_lock = threading.Lock()
     overlay_tracks = []
@@ -529,21 +556,133 @@ def main() -> None:
     physical_dropout_focus_box = None
     physical_reacquisition_events = []
     next_view_cycle_at = max(float(args.view_cycle_s), 0.0)
+    sensor_pose_updates = 0
+    last_sensor_pose = tuple(float(value) for value in sensor.SensorPosXYZ)
+    last_sensor_scene_time_s = None
+    sensor_pose_history = deque(maxlen=480)
+    scene_status_history = deque(maxlen=480)
+    scene_time_offset_s = None
+    last_processed_frame_timestamp_s = None
+    last_sensor_pose_update_at = -float("inf")
+    calibration_observations_written = 0
+    calibration_observations_missing_truth = 0
+    calibration_observations_missing_pose = 0
+
+    def update_world_sensor_pose(
+        status: dict,
+        host_id: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        nonlocal last_sensor_pose, last_sensor_scene_time_s
+        nonlocal last_sensor_pose_update_at, sensor_pose_updates
+        if host_id not in (1, 2, 3):
+            return
+        uavs = status.get("uavs")
+        if not isinstance(uavs, dict):
+            return
+        pose = uavs.get(str(host_id))
+        if pose is None:
+            pose = uavs.get(host_id)
+        if not isinstance(pose, (list, tuple)) or len(pose) < 3:
+            return
+        try:
+            desired_pose = (
+                float(pose[0]),
+                float(pose[1]),
+                -abs(float(pose[2])),
+            )
+        except (TypeError, ValueError):
+            return
+        try:
+            scene_time_s = float(status.get("time_s"))
+        except (TypeError, ValueError):
+            scene_time_s = None
+        if scene_time_s is not None and np.isfinite(scene_time_s):
+            last_sensor_scene_time_s = scene_time_s
+        now = time.monotonic()
+        position_changed = max(
+            abs(current - previous)
+            for current, previous in zip(desired_pose, last_sensor_pose)
+        ) >= WORLD_SENSOR_POSITION_EPSILON_M
+        if (
+            not force
+            and not position_changed
+            and now - last_sensor_pose_update_at < WORLD_SENSOR_UPDATE_INTERVAL_S
+        ):
+            if last_sensor_scene_time_s is not None:
+                sensor_pose_history.append((last_sensor_scene_time_s, desired_pose))
+            return
+        sensor = capture.VisSensor[0]
+        sensor.TargetCopter = STABLE_CAMERA_CARRIER_ID
+        sensor.TargetMountType = WORLD_SENSOR_MOUNT_TYPE
+        sensor.SensorPosXYZ = list(desired_pose)
+        sensor.SensorAngEular = [0.0, -90.0, 0.0]
+        capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
+        last_sensor_pose = desired_pose
+        last_sensor_pose_update_at = now
+        sensor_pose_updates += 1
+        if last_sensor_scene_time_s is not None:
+            sensor_pose_history.append((last_sensor_scene_time_s, desired_pose))
+
+    def record_scene_status(status: dict) -> None:
+        nonlocal scene_status, scene_time_offset_s
+        if status.get("type") != "rfly_scene_status":
+            return
+        scene_status = status
+        try:
+            scene_time_s = float(status.get("time_s"))
+        except (TypeError, ValueError):
+            scene_time_s = None
+        if scene_time_s is not None and np.isfinite(scene_time_s):
+            measured_offset_s = scene_time_s - time.time()
+            if scene_time_offset_s is None:
+                scene_time_offset_s = measured_offset_s
+            else:
+                scene_time_offset_s = (
+                    0.15 * measured_offset_s + 0.85 * scene_time_offset_s
+                )
+            scene_status_history.append(status)
+        update_world_sensor_pose(status, active_host_id)
+
+    def status_for_scene_time(scene_time_s: float | None) -> dict:
+        if scene_time_s is None or not scene_status_history:
+            return scene_status
+        candidates = [
+            status
+            for status in scene_status_history
+            if isinstance(status.get("time_s"), (int, float))
+        ]
+        if not candidates:
+            return scene_status
+        nearest = min(
+            candidates,
+            key=lambda status: abs(float(status["time_s"]) - scene_time_s),
+        )
+        if abs(float(nearest["time_s"]) - scene_time_s) <= 0.35:
+            return nearest
+        return scene_status
+
+    def pose_for_scene_time(
+        scene_time_s: float | None,
+    ) -> tuple[float, float, float]:
+        if scene_time_s is None or not sensor_pose_history:
+            return last_sensor_pose
+        candidates = [
+            item for item in sensor_pose_history if item[0] <= scene_time_s + 0.05
+        ]
+        return candidates[-1][1] if candidates else sensor_pose_history[0][1]
 
     def switch_sensor_host(host_id: int) -> None:
         nonlocal active_host_since, sensor_settle_until
-        sensor = capture.VisSensor[0]
-        if sensor.TargetCopter != STABLE_CAMERA_CARRIER_ID:
-            sensor.TargetCopter = STABLE_CAMERA_CARRIER_ID
-            capture.sendUpdateUEImage(sensor, 0, "127.0.0.1")
         sensor_settle_until = time.monotonic() + min(SENSOR_SETTLE_SECONDS, 0.35)
         active_host_since = sensor_settle_until
+        if scene_status:
+            update_world_sensor_pose(scene_status, host_id, force=True)
 
     def switch_active_host(host_id: int, reason: str, event_time_s: float) -> None:
         nonlocal active_host_id, active_host_since
         nonlocal overlay_handoff_text, overlay_handoff_until
-        if host_id != STABLE_CAMERA_CARRIER_ID:
-            return
         if host_id == active_host_id:
             return
         previous_host = active_host_id
@@ -630,7 +769,7 @@ def main() -> None:
             if time.monotonic() < sensor_settle_until:
                 time.sleep(0.02)
                 continue
-            while True:
+            while status_socket is not None:
                 try:
                     status_payload, _ = status_socket.recvfrom(65535)
                 except (BlockingIOError, ConnectionResetError):
@@ -639,10 +778,34 @@ def main() -> None:
                     status = json.loads(status_payload.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     continue
-                if status.get("type") == "rfly_scene_status":
-                    scene_status = status
+                record_scene_status(status)
             with capture.Img_lock[sensor_index]:
                 raw_frame = capture.Img[sensor_index].copy()
+                try:
+                    frame_timestamp_s = float(
+                        np.asarray(capture.imgStmp[sensor_index]).reshape(-1)[0]
+                    )
+                except (AttributeError, IndexError, TypeError, ValueError):
+                    frame_timestamp_s = None
+            if (
+                frame_timestamp_s is not None
+                and np.isfinite(frame_timestamp_s)
+                and last_processed_frame_timestamp_s is not None
+                and frame_timestamp_s <= last_processed_frame_timestamp_s + 1e-6
+            ):
+                time.sleep(0.01)
+                continue
+            if frame_timestamp_s is not None and np.isfinite(frame_timestamp_s):
+                last_processed_frame_timestamp_s = frame_timestamp_s
+                frame_scene_time_s = (
+                    frame_timestamp_s + scene_time_offset_s
+                    if scene_time_offset_s is not None
+                    else last_sensor_scene_time_s
+                )
+            else:
+                frame_scene_time_s = last_sensor_scene_time_s
+            frame_status = status_for_scene_time(frame_scene_time_s)
+            frame_sensor_pose = pose_for_scene_time(frame_scene_time_s)
             now = time.monotonic() - started_at
             frame, stress_active = apply_vision_stress(
                 raw_frame,
@@ -655,12 +818,10 @@ def main() -> None:
             physical_occlusion_now = bool(
                 scene_status.get("physical_occlusion_engaged", False)
             )
-            physical_dropout_active = (
-                physical_occlusion_now
-                and physical_occlusion_active_since is not None
-                and now - physical_occlusion_active_since
-                <= PHYSICAL_SENSOR_DROPOUT_SECONDS
-            )
+            # Strict Rfly runs assess only the rendered camera image.  A real
+            # occluder must cause the loss itself; no post-capture blur or
+            # desaturation is allowed to manufacture a reacquisition event.
+            physical_dropout_active = False
             if physical_dropout_active:
                 raw_focus_boxes = blue_target_detections(
                     frame,
@@ -706,8 +867,8 @@ def main() -> None:
                     yolo_vehicle_confirmation_frames += 1
             tracks = trackers[host_id].step(perception_frame, detections)
             for track in tracks:
-                if track.misses == 0 and track.box.score >= 0.90 and track.hits >= 1:
-                    track.confirmed = True
+                if not box_is_inside_safe_margin(track.box, host_width, host_height):
+                    track.confirmed = False
             tracks = [
                 track
                 for track in tracks
@@ -732,6 +893,35 @@ def main() -> None:
                 center_x = (primary_track.box.x1 + primary_track.box.x2) / (2.0 * host_width)
                 center_y = (primary_track.box.y1 + primary_track.box.y2) / (2.0 * host_height)
                 center_error = float(np.hypot(center_x - 0.5, center_y - 0.5))
+                if calibration_file is not None:
+                    target_truth = frame_status.get("target_truth")
+                    pose = frame_sensor_pose
+                    if (
+                        isinstance(target_truth, dict)
+                        and len(pose) >= 3
+                    ):
+                        calibration_file.write(json.dumps({
+                            "wall_time_s": round(now, 6),
+                            "scene_time_s": frame_scene_time_s,
+                            "frame_timestamp_s": frame_timestamp_s,
+                            "host_id": host_id,
+                            "image_x": (primary_track.box.x1 + primary_track.box.x2) / 2.0,
+                            "image_y": (primary_track.box.y1 + primary_track.box.y2) / 2.0,
+                            "image_width": host_width,
+                            "image_height": host_height,
+                            "confidence": float(primary_track.box.score),
+                            "camera_fov_deg": float(sensor.CameraFOV),
+                            "camera_pose": [float(value) for value in pose[:3]],
+                            "target_truth": {
+                                "x": float(target_truth["x"]),
+                                "y": float(target_truth["y"]),
+                            },
+                        }) + "\n")
+                        calibration_observations_written += 1
+                    elif not isinstance(target_truth, dict):
+                        calibration_observations_missing_truth += 1
+                    else:
+                        calibration_observations_missing_pose += 1
                 confirmed_center_errors.append(center_error)
                 confirmed_frame_count += 1
                 if abs(center_x - 0.5) <= 0.25 and abs(center_y - 0.5) <= 0.25:
@@ -765,7 +955,14 @@ def main() -> None:
                 lock_acquired = True
                 next_view_cycle_at = now + max(args.view_cycle_s, 1.0)
             else:
-                continuous_lock_started_at = None
+                if (
+                    last_confirmed_detection_at <= -1e8
+                    or now - last_confirmed_detection_at
+                    >= REACQUISITION_LOSS_DEBOUNCE_SECONDS
+                ):
+                    continuous_lock_started_at = None
+                if tracks:
+                    next_view_cycle_at = max(next_view_cycle_at, now + SEARCH_DWELL_SECONDS)
             if (
                 not confirmed_now
                 and reacquisition_armed
@@ -807,7 +1004,6 @@ def main() -> None:
             packet_tracks = []
             for track in tracks:
                 logical_track_id = 1
-                unique_ids.add(10000 + logical_track_id)
                 raw_tracker_ids.add(host_id * 10000 + int(track.track_id))
                 confirmed = bool(track.confirmed)
                 if confirmed:
@@ -847,6 +1043,10 @@ def main() -> None:
                 "host_id": host_id,
                 "active_host": active_host_id,
                 "scenario": args.scenario,
+                "sensor_fov_deg": float(sensor.CameraFOV),
+                "sensor_scene_time_s": frame_scene_time_s,
+                "frame_timestamp_s": frame_timestamp_s,
+                "sensor_pose": [float(value) for value in frame_sensor_pose],
                 "perception_stress": {
                     "active_sensor_occlusion": stress_active,
                     **vision_stress,
@@ -855,7 +1055,7 @@ def main() -> None:
             }).encode("utf-8")
             udp.sendto(payload, (args.udp_host, args.udp_port))
             packets_sent += 1
-            while True:
+            while status_socket is not None:
                 try:
                     status_payload, _ = status_socket.recvfrom(65535)
                 except (BlockingIOError, ConnectionResetError):
@@ -864,8 +1064,7 @@ def main() -> None:
                     status = json.loads(status_payload.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     continue
-                if status.get("type") == "rfly_scene_status":
-                    scene_status = status
+                record_scene_status(status)
             physical_occlusion_now = bool(
                 scene_status.get("physical_occlusion_engaged", False)
             )
@@ -944,7 +1143,9 @@ def main() -> None:
         record_thread.join(timeout=3.0)
         writer.release()
         csv_file.close()
-        if status_socket is not udp:
+        if calibration_file is not None:
+            calibration_file.close()
+        if status_socket is not None:
             status_socket.close()
         udp.close()
 
@@ -981,7 +1182,7 @@ def main() -> None:
             "udp_packets_sent": packets_sent,
             "visual_udp_port": args.udp_port,
             "status_udp_port": args.status_udp_port,
-            "unique_track_ids": sorted(unique_ids),
+            "raw_tracker_fragment_count": len(raw_tracker_ids),
             "raw_tracker_ids": sorted(raw_tracker_ids),
             "confirmed_track_rows": confirmed_rows,
             "tracking_centering": {
@@ -1004,11 +1205,18 @@ def main() -> None:
             "hybrid_detection_frames": hybrid_detection_frames,
             "yolo_vehicle_confirmation_frames": yolo_vehicle_confirmation_frames,
             "sensor_count": sensor_count,
+            "sensor_mount_type": WORLD_SENSOR_MOUNT_TYPE,
+            "sensor_world_pose_updates": sensor_pose_updates,
+            "calibration_observations": {
+                "enabled": calibration_file is not None,
+                "written": calibration_observations_written,
+                "missing_truth": calibration_observations_missing_truth,
+                "missing_pose": calibration_observations_missing_pose,
+            },
             "search_host_count": 3,
             "camera_handoff": (
-                "single native UAV1 RGB carrier; no logical viewpoint is used for "
-                "world-coordinate control because Rfly Free dynamic TargetCopter remount "
-                "does not provide a reliable timestamped handoff"
+                "single native RGB sensor uses fixed world coordinates and switches "
+                "between the three simulated UAV viewpoints from scene status"
             ),
             "host_switches": host_switches,
             "ros_target_topic": "/target_track_world",

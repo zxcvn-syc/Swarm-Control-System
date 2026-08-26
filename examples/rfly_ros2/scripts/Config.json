@@ -6,16 +6,16 @@
       "SeqID": 1,
       "TypeID": 1,
       "TargetCopter": 1,
-      "TargetMountType": 0,
+      "TargetMountType": 2,
       "DataWidth": 1280,
       "DataHeight": 720,
       "DataCheckFreq": 20,
       "SendProtocol": [0, 0, 0, 0, 0, 0, 0, 0],
       "CameraFOV": 90.0,
       "EularOrQuat": 0,
-      "SensorPosXYZ": [1.2, 0.0, 0.35],
+      "SensorPosXYZ": [24.0, 28.0, -76.0],
       "SensorAngQuat": [0.0, 0.0, 0.0, 0.0],
-      "SensorAngEular": [0.0, -38.0, 0.0],
+      "SensorAngEular": [0.0, -90.0, 0.0],
       "otherParams": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     }
   ]

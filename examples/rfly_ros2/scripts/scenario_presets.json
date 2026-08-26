@@ -17,7 +17,7 @@
     "bump_scale": 0.42,
     "wind_speed_mps": 4.0,
     "wind_direction_deg": 20.0,
-    "physical_occlusion": {"enabled": true, "period_s": 12.0, "duration_s": 4.5, "start_s": 10.0, "occluder_id": 421},
+    "physical_occlusion": {"enabled": true, "period_s": 14.0, "duration_s": 4.0, "start_s": 0.0, "occluder_id": 421},
     "vision_stress": {"fog_alpha": 0.08, "rain_density": 120, "snow_density": 0, "blur_kernel": 3, "occlusion_period_s": 0.0, "occlusion_duration_s": 0.0, "synthetic_occlusion": false}
   },
   "strong_wind_3ddisplay": {

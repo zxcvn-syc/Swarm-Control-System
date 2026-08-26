@@ -1,5 +1,6 @@
 param(
     [int]$Duration = 55,
+    [int]$TailSeconds = 18,
     [string]$Scenario = "rain_wind_3ddisplay",
     [string]$VmHost = "192.168.88.135",
     [string]$VmUser = "hhh",
@@ -7,6 +8,7 @@ param(
     [string]$DemoRoot = "/home/hhh/Downloads/cvtrack-rfly-enhanced-20260821",
     [string]$OutputRoot = "",
     [string]$RflySdkRoot = "F:\RflySimAPIs\RflySimSDK",
+    [int]$Ue4BridgePort = 30010,
     [string]$Python = "python"
 )
 
@@ -31,6 +33,24 @@ if (-not (Test-Path $weights)) {
 $runId = "rfly_{0}" -f (Get-Date -Format "yyyyMMdd_HHmmss")
 $remoteLog = "$DemoRoot/logs/$runId"
 $sshTarget = "$VmUser@$VmHost"
+$liveDuration = $Duration + $TailSeconds
+$remoteRunSeconds = $liveDuration + 20
+$bridgeProcess = $null
+$bridgeScript = Join-Path $repoRoot "tools\rfly_ue4_udp_bridge.py"
+$bridgeListener = Get-NetUDPEndpoint -LocalPort $Ue4BridgePort -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $bridgeListener) {
+    $bridgeLog = Join-Path $OutputRoot "ue4_udp_bridge.log"
+    $bridgeArgs = "`"$bridgeScript`" --listen-host 0.0.0.0 --listen-port $Ue4BridgePort --target-host 127.0.0.1 --target-port 20010"
+    $bridgeProcess = Start-Process -FilePath $Python -ArgumentList $bridgeArgs -RedirectStandardOutput $bridgeLog -RedirectStandardError "$bridgeLog.err" -PassThru -WindowStyle Hidden
+    $bridgeDeadline = (Get-Date).AddSeconds(5)
+    do {
+        Start-Sleep -Milliseconds 150
+        $bridgeListener = Get-NetUDPEndpoint -LocalPort $Ue4BridgePort -ErrorAction SilentlyContinue | Select-Object -First 1
+    } while ($null -eq $bridgeListener -and (Get-Date) -lt $bridgeDeadline)
+    if ($null -eq $bridgeListener) {
+        throw "UE4 UDP bridge did not bind port $Ue4BridgePort. See $bridgeLog.err."
+    }
+}
 $remoteCommand = @"
 source /opt/ros/humble/setup.bash
 source /home/hhh/Downloads/Swarm-Control-System/ros2_ws/install_validation/setup.bash
@@ -39,14 +59,14 @@ export ROS2_SETUP=/home/hhh/Downloads/Swarm-Control-System/ros2_ws/install_valid
 export RFLY_LOG_ROOT='$remoteLog'
 export RFLY_SDK_ROOT='$DemoRoot/rfly_sdk'
 export RFLY_HOST_IP=192.168.88.1
-export RFLY_UE4_BRIDGE_HOST=127.0.0.1
-export RFLY_UE4_BRIDGE_PORT=30010
-export RFLY_STATUS_BRIDGE_HOST=127.0.0.1
-export RFLY_STATUS_BRIDGE_PORT=30011
+export RFLY_UE4_BRIDGE_HOST=192.168.88.1
+export RFLY_UE4_BRIDGE_PORT=$Ue4BridgePort
+export RFLY_STATUS_BRIDGE_HOST=192.168.88.1
+export RFLY_STATUS_BRIDGE_PORT=35671
 export RFLY_VISION_PORT=35687
 export RFLY_RUN_ID='$runId'
-export RFLY_EVIDENCE_DURATION=$Duration
-exec '$DemoRoot/scripts/run_ros_chain.sh' $Duration '$Scenario'
+export RFLY_EVIDENCE_DURATION=$remoteRunSeconds
+exec '$DemoRoot/scripts/run_ros_chain.sh' $remoteRunSeconds '$Scenario'
 "@
 $remoteCommand = ($remoteCommand -replace "`r?`n", "; ")
 
@@ -59,6 +79,37 @@ $sshArgs = @(
     "-i", $SshKey,
     $sshTarget
 )
+$remoteSceneFile = Join-Path $scriptRoot "rfly_ros_scene.py"
+& scp -q -i $SshKey $remoteSceneFile "$sshTarget`:$DemoRoot/scripts/"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sync $remoteSceneFile to $DemoRoot/scripts/."
+}
+$remoteScenarioFile = Join-Path $scriptRoot "scenario_presets.json"
+& scp -q -i $SshKey $remoteScenarioFile "$sshTarget`:$DemoRoot/scripts/"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sync $remoteScenarioFile to $DemoRoot/scripts/."
+}
+$remoteChainFile = Join-Path $scriptRoot "run_ros_chain.sh"
+& scp -q -i $SshKey $remoteChainFile "$sshTarget`:$DemoRoot/scripts/"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sync $remoteChainFile to $DemoRoot/scripts/."
+}
+& ssh @sshArgs "find '$DemoRoot/scripts/__pycache__' -maxdepth 1 -type f -name 'rfly_ros_scene.*.pyc' -delete"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not clear the remote Rfly scene bytecode cache."
+}
+$calibrationFile = if ($Scenario -like "*_3ddisplay") {
+    Join-Path $scriptRoot "rfly_world_sensor_calibration_3ddisplay.json"
+} else {
+    Join-Path $scriptRoot "rfly_world_sensor_calibration.json"
+}
+if (-not (Test-Path $calibrationFile)) {
+    throw "No camera-ground calibration is available for scenario $Scenario."
+}
+& scp -q -i $SshKey $calibrationFile "$sshTarget`:$DemoRoot/scripts/rfly_world_sensor_calibration.json"
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sync calibration $calibrationFile to $DemoRoot/scripts/."
+}
 $sshProcess = Start-Process -FilePath "ssh" -ArgumentList ($sshArgs + $remoteCommand) -RedirectStandardOutput (Join-Path $OutputRoot "ros_chain_launcher.log") -RedirectStandardError (Join-Path $OutputRoot "ros_chain_launcher.err") -PassThru -WindowStyle Hidden
 try {
     Start-Sleep -Seconds 4
@@ -80,11 +131,11 @@ try {
     $summary = Join-Path $OutputRoot "detection_summary.json"
     $liveArgs = @(
         (Join-Path $scriptRoot "rfly_live_cvtrack.py"),
-        "--duration", $Duration,
+        "--duration", $liveDuration,
         "--config", $config,
         "--weights", $weights,
         "--scenario", $Scenario,
-        "--udp-host", "127.0.0.1",
+        "--udp-host", $VmHost,
         "--udp-port", "35687",
         "--status-udp-port", "35671",
         "--output", $video,
@@ -97,10 +148,37 @@ try {
         throw "Live capture failed with exit code $LASTEXITCODE."
     }
 
+    $remoteTimeoutSeconds = $remoteRunSeconds + 60
+    if (-not $sshProcess.WaitForExit([int]($remoteTimeoutSeconds * 1000))) {
+        throw "Remote ROS chain did not finish before evidence deadline."
+    }
+    $sshProcess.WaitForExit()
+    $sshProcess.Refresh()
+    $remoteExitCode = $sshProcess.ExitCode
+    if ($null -eq $remoteExitCode) {
+        $completionProbe = & ssh @sshArgs "test -s '$remoteLog/run_complete.json' && cat '$remoteLog/run_complete.json'" 2>$null
+        if (($completionProbe -join "") -match '"status"\s*:\s*"ok"') {
+            $remoteExitCode = 0
+        } else {
+            throw "Remote ROS chain exited but did not report an exit code or completion marker. See $OutputRoot\\ros_chain_launcher.err."
+        }
+    }
+    if ($remoteExitCode -ne 0) {
+        throw "Remote ROS chain failed with exit code $remoteExitCode. See $OutputRoot\\ros_chain_launcher.err."
+    }
+
     $remoteTelemetry = Join-Path $OutputRoot "scene_telemetry.jsonl"
-    & scp -q -i $SshKey "$sshTarget`:$remoteLog/scene_telemetry.jsonl" $remoteTelemetry
-    & scp -q -i $SshKey "$sshTarget`:$remoteLog/capture_summary.json" (Join-Path $OutputRoot "capture_summary.json")
-    & scp -q -i $SshKey "$sshTarget`:$remoteLog/evidence_manifest.json" (Join-Path $OutputRoot "evidence_manifest.json")
+    function Copy-RemoteEvidenceFile {
+        param([string]$RemoteName, [string]$Destination)
+        & scp -q -i $SshKey "$sshTarget`:$remoteLog/$RemoteName" $Destination
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $Destination -PathType Leaf)) {
+            throw "Could not retrieve required ROS evidence: $RemoteName"
+        }
+    }
+    Copy-RemoteEvidenceFile "scene_telemetry.jsonl" $remoteTelemetry
+    Copy-RemoteEvidenceFile "run_complete.json" (Join-Path $OutputRoot "run_complete.json")
+    Copy-RemoteEvidenceFile "capture_summary.json" (Join-Path $OutputRoot "capture_summary.json")
+    Copy-RemoteEvidenceFile "evidence_manifest.json" (Join-Path $OutputRoot "evidence_manifest.json")
     $evidenceFiles = @(
         "task_assignment.yaml",
         "planned_path.yaml",
@@ -111,7 +189,7 @@ try {
         "ground_vehicle_states.yaml"
     )
     foreach ($evidenceFile in $evidenceFiles) {
-        & scp -q -i $SshKey "$sshTarget`:$remoteLog/$evidenceFile" (Join-Path $OutputRoot $evidenceFile)
+        Copy-RemoteEvidenceFile $evidenceFile (Join-Path $OutputRoot $evidenceFile)
     }
     $decisionVideo = Join-Path $OutputRoot "decision_god_view.mp4"
     $decisionSummary = Join-Path $OutputRoot "decision_god_view.json"
@@ -142,7 +220,7 @@ try {
         throw "Decision visualization failed with exit code $LASTEXITCODE."
     }
     $validation = Join-Path $OutputRoot "validation.json"
-    & $Python (Join-Path $scriptRoot "validate_rfly_run.py") --summary $summary --telemetry $remoteTelemetry --video $video --ros-summary (Join-Path $OutputRoot "capture_summary.json") --output $validation --require-physical-occlusion --maximum-reacquisition-seconds 3.0 --minimum-centered-track-ratio 0.35 --minimum-online-fps 10
+    & $Python (Join-Path $scriptRoot "validate_rfly_run.py") --summary $summary --telemetry $remoteTelemetry --video $video --ros-summary (Join-Path $OutputRoot "capture_summary.json") --evidence-manifest (Join-Path $OutputRoot "evidence_manifest.json") --output $validation --require-physical-occlusion --maximum-reacquisition-seconds 3.0 --minimum-centered-track-ratio 0.35 --minimum-online-fps 10
     if ($LASTEXITCODE -ne 0) {
         throw "Validation failed with exit code $LASTEXITCODE."
     }
@@ -156,6 +234,9 @@ finally {
     }
     if ($sshProcess -and -not $sshProcess.HasExited) {
         Stop-Process -Id $sshProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($bridgeProcess -and -not $bridgeProcess.HasExited) {
+        Stop-Process -Id $bridgeProcess.Id -Force -ErrorAction SilentlyContinue
     }
 }
 
