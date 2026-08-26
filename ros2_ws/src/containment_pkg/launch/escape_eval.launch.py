@@ -43,11 +43,18 @@ def generate_launch_description():
     closed_loop = LaunchConfiguration("closed_loop")
     monitor_orbit = LaunchConfiguration("monitor_orbit")
     block_orbit = LaunchConfiguration("block_orbit")
+    force_invalid = LaunchConfiguration("force_invalid")
 
     return LaunchDescription([
         DeclareLaunchArgument("scene", default_value="park"),
         DeclareLaunchArgument("direction", default_value="2"),
-        DeclareLaunchArgument("trajectory", default_value="return"),
+        DeclareLaunchArgument("trajectory", default_value="sample",
+                              description="Target trajectory for this run. A "
+                                          "concrete mode (return|oscillate|"
+                                          "straight) is FORCED; the sentinel "
+                                          "'sample' draws from the scene's "
+                                          "trajectory_distribution (used by "
+                                          "the 60-run batch)."),
         DeclareLaunchArgument("speed", default_value="2.0"),
         DeclareLaunchArgument("monitor_radius", default_value="25.0"),
         DeclareLaunchArgument("block_radius", default_value="15.0"),
@@ -76,6 +83,14 @@ def generate_launch_description():
                                           "mode: target only reverses after a "
                                           "platform intercepts it within "
                                           "intercept_radius."),
+        DeclareLaunchArgument("force_invalid", default_value="false",
+                              description="DEBUG/Smoke only: when true the mock "
+                                          "patrol orbits 500 m away so no "
+                                          "platform ever comes within "
+                                          "intercept_radius -> forces an "
+                                          "INVALID verdict (no response "
+                                          "evidence). Use to verify the "
+                                          "evidence gate end-to-end."),
         DeclareLaunchArgument(
             "config_file",
             default_value=PathJoinSubstitution(
@@ -98,6 +113,7 @@ def generate_launch_description():
                 "target_y": start_y,
                 "monitor_orbit": monitor_orbit,
                 "block_orbit": block_orbit,
+                "force_invalid": force_invalid,
                 "num_drones": 3,
                 "num_cars": 2,
             }],

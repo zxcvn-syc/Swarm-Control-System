@@ -52,6 +52,11 @@ class MockPlatformPub(Node):
         # moment a platform is within intercept_radius (no missed INVALID/SUCCESS).
         self.declare_parameter("num_drones", 3)
         self.declare_parameter("num_cars", 2)
+        self.declare_parameter(
+            "force_invalid", False,
+            description="DEBUG/Smoke: orbit 500 m away so no platform comes "
+                        "within intercept_radius -> forces INVALID verdict.",
+        )
         self._publisher = self.create_publisher(
             DroneStateArray, "/drone_states", 10
         )
@@ -93,8 +98,24 @@ class MockPlatformPub(Node):
         tx = self._tx
         ty = self._ty
 
+        # force_invalid smoke mode: park the patrol 500 m out so no platform
+        # ever reaches intercept_radius -> the evaluator must verdict INVALID.
+        force = bool(self.get_parameter("force_invalid").value)
+        if force:
+            mon_orbit = 500.0
+            blk_orbit = 500.0
+        else:
+            mon_orbit = float(self.get_parameter("monitor_orbit").value)
+            blk_orbit = float(self.get_parameter("block_orbit").value)
+        if not getattr(self, "_logged_orbit", False):
+            self.get_logger().info(
+                f"mock_platform_pub orbit mon={mon_orbit:.1f} blk={blk_orbit:.1f} "
+                f"force_invalid={force} (centre captured from /enclosure_targets)"
+            )
+            self._logged_orbit = True
+
         # UAVs on the monitor layer (outer ring)
-        orbit = float(self.get_parameter("monitor_orbit").value)
+        orbit = mon_orbit
         num = int(self.get_parameter("num_drones").value)
         for i in range(num):
             angle = self._phase + 2.0 * math.pi * i / max(num, 1)
@@ -112,7 +133,7 @@ class MockPlatformPub(Node):
             msg.drones.append(s)
 
         # UGVs on the block layer (inner ring)
-        orbit = float(self.get_parameter("block_orbit").value)
+        orbit = blk_orbit
         num = int(self.get_parameter("num_cars").value)
         for i in range(num):
             angle = self._phase + math.pi + 2.0 * math.pi * i / max(num, 1)

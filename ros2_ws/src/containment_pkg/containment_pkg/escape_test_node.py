@@ -245,7 +245,17 @@ class EscapeTestNode(Node):
                 w = float(v)
                 if w > 0:
                     self._traj_probs[str(k)] = w
-        if self._traj_probs:
+        # Honour an explicit launch/CLI trajectory override (e.g. smoke tests
+        # that force `trajectory:=straight` to exercise the FAIL branch); only
+        # fall back to the per-scene distribution when the request is the
+        # sentinel "sample"/"random" or empty.  This keeps the 60-run batch
+        # stochastic (launch default is "sample") while making single runs
+        # reproducible on demand.
+        forced = str(self.get_parameter("trajectory").value)
+        if forced in ("return", "oscillate", "straight"):
+            self._actual_traj = forced
+            self.set_parameters([self._mk_param("trajectory", forced)])
+        elif self._traj_probs:
             self._actual_traj = self._pick_trajectory()
             self.set_parameters([self._mk_param("trajectory", self._actual_traj)])
         # 8-direction weighted distribution -> dir_probs (index order 0..7).
