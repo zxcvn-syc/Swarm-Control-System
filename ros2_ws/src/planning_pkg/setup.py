@@ -17,7 +17,12 @@ data_files = [
             "launch/planning.launch.py",
             "launch/px4_sitl.launch.py",
             "launch/sitl_test.launch.py",
+            "launch/replan_eval.launch.py",
         ],
+    ),
+    (
+        "share/" + package_name + "/scripts",
+        ["scripts/run_with_logging.sh"],
     ),
 ]
 if world_file.is_file():

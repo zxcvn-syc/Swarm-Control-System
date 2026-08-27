@@ -6,6 +6,7 @@ Subscribes:
     /grid_map                   std_msgs/UInt8MultiArray          (grid_map_node)
     /target_track_world         swarm_interfaces/TargetTrackArray (coord_transform_node)
     /drone_pose_external        swarm_interfaces/DroneStateArray  (optional, RflySim pose)
+    /enclosure_targets          swarm_interfaces/EnclosureTargetArray (escape/containment target)
 
 Publishes:
     /drone_states               swarm_interfaces/DroneStateArray  (containment_pkg)
@@ -16,6 +17,7 @@ Publishes:
 
 from __future__ import annotations
 
+import datetime
 import math
 import time
 from typing import Dict, List, Optional, Tuple
@@ -33,6 +35,7 @@ from std_msgs.msg import UInt8MultiArray
 from swarm_interfaces.msg import (
     DroneState,
     DroneStateArray,
+    EnclosureTargetArray,
     TaskAssignment,
     TargetTrackArray,
 )
@@ -115,6 +118,11 @@ class PlannerNode(Node):
         self.declare_parameter("obstacle_cells", [])
         self.declare_parameter("explicit_target_cells", [])
 
+        # 8.27 三场景封控（security 绕障重规划）相关参数
+        self.declare_parameter("enclosure_targets_topic", "/enclosure_targets")
+        self.declare_parameter("scene_config_file", "")   # path to three_scene_config.yaml
+        self.declare_parameter("scene_name", "")          # scene whose obstacles to seed
+
         # Parameter values
         self.num_drones: int = int(self.get_parameter("num_drones").value)
         self.grid_size: int = int(self.get_parameter("grid_size").value)
@@ -135,6 +143,11 @@ class PlannerNode(Node):
         self.grid_topic: str = str(self.get_parameter("grid_topic").value)
         self.target_track_world_topic: str = str(self.get_parameter("target_track_world_topic").value)
         self.drone_states_topic: str = str(self.get_parameter("drone_states_topic").value)
+        self.enclosure_targets_topic: str = str(
+            self.get_parameter("enclosure_targets_topic").value
+        )
+        self.scene_config_file: str = str(self.get_parameter("scene_config_file").value)
+        self.scene_name: str = str(self.get_parameter("scene_name").value)
         self.planned_path_topic: str = str(self.get_parameter("planned_path_topic").value)
         self.rfly_pose_topic: str = str(self.get_parameter("rfly_pose_topic").value)
 
@@ -152,6 +165,17 @@ class PlannerNode(Node):
         obstacle_cells = list(self.get_parameter("obstacle_cells").value or [])
         for spec in obstacle_cells:
             self._apply_obstacle_spec(spec)
+
+        # 8.27 三场景封控：从 three_scene_config.yaml 读取当前 scene 的
+        # obstacles（[[x, y, radius], ...]，世界坐标/米），播种到栅格上，
+        # 使 security 场景的"目标逃逸+绕障重规划"成为场景内真日志。
+        if self.scene_config_file and self.scene_name:
+            n = self._seed_obstacles_from_scene()
+            if n:
+                self.get_logger().info(
+                    f"seeded {n} obstacle cell(s) for scene '{self.scene_name}' "
+                    f"from {self.scene_config_file}"
+                )
 
         self._drone_order: List[int] = list(range(self.num_drones))
         initial_positions = list(self.get_parameter("initial_positions").value or [])
@@ -188,6 +212,11 @@ class PlannerNode(Node):
         self._dstar: Dict[int, _DStarLite] = {}
         self._target_world: Dict[int, Tuple[float, float]] = {}
 
+        # 8.27 逃逸重规划：记录 无人机 -> 追击的 enclosure target_id，以及
+        # 每个 target 最近一次世界坐标（用于检测"目标位置变化"）。
+        self._drone_target_id: Dict[int, int] = {}
+        self._last_enclosure_pos: Dict[int, Tuple[float, float]] = {}
+
         self._last_log_t: float = 0.0
         self._pending_obstacle_changes: List[Tuple[Tuple[int, int], int]] = []
 
@@ -207,6 +236,12 @@ class PlannerNode(Node):
         )
         self.sub_rfly = self.create_subscription(
             DroneStateArray, self.rfly_pose_topic, self.on_rfly_pose, qos
+        )
+        self.sub_enclosure = self.create_subscription(
+            EnclosureTargetArray,
+            self.enclosure_targets_topic,
+            self.on_enclosure_targets,
+            qos,
         )
         self.pub_states = self.create_publisher(
             DroneStateArray, self.drone_states_topic, qos
@@ -459,13 +494,122 @@ class PlannerNode(Node):
         for did in self._drone_path.keys():
             if self.planner_name == "astar" and self._drone_path[did]:
                 self._drone_path[did] = []
-                self._replan_for_drone(did)
+                self._replan_for_drone(did, reason="obstacle_change")
 
-    def _replan_for_drone(self, did: int) -> None:
+    # ----------------------------------------------------------------
+    # Replan event logging (8.27 重规划时延采集)
+    # ----------------------------------------------------------------
+    def _log_replan(self, did: int, reason: str, plan_ms: float) -> None:
+        """Emit a greppable replan event line ('[REPLAN]').
+
+        Captures: wall timestamp, ROS time, drone_id, trigger reason and
+        planning latency in ms.  The collection script greps the keyword
+        ``REPLAN`` to build the replan_event CSV for the 8.27 report.
+        """
+        wall = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+        ros = float(self.get_clock().now().to_msg().sec) + (
+            float(self.get_clock().now().to_msg().nanosec) * 1e-9
+        )
+        path_len = len(self._drone_path.get(did, []))
+        self.get_logger().info(
+            f"[REPLAN] wall={wall} ros={ros:.3f} drone_id={int(did)} "
+            f"reason={reason} plan_ms={plan_ms:.3f} "
+            f"path_len={path_len} planner={self.planner_name}"
+        )
+
+    def _replan_for_drone(self, did: int, reason: str = "target_update") -> None:
         target = self._drone_target.get(did)
         if target is None:
             return
+        start = time.monotonic()
         self._plan_for_drone(did, target)
+        plan_ms = (time.monotonic() - start) * 1000.0
+        self._log_replan(int(did), reason, plan_ms)
+
+    def on_enclosure_targets(self, msg: EnclosureTargetArray) -> None:
+        """Escape/containment target feed.
+
+        When an enclosure target's world position changes, replan every drone
+        pursuing that target (or, for drones with no explicit assignment,
+        bind them to the moving target so the escape-pursuit replan is a real
+        in-scene event).  Emits a ``[REPLAN]`` log via ``_replan_for_drone``.
+        """
+        moved: List[int] = []
+        for tgt in msg.targets:
+            try:
+                tid = int(tgt.target_id)
+                pos = (float(tgt.x), float(tgt.y))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if not (math.isfinite(pos[0]) and math.isfinite(pos[1])):
+                continue
+            self._target_world[tid] = pos
+            last = self._last_enclosure_pos.get(tid)
+            if last is None or abs(pos[0] - last[0]) > 0.01 or abs(pos[1] - last[1]) > 0.01:
+                moved.append(tid)
+            self._last_enclosure_pos[tid] = pos
+
+        if not moved:
+            return
+
+        for did in list(self._drone_order):
+            tid = self._drone_target_id.get(did)
+            if tid is not None and tid not in moved:
+                continue
+            # 无显式绑定的无人机：绑定到第一个移动的逃逸目标（追击模式）
+            if tid is None:
+                tid = int(moved[0])
+                self._drone_target_id[did] = tid
+            if tid not in self._target_world:
+                continue
+            cell = self._world_to_cell(self._target_world[tid])
+            if self._drone_target.get(did) != cell:
+                self._drone_target[did] = cell
+                self._replan_for_drone(did, reason="target_escape_move")
+
+    def _seed_obstacles_from_scene(self) -> int:
+        """Read ``scene.obstacles`` ([[x, y, radius], ...]) from a
+        three_scene_config.yaml and mark blocked cells on the grid.
+
+        Returns the number of cells blocked (0 if scene/config absent).
+        World coords map 1:1 to grid cells (consistent with ``_world_to_cell``).
+        """
+        try:
+            import yaml
+
+            with open(self.scene_config_file, "r", encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+            scene = (data.get("scenes") or {}).get(self.scene_name)
+            if not scene:
+                self.get_logger().warn(
+                    f"scene '{self.scene_name}' not found in {self.scene_config_file}"
+                )
+                return 0
+            obstacles = scene.get("obstacles") or []
+        except Exception as exc:  # pragma: no cover
+            self.get_logger().warn(f"seed_obstacles: could not load config: {exc}")
+            return 0
+
+        s = self.grid_size
+        blocked = 0
+        for entry in obstacles:
+            try:
+                x, y, radius = float(entry[0]), float(entry[1]), float(entry[2])
+            except (TypeError, ValueError, IndexError):
+                self.get_logger().warn(f"obstacle entry ignored: {entry!r}")
+                continue
+            if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(radius)):
+                continue
+            rr = max(1.0, radius)
+            for ry in range(int(round(y - rr)), int(round(y + rr)) + 1):
+                for rx in range(int(round(x - rr)), int(round(x + rr)) + 1):
+                    if not (0 <= rx < s and 0 <= ry < s):
+                        continue
+                    if (rx - x) ** 2 + (ry - y) ** 2 <= rr * rr:
+                        if self._grid[ry, rx] == 0:
+                            self._grid[ry, rx] = 1
+                            blocked += 1
+        return blocked
 
     def _world_to_cell(self, xy: Tuple[float, float]) -> Tuple[int, int]:
         s = self.grid_size
@@ -494,6 +638,12 @@ class PlannerNode(Node):
         """Receive task assignment, plan path, and immediately trigger state broadcast."""
         did = int(msg.drone_id)
         tid = int(msg.target_id)
+        # 记录 无人机 -> 追击的 target_id（供 on_enclosure_targets 复用）。
+        # 防御性地用 getattr：单元测试以 SimpleNamespace mock 调用 on_task 时
+        # 可能未定义 _drone_target_id。
+        target_id_map = getattr(self, "_drone_target_id", None)
+        if target_id_map is not None:
+            target_id_map[did] = tid
         if did in self._drone_target and did in self._explicit_target_set():
             target = self._drone_target[did]
         elif tid in self._target_world:
