@@ -12,7 +12,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,7 @@ DEFAULT_LAUNCHER = SIMULATION_DIR / "px4_sitl_3uav" / "start_3uav_sitl.sh"
 
 
 def utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def positive_integer(value: str) -> int:
