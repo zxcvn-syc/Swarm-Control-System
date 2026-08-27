@@ -78,3 +78,35 @@ ros2 topic echo /enclosure_command   # 3 monitor(UAV,25m) + 2 block(UGV,15m)
 
 - 本方案在真实位姿下验证几何计算正确；若要让 UAV 起飞到 10 m 看 `target_z` 变化，可在任意 `pxh>` 终端执行 `commander takeoff`。
 - 该脚本仅用于 Gazebo 内的 SITL 验证，**不是 PX4 Offboard / 真机飞控**（层 3 视觉封控由 RflySim3D 在何泓林机器上完成，见 `../docs/layer3_rflysim_delivery/`）。
+
+## 批量稳定性验收
+
+`start_3uav_sitl.sh` 也支持受控的非交互模式。传入 `--duration` 后，它仅检查
+`gzserver` 和三个 PX4 子进程在稳定窗口内持续存活，随后写入 `result.json` 并终止
+自己启动的仿真进程：
+
+```bash
+bash simulation/px4_sitl_3uav/start_3uav_sitl.sh \
+  --px4-sitl-root ~/src/PX4-Autopilot \
+  --duration 60 \
+  --startup-timeout 60 \
+  --output-dir /tmp/three-uav-sitl-one-run \
+  --run-id smoke-01
+```
+
+20 轮验收使用版本控制内的批测器，默认每轮 60 秒、零重试：
+
+```bash
+python3 simulation/scripts/run_3uav_sitl_batch.py \
+  --px4-sitl-root ~/src/PX4-Autopilot \
+  --runs 20 --duration 60 --startup-timeout 60 \
+  --output-dir simulation/results/three_uav_sitl_batch_$(date +%Y%m%d_%H%M%S)
+```
+
+每个 `trial_XX/attempt_XX/` 都有启动器日志、结构化结果、Gazebo 日志及 PX4
+日志；顶层 `batch_manifest.json` 记录源码版本和启动器 SHA-256，
+`batch_summary.json` 汇总通过率。批测只涵盖 PX4/Gazebo 进程稳定性，**不会启动
+MAVROS、解锁、切换飞行模式或发布 setpoint**。
+
+默认不会清理系统上既有进程。仅在隔离的仿真主机上确认安全后，才可附加
+`--cleanup-leftovers` 清理旧 PX4/Gazebo 进程。

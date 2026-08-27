@@ -8,6 +8,7 @@ YAML schema (top-level keys):
     viz:        dict
     output:     dict
     pipeline:   dict  (max_frames, max_seconds, start_frame, etc.)
+    world_projection: dict  (optional calibrated image-to-ground conversion)
 
 Preset merging rules:
 
@@ -38,6 +39,7 @@ ALLOWED_TOP_LEVEL = {
     "viz",
     "output",
     "pipeline",
+    "world_projection",
     "extends",
     "sensors",  # multi-sensor preset placeholder; unused by the v6 pipeline
     # Swarm-Control-System additions: the optimized YAML carries an
@@ -190,6 +192,18 @@ def _validate(data: Dict[str, Any]) -> None:
             raise ValueError("appearance.weights must be a string path")
     if "min_box_side" in ap and not isinstance(ap["min_box_side"], (int, float)):
         raise ValueError("appearance.min_box_side must be a number")
+    world = data.get("world_projection", {})
+    if not isinstance(world, dict):
+        raise ValueError("world_projection must be a mapping")
+    allowed_world_keys = {"enabled", "calibration_file"}
+    unknown_world = set(world) - allowed_world_keys
+    if unknown_world:
+        raise ValueError(f"unknown world_projection keys: {sorted(unknown_world)}")
+    if "enabled" in world and not isinstance(world["enabled"], bool):
+        raise ValueError("world_projection.enabled must be boolean")
+    calibration_file = world.get("calibration_file")
+    if calibration_file is not None and not isinstance(calibration_file, str):
+        raise ValueError("world_projection.calibration_file must be a string path or null")
 
 
 def merge_cli(raw: Dict[str, Any], cli: Dict[str, Any]) -> Dict[str, Any]:

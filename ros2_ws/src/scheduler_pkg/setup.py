@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "scheduler_node = scheduler_pkg.scheduler_node:main",
+            "reallocation_collector = scheduler_pkg.reallocation_collector:main",
         ],
     },
 )

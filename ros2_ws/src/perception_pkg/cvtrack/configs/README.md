@@ -2,6 +2,9 @@
 
 YAML configuration presets for `cvtrack`.  Use with `--config <name>`:
 
+The same YAML files are mirrored under `src/cvtrack/configs/` so wheel
+installs keep the named presets; `tests/test_config.py` guards the mirrors.
+
 ```bash
 python -m cvtrack --config drone --source clip.mp4 --out-dir out/
 ```
@@ -55,7 +58,7 @@ tracker:
 
 appearance:
   enabled: <bool>
-  backend: osnet | histogram  # v6 adds histogram fallback
+  backend: osnet             # no synthetic/histogram fallback
   model: osnet_x0_25 | osnet_x1_0
   weights: <path>
   gallery_size: <int>
@@ -89,6 +92,6 @@ sensors:                     # v6 placeholder; v7 will read this list
     role: front_camera
 ```
 
-CLI flags take precedence over YAML keys.  The same key in `default.yaml`
+Only explicitly supplied CLI flags take precedence over YAML keys.  The same key in `default.yaml`
 can be overridden in a derived config by setting `extends: default` and
 overriding just the desired fields.

@@ -8,6 +8,7 @@ __pycache__/
 # Virtualenvs
 .venv/
 venv/
+.testdeps/
 
 # Build artefacts
 build/
@@ -21,6 +22,8 @@ dist/
 # Top-level output dirs created by the CLI
 output_*/
 out/
+outputs/
+calibrations/
 
 # Sample video data and rendered videos
 *.mp4
@@ -30,9 +33,10 @@ out/
 *.mkv
 
 # Track CSVs and JSON summaries from any tracker run
-# (cvtrack writes: tracks.csv, tracks_smoothed.csv, tracks_future.csv,
+# (cvtrack writes: tracks.csv, tracks_world.csv, tracks_smoothed.csv, tracks_future.csv,
 #  tracks_trails.json, summary.json, v6_runs_summary.json, etc.)
 tracks.csv
+tracks_world.csv
 tracks_smoothed.csv
 tracks_future.csv
 tracks_trails.json

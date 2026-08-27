@@ -1,5 +1,10 @@
 # Swarm-Control-System
 
+> CVTrack 与 RflySim3D 的当前可运行源码位于
+> [`ros2_ws/src/perception_pkg/cvtrack`](ros2_ws/src/perception_pkg/cvtrack)。
+> 何泓林交付的完整融合说明、运行入口和验证边界见
+> [`docs/integration/hehonglin_cvtrack_rfly_merge.md`](docs/integration/hehonglin_cvtrack_rfly_merge.md)。
+
 ## 项目简介
 
 **Swarm-Control-System** 是面向第十九届 **“挑战杯”全国大学生课外学术科技作品竞赛——揭榜挂帅专项赛** 的异构无人集群协同封控系统。

@@ -1,0 +1,16 @@
+# Copy this file for one fixed camera installation and replace every point
+# with a surveyed landmark on the same flat ground plane.  Do not use these
+# illustrative values to fly or command a vehicle.
+frame_id: site_map
+units: m
+max_reprojection_error_m: 0.25
+image_points_px:
+  - [120.0, 720.0]
+  - [1160.0, 720.0]
+  - [950.0, 360.0]
+  - [300.0, 360.0]
+world_points_m:
+  - [0.0, 0.0]
+  - [26.0, 0.0]
+  - [26.0, 18.0]
+  - [0.0, 18.0]

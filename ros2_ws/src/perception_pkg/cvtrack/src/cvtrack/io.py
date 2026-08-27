@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import os
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -18,7 +18,7 @@ class VideoInfo:
     height: int
     fps: float
     total_frames: int
-    fourcc: str = "avc1"
+    fourcc: str = "mp4v"
 
 
 class VideoReader:
@@ -55,14 +55,14 @@ class VideoReader:
 
 
 class VideoWriter:
-    """cv2.VideoWriter that falls back from avc1 -> mp4v automatically."""
+    """cv2.VideoWriter that prefers the broadly available mp4v codec."""
 
     def __init__(self, path: str, fps: float, size: Tuple[int, int]) -> None:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         w, h = size
         self.path = path
         self.fps = float(fps)
-        for fourcc in ("avc1", "mp4v", "XVID"):
+        for fourcc in ("mp4v", "avc1", "XVID"):
             w_ = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*fourcc), self.fps, (w, h))
             if w_.isOpened():
                 self.writer = w_
@@ -189,6 +189,71 @@ class TrackCsvWriter:
             f"{cx:.2f}", f"{cy:.2f}",
             f"{vx:.3f}", f"{vy:.3f}",
             int(bool(confirmed)),
+        ])
+
+    def close(self) -> None:
+        self.f.close()
+
+
+class WorldTrackCsvWriter:
+    """CSV writer for calibrated ground-plane tracks consumed by ROS adapters.
+
+    Pixel-space ``tracks.csv`` remains unchanged for compatibility.  This
+    separate file makes metre units and the coordinate frame explicit so a
+    planner cannot mistake image coordinates for a physical position.
+    """
+
+    HEADER = [
+        "frame",
+        "timestamp_s",
+        "track_id",
+        "label",
+        "image_x_px",
+        "image_y_px",
+        "world_x_m",
+        "world_y_m",
+        "world_vx_mps",
+        "world_vy_mps",
+        "world_valid",
+        "frame_id",
+        "units",
+    ]
+
+    def __init__(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.f = open(path, "w", newline="")
+        self.w = csv.writer(self.f)
+        self.w.writerow(self.HEADER)
+
+    def write_row(
+        self,
+        frame: int,
+        timestamp_s: float,
+        track_id: int,
+        label: str,
+        image_x_px: float,
+        image_y_px: float,
+        world_x_m: Optional[float],
+        world_y_m: Optional[float],
+        world_vx_mps: Optional[float],
+        world_vy_mps: Optional[float],
+        world_valid: bool,
+        frame_id: str,
+    ) -> None:
+        self.w.writerow([
+            int(frame),
+            f"{timestamp_s:.6f}",
+            int(track_id),
+            label,
+            f"{image_x_px:.2f}",
+            f"{image_y_px:.2f}",
+            "" if world_x_m is None else f"{world_x_m:.4f}",
+            "" if world_y_m is None else f"{world_y_m:.4f}",
+            "" if world_vx_mps is None else f"{world_vx_mps:.4f}",
+            "" if world_vy_mps is None else f"{world_vy_mps:.4f}",
+            int(bool(world_valid)),
+            frame_id,
+            "m",
         ])
 
     def close(self) -> None:

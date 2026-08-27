@@ -33,3 +33,11 @@ planner_node:
     # also works.  When a drone has an explicit target, ``TaskAssignment``
     # ``target_id`` is ignored for that drone.
     explicit_target_cells: []
+
+    # 8.27 三场景封控（security 绕障重规划）参数：说明见下，默认关闭。
+    # enclosure_targets_topic: /enclosure_targets     订阅逃逸目标，位置变化触发重规划
+    # scene_config_file:       path to three_scene_config.yaml（空=不读场景障碍物）
+    # scene_name:              park | security | border（配合上一项生效）
+    enclosure_targets_topic: /enclosure_targets
+    scene_config_file: ""
+    scene_name: ""
