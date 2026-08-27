@@ -52,11 +52,9 @@ class MockPlatformPub(Node):
         # moment a platform is within intercept_radius (no missed INVALID/SUCCESS).
         self.declare_parameter("num_drones", 3)
         self.declare_parameter("num_cars", 2)
-        self.declare_parameter(
-            "force_invalid", False,
-            description="DEBUG/Smoke: orbit 500 m away so no platform comes "
-                        "within intercept_radius -> forces INVALID verdict.",
-        )
+        # DEBUG/Smoke: force_invalid orbits 500 m away so no platform comes
+        # within intercept_radius -> forces INVALID verdict.
+        self.declare_parameter("force_invalid", False)
         self._publisher = self.create_publisher(
             DroneStateArray, "/drone_states", 10
         )
