@@ -1,138 +1,328 @@
 #!/usr/bin/env bash
-# start_3uav_sitl.sh — Launch 3 PX4 SITL instances with Gazebo Classic (headless).
+# Launch three PX4 v1.14 Gazebo Classic SITL instances without a GUI.
 #
-# Re-implements PX4's sitl_multiple_run.sh core (gzserver + 3 iris + 3 px4)
-# WITHOUT the trailing `gzclient` (which, in headless WSL, exits and triggers
-# sitl_multiple_run.sh's cleanup trap that KILLS the px4 instances — that was
-# the cause of "Connection closed by client" repeating forever).
-#
-# Per PX4 v1.14 px4-rc.mavlink:
-#   udp_offboard_port_local  = 14580 + px4_instance   (PX4 listens, mavros connects here)
-#   udp_offboard_port_remote = 14540 + px4_instance   (PX4 sends, mavros binds here)
-# sitl_multiple_run.sh runs `px4 -i N` with N=1,2,3, so:
-#   instance1 -> PX4 listens 14581, sysid 2
-#   instance2 -> PX4 listens 14582, sysid 3
-#   instance3 -> PX4 listens 14583, sysid 4
-# Gazebo sim link uses TCP 4560+N and UDP 14560+N per instance.
-#
-# Usage:  bash start_3uav_sitl.sh
-# Then run start_3uav_ros.sh in another terminal once you see "Ready for takeoff".
+# Manual mode keeps the processes in the foreground. Batch mode adds a bounded
+# process-stability check and archives launcher/PX4 logs. This script never
+# starts MAVROS, arms a vehicle, changes flight mode, or sends setpoints.
 
-set -e
+set -eo pipefail
 
 PX4_SRC="${PX4_SITL_ROOT:-$HOME/src/PX4-Autopilot}"
 TARGET="px4_sitl_default"
-build_path="$PX4_SRC/build/$TARGET"
-world="empty"
-NUM=3
+WORLD="empty"
+NUM_UAV=3
+DURATION_SECONDS=""
+STARTUP_TIMEOUT_SECONDS=60
+OUTPUT_DIR=""
+RUN_ID=""
+CLEANUP_LEFTOVERS=0
+GZ_PID=""
+PX4_PIDS=()
+RESULT_STATUS="failed"
+FAILURE_REASON=""
+START_EPOCH="$(date +%s)"
 
-# --- kill leftovers -------------------------------------------------------
-echo "[sitl] killing existing px4 / gzserver / gzclient / mavros ..."
-pkill -9 -f gzserver 2>/dev/null || true
-pkill -9 -f gazebo 2>/dev/null || true
-pkill -9 -f px4 2>/dev/null || true
-pkill -9 -f mavros_node 2>/dev/null || true
-# Wait for the Gazebo master port (11345) to be released. A leftover
-# gzserver from a previous crashed run is the usual cause of
-# "Unable to start server [bind: Address already in use]".
-for _i in $(seq 1 15); do
-    if ss -tlnp 2>/dev/null | grep -q ':11345'; then
-        echo "[sitl]   Gazebo port 11345 still in use, waiting ($_i) ..."
-        sleep 1
-    else
-        break
+usage() {
+    cat <<'EOF'
+Usage: bash start_3uav_sitl.sh [options]
+
+Launch three PX4/Gazebo Classic SITL iris instances. With no --duration, the
+script remains in the foreground for interactive diagnosis.
+
+Options:
+  --px4-sitl-root PATH   PX4-Autopilot root (default: $PX4_SITL_ROOT or ~/src/PX4-Autopilot)
+  --world NAME_OR_PATH   Gazebo Classic world name or .world path (default: empty)
+  --duration SECONDS     Verify all four simulator processes stay alive, then exit
+  --startup-timeout SEC  Maximum wait for gzserver readiness (default: 60)
+  --output-dir PATH      Write result.json and archive logs to PATH
+  --run-id ID            Identifier written to result.json
+  --cleanup-leftovers    Explicitly kill old PX4/Gazebo processes before launch
+  -h, --help             Show this help
+
+Safety boundary: this launcher is PX4/Gazebo SITL only. It does not start
+MAVROS, arm vehicles, switch modes, or publish flight setpoints.
+EOF
+}
+
+fail() {
+    FAILURE_REASON="$1"
+    echo "[sitl] ERROR: $FAILURE_REASON" >&2
+    exit 1
+}
+
+is_positive_integer() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+cleanup_owned_processes() {
+    local pid attempt remaining
+    for pid in "${PX4_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    if [[ -n "$GZ_PID" ]]; then
+        kill "$GZ_PID" 2>/dev/null || true
     fi
+
+    for attempt in $(seq 1 5); do
+        remaining=0
+        for pid in "${PX4_PIDS[@]}" "$GZ_PID"; do
+            if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                remaining=1
+            fi
+        done
+        [[ "$remaining" -eq 0 ]] && return
+        sleep 1
+    done
+
+    for pid in "${PX4_PIDS[@]}" "$GZ_PID"; do
+        [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
+    done
+}
+
+archive_logs() {
+    local instance working_dir log_name
+    [[ -n "$OUTPUT_DIR" ]] || return
+
+    mkdir -p "$OUTPUT_DIR/px4"
+    for instance in $(seq 1 "$NUM_UAV"); do
+        working_dir="$BUILD_PATH/rootfs/$instance"
+        mkdir -p "$OUTPUT_DIR/px4/$instance"
+        for log_name in out.log err.log; do
+            if [[ -f "$working_dir/$log_name" ]]; then
+                cp "$working_dir/$log_name" "$OUTPUT_DIR/px4/$instance/$log_name"
+            fi
+        done
+    done
+}
+
+write_result() {
+    local end_epoch actual_duration result_path
+    [[ -n "$OUTPUT_DIR" ]] || return
+
+    end_epoch="$(date +%s)"
+    actual_duration=$((end_epoch - START_EPOCH))
+    result_path="$OUTPUT_DIR/result.json"
+    RUN_ID="$RUN_ID" RESULT_STATUS="$RESULT_STATUS" FAILURE_REASON="$FAILURE_REASON" \
+        STARTUP_TIMEOUT_SECONDS="$STARTUP_TIMEOUT_SECONDS" DURATION_SECONDS="$DURATION_SECONDS" \
+        ACTUAL_DURATION_SECONDS="$actual_duration" START_EPOCH="$START_EPOCH" END_EPOCH="$end_epoch" \
+        GZ_PID="$GZ_PID" PX4_PID_COUNT="${#PX4_PIDS[@]}" python3 - "$result_path" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = {
+    "run_id": os.environ["RUN_ID"],
+    "status": os.environ["RESULT_STATUS"],
+    "failure_reason": os.environ["FAILURE_REASON"] or None,
+    "startup_timeout_seconds": int(os.environ["STARTUP_TIMEOUT_SECONDS"]),
+    "stability_window_seconds": int(os.environ["DURATION_SECONDS"] or 0),
+    "actual_duration_seconds": int(os.environ["ACTUAL_DURATION_SECONDS"]),
+    "started_epoch": int(os.environ["START_EPOCH"]),
+    "ended_epoch": int(os.environ["END_EPOCH"]),
+    "gzserver_pid": int(os.environ["GZ_PID"]) if os.environ["GZ_PID"] else None,
+    "px4_instance_count": int(os.environ["PX4_PID_COUNT"]),
+    "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded",
+}
+path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+on_exit() {
+    local exit_code=$?
+    trap - EXIT INT TERM
+    if [[ "$exit_code" -ne 0 && -z "$FAILURE_REASON" ]]; then
+        FAILURE_REASON="launcher exited with status $exit_code"
+    fi
+    archive_logs
+    write_result
+    if [[ -n "$GZ_PID" || "${#PX4_PIDS[@]}" -gt 0 ]]; then
+        cleanup_owned_processes
+    fi
+    exit "$exit_code"
+}
+
+trap on_exit EXIT
+trap 'FAILURE_REASON="interrupted"; exit 130' INT TERM
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --px4-sitl-root)
+            [[ $# -ge 2 ]] || fail "--px4-sitl-root requires a path"
+            PX4_SRC="$2"
+            shift 2
+            ;;
+        --world)
+            [[ $# -ge 2 ]] || fail "--world requires a name"
+            WORLD="$2"
+            shift 2
+            ;;
+        --duration)
+            [[ $# -ge 2 ]] || fail "--duration requires seconds"
+            DURATION_SECONDS="$2"
+            shift 2
+            ;;
+        --startup-timeout)
+            [[ $# -ge 2 ]] || fail "--startup-timeout requires seconds"
+            STARTUP_TIMEOUT_SECONDS="$2"
+            shift 2
+            ;;
+        --output-dir)
+            [[ $# -ge 2 ]] || fail "--output-dir requires a path"
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --run-id)
+            [[ $# -ge 2 ]] || fail "--run-id requires an identifier"
+            RUN_ID="$2"
+            shift 2
+            ;;
+        --cleanup-leftovers)
+            CLEANUP_LEFTOVERS=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            fail "unknown option: $1"
+            ;;
+    esac
 done
-if ss -tlnp 2>/dev/null | grep -q ':11345'; then
-    echo "[sitl] WARNING: 11345 STILL in use — another gzserver is running."
-    echo "[sitl]          Run: ss -tlnp | grep 11345   to find its PID, then kill -9 <pid>"
+
+if [[ -n "$DURATION_SECONDS" ]] && ! is_positive_integer "$DURATION_SECONDS"; then
+    fail "--duration must be a positive integer"
+fi
+if ! is_positive_integer "$STARTUP_TIMEOUT_SECONDS"; then
+    fail "--startup-timeout must be a positive integer"
+fi
+
+if [[ -z "$RUN_ID" ]]; then
+    RUN_ID="manual-$(date +%Y%m%d-%H%M%S)"
+fi
+if [[ -n "$DURATION_SECONDS" && -z "$OUTPUT_DIR" ]]; then
+    OUTPUT_DIR="$PWD/sitl_runs/$RUN_ID"
+fi
+if [[ -n "$OUTPUT_DIR" ]]; then
+    mkdir -p "$OUTPUT_DIR"
+    OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+fi
+
+BUILD_PATH="$PX4_SRC/build/$TARGET"
+if [[ "$WORLD" == *.world || "$WORLD" == */* ]]; then
+    GAZEBO_WORLD="$WORLD"
+else
+    GAZEBO_WORLD="$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${WORLD}.world"
+fi
+JINJA="$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic/scripts/jinja_gen.py"
+MODEL_DIR="$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris"
+PX4_BIN="$BUILD_PATH/bin/px4"
+
+command -v gzserver >/dev/null || fail "gzserver is not on PATH"
+command -v gz >/dev/null || fail "gz is not on PATH"
+command -v python3 >/dev/null || fail "python3 is not on PATH"
+[[ -x "$PX4_BIN" ]] || fail "PX4 binary not found at $PX4_BIN; build: make px4_sitl_default gazebo-classic"
+[[ -f "$GAZEBO_WORLD" ]] || fail "Gazebo world not found: $GAZEBO_WORLD"
+[[ -f "$JINJA" ]] || fail "PX4 Jinja generator not found: $JINJA"
+
+if [[ "$CLEANUP_LEFTOVERS" -eq 1 ]]; then
+    echo "[sitl] explicitly cleaning existing PX4/Gazebo processes ..."
+    pkill -9 -f gzserver 2>/dev/null || true
+    pkill -9 -f gazebo 2>/dev/null || true
+    pkill -9 -f px4 2>/dev/null || true
+    sleep 2
 fi
 
 cd "$PX4_SRC"
-# setup_gazebo.bash sets GAZEBO_MODEL_PATH / GAZEBO_PLUGIN_PATH etc.
-source "$PX4_SRC/Tools/simulation/gazebo-classic/setup_gazebo.bash" \
-    "$PX4_SRC" "$build_path"
-
-# Headless: do NOT set ROS_VERSION so gzserver is launched without the
-# gazebo_ros factory plugins (we spawn models via `gz model` directly).
+source "$PX4_SRC/Tools/simulation/gazebo-classic/setup_gazebo.bash" "$PX4_SRC" "$BUILD_PATH"
 export HEADLESS=1
 export DISPLAY=""
 export PX4_SIM_MODEL=gazebo-classic_iris
 unset ROS_VERSION 2>/dev/null || true
 
-GAZEBO_WORLD="$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${world}.world"
-JINJA="$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic/scripts/jinja_gen.py"
-MODEL_DIR="$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris"
-PX4_BIN="$build_path/bin/px4"
-
-if [[ ! -x "$PX4_BIN" ]]; then
-    echo "[sitl] ERROR: px4 binary not found at $PX4_BIN"
-    echo "[sitl]       build it first: make px4_sitl_default gazebo-classic"
-    exit 1
+if [[ -n "$OUTPUT_DIR" ]]; then
+    GZ_LOG="$OUTPUT_DIR/gzserver.log"
+else
+    GZ_LOG="/tmp/gazebo_multi.log"
 fi
-
-# --- start gzserver (log it so we can diagnose if the sim link fails) -----
-echo "[sitl] starting gzserver (log: /tmp/gazebo_multi.log) ..."
-rm -f /tmp/gazebo_multi.log
-gzserver "$GAZEBO_WORLD" --verbose > /tmp/gazebo_multi.log 2>&1 &
+echo "[sitl] starting gzserver (log: $GZ_LOG) ..."
+gzserver "$GAZEBO_WORLD" --verbose > "$GZ_LOG" 2>&1 &
 GZ_PID=$!
-sleep 5
-if ! kill -0 "$GZ_PID" 2>/dev/null; then
-    echo "[sitl] ERROR: gzserver exited immediately. Tail of /tmp/gazebo_multi.log:"
-    tail -n 40 /tmp/gazebo_multi.log
-    exit 1
-fi
+
+for elapsed in $(seq 0 "$STARTUP_TIMEOUT_SECONDS"); do
+    if ! kill -0 "$GZ_PID" 2>/dev/null; then
+        tail -n 40 "$GZ_LOG" >&2 || true
+        fail "gzserver exited during startup"
+    fi
+    if gz model -l >/dev/null 2>&1; then
+        break
+    fi
+    if [[ "$elapsed" -eq "$STARTUP_TIMEOUT_SECONDS" ]]; then
+        fail "gzserver did not become ready within ${STARTUP_TIMEOUT_SECONDS}s"
+    fi
+    sleep 1
+done
 echo "[sitl] gzserver is up (pid $GZ_PID)."
 
-# --- spawn NUM iris + start NUM px4 instances ------------------------------
-for n in $(seq 1 $NUM); do
-    echo "[sitl] spawning iris_${n} (px4 instance $n) ..."
-
-    working_dir="$build_path/rootfs/$n"
+for instance in $(seq 1 "$NUM_UAV"); do
+    working_dir="$BUILD_PATH/rootfs/$instance"
     mkdir -p "$working_dir"
+    echo "[sitl] spawning iris_${instance} (px4 instance $instance) ..."
+    (
+        cd "$working_dir"
+        exec "$PX4_BIN" -i "$instance" -d "$BUILD_PATH/etc" > out.log 2> err.log
+    ) &
+    PX4_PIDS+=("$!")
 
-    # start px4 instance in its own rootfs dir (offboard ports auto-offset by -i)
-    ( cd "$working_dir" && "$PX4_BIN" -i "$n" -d "$build_path/etc" \
-        > "$working_dir/out.log" 2> "$working_dir/err.log" ) &
-    PX4_PID=$!
-    echo "[sitl]   px4 instance $n pid $PX4_PID (logs: $working_dir/{out,err}.log)"
-
-    # generate the per-instance iris SDF (sets mavlink tcp/udp ports)
-    python3 "$JINJA" \
-        "$MODEL_DIR/iris.sdf.jinja" \
+    python3 "$JINJA" "$MODEL_DIR/iris.sdf.jinja" \
         "$PX4_SRC/Tools/simulation/gazebo-classic/sitl_gazebo-classic" \
-        --mavlink_tcp_port $((4560 + n)) \
-        --mavlink_udp_port $((14560 + n)) \
-        --mavlink_id      $((1 + n)) \
-        --gst_udp_port    $((5600 + n)) \
-        --video_uri       $((5600 + n)) \
-        --mavlink_cam_udp_port $((14530 + n)) \
-        --output-file /tmp/iris_${n}.sdf
+        --mavlink_tcp_port "$((4560 + instance))" \
+        --mavlink_udp_port "$((14560 + instance))" \
+        --mavlink_id "$((1 + instance))" \
+        --gst_udp_port "$((5600 + instance))" \
+        --video_uri "$((5600 + instance))" \
+        --mavlink_cam_udp_port "$((14530 + instance))" \
+        --output-file "/tmp/iris_${instance}.sdf"
 
-    # spawn the model into the running gzserver (retry until ready)
+    spawned=0
     for attempt in 1 2 3 4 5; do
-        if gz model --spawn-file=/tmp/iris_${n}.sdf \
-                    --model-name=iris_${n} -x 0 -y $((3 * n)) -z 0.83 2>&1 \
-                | grep -q "An instance of Gazebo is not running"; then
-            echo "[sitl]   gzserver not ready yet, retrying ($attempt) ..."
-            sleep 2
-        else
+        if gz model --spawn-file="/tmp/iris_${instance}.sdf" \
+            --model-name="iris_${instance}" -x 0 -y "$((3 * instance))" -z 0.83; then
+            spawned=1
             break
         fi
+        echo "[sitl] model spawn attempt $attempt failed; retrying ..." >&2
+        sleep 2
     done
-    echo "[sitl]   iris_${n} spawned."
+    [[ "$spawned" -eq 1 ]] || fail "could not spawn iris_${instance}"
     sleep 2
 done
 
-echo ""
-echo "======================================================="
-echo "  3x PX4 SITL + Gazebo Classic (headless) running"
-echo "  PX4 offboard listen ports: 14581 / 14582 / 14583"
-echo "  Wait for 'Ready for takeoff!' then run start_3uav_ros.sh"
-echo "  gzserver log: /tmp/gazebo_multi.log"
-echo "  px4 logs:     $build_path/rootfs/{1,2,3}/{out,err}.log"
-echo "  Ctrl-C to stop all."
-echo "======================================================="
+echo "[sitl] 3x PX4 SITL + Gazebo Classic is running."
+echo "[sitl] Offboard listen ports: 14581 / 14582 / 14583"
+echo "[sitl] This launcher does not start MAVROS or command vehicles."
 
-# keep this script alive (so the backgrounded px4/gzserver keep running)
-wait
+if [[ -z "$DURATION_SECONDS" ]]; then
+    echo "[sitl] Manual mode: Ctrl-C stops only the simulator processes started here."
+    wait -n || true
+    fail "a simulator process exited in manual mode"
+fi
+
+echo "[sitl] checking process stability for ${DURATION_SECONDS}s ..."
+for elapsed in $(seq 0 "$DURATION_SECONDS"); do
+    if ! kill -0 "$GZ_PID" 2>/dev/null; then
+        fail "gzserver exited during stability window"
+    fi
+    for index in "${!PX4_PIDS[@]}"; do
+        if ! kill -0 "${PX4_PIDS[$index]}" 2>/dev/null; then
+            fail "PX4 instance $((index + 1)) exited during stability window"
+        fi
+    done
+    [[ "$elapsed" -eq "$DURATION_SECONDS" ]] && break
+    sleep 1
+done
+
+RESULT_STATUS="passed"
+echo "[sitl] PASS: all PX4/Gazebo simulator processes survived ${DURATION_SECONDS}s."
