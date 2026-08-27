@@ -22,7 +22,14 @@ setup(
         ),
         (
             'share/' + package_name + '/launch',
-            ['launch/containment.launch.py', 'launch/ugv_block_demo.launch.py', 'launch/full_loop_demo.launch.py', 'launch/rfly_enclosure.launch.py', 'launch/escape_eval.launch.py']
+            [
+                'launch/containment.launch.py',
+                'launch/ugv_block_demo.launch.py',
+                'launch/full_loop_demo.launch.py',
+                'launch/rfly_enclosure.launch.py',
+                'launch/escape_eval.launch.py',
+                'launch/escape_eval_sitl.launch.py',
+            ]
         ),
         (
             'share/' + package_name + '/config',

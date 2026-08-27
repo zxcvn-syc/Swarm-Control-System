@@ -55,7 +55,7 @@ def summarize(rows):
             d["invalid"] += 1
         else:
             d["invalid"] += 1  # unknown outcome -> treat as excluded
-        d["reasons"][r.get("reason", "?")] += 1
+        d["reasons"][(outcome, r.get("reason", "?"))] += 1
         d["traj"][r.get("trajectory", "?")] += 1
     return scenes
 
@@ -118,8 +118,8 @@ def write_markdown(path, scenes, agg):
         "|------|------|------|------|",
     ]
     for s, d in sorted(scenes.items()):
-        for reason, n in sorted(d["reasons"].items()):
-            lines.append(f"| {s} | {reason} | {reason} | {n} |")
+        for (outcome, reason), n in sorted(d["reasons"].items()):
+            lines.append(f"| {s} | {outcome} | {reason} | {n} |")
     with open(out, "w") as f:
         f.write("\n".join(lines) + "\n")
     print(f"[written] {out}")

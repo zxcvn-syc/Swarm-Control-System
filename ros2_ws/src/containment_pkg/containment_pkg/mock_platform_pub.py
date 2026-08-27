@@ -156,6 +156,12 @@ def main(args=None):
     node = MockPlatformPub()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        # SIGINT from `ros2 launch` (or manual Ctrl-C): rclpy's own signal
+        # handler has already torn the context down, so swallow the interrupt
+        # and let the finally-block guard the shutdown call below.
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
