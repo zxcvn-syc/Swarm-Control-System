@@ -1,0 +1,16 @@
+[px4_sitl_gazebo-1] model: iris
+[px4_sitl_gazebo-1] GAZEBO_MODEL_PATH /home/hhh/src/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic:/home/hhh/src/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models
+[px4_sitl_gazebo-1] Using: /home/hhh/src/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf
+[px4_sitl_gazebo-1] INFO  [init] found model autostart file as SYS_AUTOSTART=10015
+[px4_sitl_gazebo-1] INFO  [mavlink] mode: Normal, data rate: 4000000 B/s on udp port 18570 remote port 14550
+[px4_sitl_gazebo-1] INFO  [mavlink] mode: Onboard, data rate: 4000000 B/s on udp port 14580 remote port 14540
+[px4_sitl_gazebo-1] INFO  [mavlink] mode: Onboard, data rate: 4000 B/s on udp port 14280 remote port 14030
+[px4_sitl_gazebo-1] INFO  [mavlink] mode: Gimbal, data rate: 400000 B/s on udp port 13030 remote port 13280
+[px4_sitl_gazebo-1] INFO  [logger] logger started (mode=all)
+[mavros_uav0-2] [INFO] [1787809989.305272479] [uav0.mavros.time]: TM: Timesync mode: MAVLINK
+[mavros_uav0-2] [INFO] [1787809990.641749722] [uav0.mavros.mavros]: CON: Got HEARTBEAT, connected. FCU: PX4 Autopilot
+[px4_offboard_bridge_uav0-4] [INFO] [1787809990.774316542] [px4_offboard_bridge]: offboard bridge ready: streaming=True, drone_id=0, auto_arm=True, prestream=3.0s
+[px4_offboard_bridge_uav0-4] [INFO] [1787809991.690311997] [px4_offboard_bridge]: offboard phase -> prestream
+[px4_offboard_bridge_uav0-4] [INFO] [1787809994.740169373] [px4_offboard_bridge]: offboard phase -> arming
+[px4_offboard_bridge_uav0-4] [INFO] [1787809995.690070980] [px4_offboard_bridge]: offboard phase -> offboard
+[px4_offboard_bridge_uav0-4] [INFO] [1787809996.690083652] [px4_offboard_bridge]: offboard phase -> active

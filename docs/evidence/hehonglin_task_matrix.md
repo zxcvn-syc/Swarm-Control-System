@@ -8,13 +8,13 @@
 |---|---|---|---|
 | P0-lite launch/demo 替换 stub | 真实 `planner_node` 接入 `three_links.launch.py` 与 demo build | 已完成 | 现有 launch/script 改动 |
 | P3 SITL bridge nodes | `px4_offboard_bridge.py`、`sitl_pose_bridge.py`、UGV publisher | 已完成/已修正 | 反馈 topic 统一为 `/uav0/mavros/local_position/pose` |
-| P1 ARM + OFFBOARD 控制 | 订阅 `/mavros/state`，连接后预发 setpoint 3 秒，调用 ARM，确认解锁后切换 `OFFBOARD`，持续输出路径 setpoint | 已实现/待当前版本 SITL 复验 | `px4_offboard_bridge.py` 状态机；仅可在可达的 PX4/MAVROS 仿真环境中复验，不以 Rfly 或 ROS2 soak 结果替代 |
+| P1 ARM + OFFBOARD 控制 | 订阅 `/mavros/state`，连接后预发 setpoint 3 秒，调用 ARM，确认解锁后切换 `OFFBOARD`，持续输出路径 setpoint | 已在当前单机 SITL 复验 | `px4_offboard_bridge.py`；`px4_offboard_sitl_20260827.md` 记录 `connected`、`armed`、`OFFBOARD`、位姿、setpoint 和完整相位；不代表三机或真机 |
 | coord_transform 常驻 | 集成 launch 保持常驻坐标转换节点 | 已完成 | `three_links.launch.py` |
 | Tracker NumPy 断言 | 修复数组 `==` 比较 | 已验证 | VM perception/fusion `28 passed, 10 skipped, 1 warning` |
 | Follower QoS | 传感器位姿订阅使用 `qos_profile_sensor_data` | 已验证 | `rflysim_follower.py` 与 SITL bridge |
 | Fusion E2E 生命周期 | 不重复初始化/关闭共享 rclpy context | 已验证 | VM fusion 回归包含 `2/2` E2E 用例 |
 | 最小 Gazebo/PX4 SITL | 单机 world、launch、Docker/bootstrap | 已验证 | Ubuntu 22.04 VM 实际启动 PX4 v1.14、Gazebo Classic 和 MAVROS；见 `sitl_vm_smoke_20260820.md` |
-| 三机 PX4/Gazebo 20 轮稳定性 | 有界启动器、批测器、每轮结果和汇总 | 工具已入库/历史 20/20 已归档/当前版本待复跑 | `simulation/scripts/run_3uav_sitl_batch.py`、`three_uav_sitl_batch_20260825.md`；仅证明仿真进程存活，不证明 ARM 或 Offboard |
+| 三机 PX4/Gazebo 20 轮稳定性 | 有界启动器、批测器、每轮结果和汇总 | 已在当前版本复跑通过 | `825a072` 在 Ubuntu 22.04/PX4 v1.14/Gazebo Classic 上完成 20/20、60 s、零重试；`three_uav_sitl_batch_20260825.md` 与 JSON 原始汇总；仅证明仿真进程存活 |
 | SITL 与 ROS2 桥接 | planner path -> offboard；pose -> `/drone_pose_external` | 已验证 | 隔离 ROS domain 中采到 heartbeat、MAVROS pose、`DroneStateArray` 与 `(2,-1,3)` setpoint 原始样本 |
 | 连续运行 >= 2h | soak log、CSV、JSON | 已验证 | Ubuntu 22.04 VM、`ROS_DOMAIN_ID=60`，`PASS`，实际 `7256 s`；见 `three_links_soak_20260820.md` 与 `soak_20260820_004344_*` |
 | 三场景/封控视频素材 | Gazebo 画面、高质量跟踪回放素材、字幕文案 | 已完成 | `videos/gazebo_gui_final_20260820.mp4`、`videos/three_scene_system_demo_20260820.mp4`、`data/demo_inputs/`；仅 Gazebo 段为实际 PX4/Gazebo GUI 仿真 |

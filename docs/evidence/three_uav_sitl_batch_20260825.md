@@ -65,3 +65,28 @@ python3 simulation/scripts/run_3uav_sitl_batch.py \
 截至 2026-08-27，原 Ubuntu 22.04 VM 的 SSH 入口不可达，无法诚实地声称已在
 本次源码版本上重新完成上述 20 轮。仓库已具备同口径、可审计的复现工具；待可达
 的 PX4/Gazebo 主机运行后，应将新的输出目录随提交或制品归档，并更新本记录。
+
+## 当前源码复跑（2026-08-27）
+
+VM 恢复可达后，在独立 Git worktree 中以提交
+`825a072895c9f906bacfc041541d183519dd1769` 重新执行了完整批测：
+
+| 项目 | 实际值 |
+|---|---|
+| 环境 | Ubuntu 22.04、Python 3.10.12、PX4 v1.14.0、Gazebo Classic 11.10.2 |
+| world | `simulation/worlds/swarm_field.world` |
+| 轮数 | 20 |
+| 每轮稳定窗口 | 60 s |
+| 重试 | 0 |
+| 通过轮数 | 20 |
+| 成功率 | 1.0 |
+| 结果 | `passed: true` |
+
+版本控制内的原始汇总和清单为：
+
+- `docs/evidence/three_uav_sitl_batch_20260827/batch_summary.json`
+- `docs/evidence/three_uav_sitl_batch_20260827/batch_manifest.json`
+
+运行结束后确认没有该批测留下的 `gzserver` 或 PX4 进程。该结果仅证明每轮三个
+PX4 实例和 Gazebo 在自定义场景中可重复启动并持续存活；不证明 MAVROS、ARM、
+`OFFBOARD`、任务完成、碰撞规避或真机飞行。
