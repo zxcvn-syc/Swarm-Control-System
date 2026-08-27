@@ -2,7 +2,8 @@
 # 三场景封控 SITL 批量测试 runner（8.27 何泓林 30 次 / 可扩展）。
 #
 # 与 run_batch.sh 的差异：
-#   1. 使用 escape_eval_sitl.launch.py（platform_state_merger 替代 mock_platform_pub）
+#   1. 使用 escape_eval_sitl.launch.py（平台位姿来自外部 SITL 的 /drone_states，
+#      不再用 mock_platform_pub，默认也不起 platform_state_merger）
 #   2. 只清理测试节点，**不杀 SITL/PX4/Gazebo**（要求外部先起好 SITL 环境）
 #
 # 用法（在仓库根目录）：
@@ -11,7 +12,8 @@
 #
 # 前置条件（必须已在其他终端启动）：
 #   ./simulation/px4_sitl_3uav/start_3uav_sitl.sh
-#   ros2 topic echo /drone_pose_external --once  # 确认 UAV 位姿已进来
+#   bash simulation/px4_sitl_3uav/start_sitl_platform.sh
+#   ros2 topic echo /drone_states --once  # 确认 5 个平台位姿已进来
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
