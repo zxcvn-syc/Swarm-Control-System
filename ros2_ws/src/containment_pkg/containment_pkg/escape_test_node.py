@@ -225,8 +225,13 @@ class EscapeTestNode(Node):
             updates["start_y"] = float(start[1])
         if "speed" in s:
             updates["speed"] = float(s["speed"])
-        if "trajectory" in s:
-            updates["trajectory"] = str(s["trajectory"])
+        # The scene `trajectory` field is only a *fallback* default.  An
+        # explicit launch/CLI `trajectory:=` override must win (smoke tests
+        # force `straight`/`return` to exercise the FAIL/SUCCESS branches),
+        # and the batch run keeps `trajectory=sample` to draw from
+        # trajectory_distribution.  So we must NOT write it into the
+        # parameter here -- capture it for the fallback branch instead.
+        scene_traj_default = str(s.get("trajectory", "return"))
         if "test_duration" in s:
             updates["test_duration"] = float(s["test_duration"])
         if "intercept_radius" in s:
@@ -257,6 +262,11 @@ class EscapeTestNode(Node):
             self.set_parameters([self._mk_param("trajectory", forced)])
         elif self._traj_probs:
             self._actual_traj = self._pick_trajectory()
+            self.set_parameters([self._mk_param("trajectory", self._actual_traj)])
+        else:
+            # Neither an explicit override nor a distribution: fall back to
+            # the scene's declared default trajectory.
+            self._actual_traj = scene_traj_default
             self.set_parameters([self._mk_param("trajectory", self._actual_traj)])
         # 8-direction weighted distribution -> dir_probs (index order 0..7).
         idx_map = {"E": 0, "NE": 1, "N": 2, "NW": 3, "W": 4, "SW": 5, "S": 6, "SE": 7}
