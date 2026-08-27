@@ -20,7 +20,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from cvtrack.appearance.base import AppearanceExtractor, crop_with_margin, l2_normalize
+from cvtrack.appearance.base import crop_with_margin, l2_normalize
 
 
 log = logging.getLogger(__name__)
@@ -32,9 +32,8 @@ log = logging.getLogger(__name__)
 # When torchreid is unavailable but the user provides a custom .pth.tar checkpoint,
 # we reconstruct OSNet using this inline definition.  This avoids the torchreid
 # Cython dependency while still supporting domain-specific ReID fine-tunes.
-def _build_osnet_inline(num_classes: int = 1, portable: bool = True) -> "torch.nn.Module":
+def _build_osnet_inline(num_classes: int = 1, portable: bool = True):
     """Build OSNet x0_25 from scratch (no pretrained weights)."""
-    import torch
     import torch.nn as nn
 
     class DepthwiseConv(nn.Module):
@@ -266,7 +265,7 @@ class OsNetExtractor:
                     state = state["state_dict"]
                 elif "model" in state and isinstance(state["model"], dict):
                     state = state["model"]
-            loaded = self._model.load_state_dict(state, strict=False)
+            self._model.load_state_dict(state, strict=False)
             self._loaded_ok = True
             log.info("OSNet (inline): loaded custom weights from %s", self.weights)
         except Exception as exc:

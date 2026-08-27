@@ -1,0 +1,22 @@
+header:
+  stamp:
+    sec: 1787810058
+    nanosec: 39442213
+  frame_id: ''
+coordinate_frame: 1
+type_mask: 2552
+position:
+  x: 0.0
+  y: 0.0
+  z: 2.0
+velocity:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+acceleration_or_force:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+yaw: 0.0
+yaw_rate: 0.0
+---

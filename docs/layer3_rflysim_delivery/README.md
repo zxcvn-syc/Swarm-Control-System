@@ -1,5 +1,11 @@
 # CVTrack RflySim3D 空地协同演示
 
+> 此目录保留 2026-08-22 的交付快照，供回溯历史证据。当前可运行源码已完整融合到
+> [`ros2_ws/src/perception_pkg/cvtrack`](../../ros2_ws/src/perception_pkg/cvtrack)，
+> 其中的 `examples/rfly_ros2` 是唯一应继续维护和运行的 Rfly 演示入口。不要从本目录
+> 的 `code/` 启动旧版脚本；融合路径、依赖和验证边界见
+> [`docs/integration/hehonglin_cvtrack_rfly_merge.md`](../integration/hehonglin_cvtrack_rfly_merge.md)。
+
 本目录提供 CVTrack、RflySim3D 和 ROS2 的联调脚本。它以蓝色高速目标车为视觉目标，完成 UAV 搜索、视觉锁定、运动预测、遮挡后重捕获、机群集合及灰色地面车封控，并输出 UAV 视频、上帝视角决策回放和可验证遥测。
 
 ## 已验证运行
