@@ -13,11 +13,18 @@ planner_node:
     # Topic plumbing -- matches scheduler_pkg + containment_pkg defaults.
     task_topic: /task_assignment
     grid_topic: /grid_map
+    # When set, consume a geometry-preserving nav_msgs/OccupancyGrid instead
+    # of the legacy UInt8MultiArray feed.  LiDAR launch sets this to
+    # /lidar_occupancy.
+    occupancy_grid_topic: ""
+    occupancy_threshold: 50
+    occupancy_unknown_is_obstacle: true
+    planner_grid_output_topic: /planner_grid_map_nav
     drone_states_topic: /drone_states
     planned_path_topic: /planned_path
     rfly_pose_topic: /drone_pose_external
 
-    # Optional: deterministic drone positions (grid-cell coordinates).
+    # Optional: deterministic drone positions in the map frame (metres).
     # If left empty, the planner seeds drones in a square lattice.
     initial_positions: []
 

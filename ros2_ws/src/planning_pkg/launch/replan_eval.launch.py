@@ -66,6 +66,9 @@ def generate_launch_description():
                 "num_drones": 3,
                 "num_cars": 2,
             }],
+            # planner consumes external poses while it remains the sole
+            # publisher of /drone_states for containment.
+            remappings=[("/drone_states", "/drone_pose_external")],
         ),
 
         # 脚本化逃逸目标：位置随场景轨迹变化，驱动 planner 重规划。

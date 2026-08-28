@@ -3,7 +3,8 @@ the swarm with kinematic constraints support (UAV vs UGV).
 
 Subscribes:
     /task_assignment            swarm_interfaces/TaskAssignment   (scheduler_pkg)
-    /grid_map                   std_msgs/UInt8MultiArray          (grid_map_node)
+    /grid_map                   std_msgs/UInt8MultiArray          (legacy grid_map_node)
+    /lidar_occupancy            nav_msgs/OccupancyGrid             (optional direct LiDAR map)
     /target_track_world         swarm_interfaces/TargetTrackArray (coord_transform_node)
     /drone_pose_external        swarm_interfaces/DroneStateArray  (optional, RflySim pose)
     /enclosure_targets          swarm_interfaces/EnclosureTargetArray (escape/containment target)
@@ -12,7 +13,7 @@ Publishes:
     /drone_states               swarm_interfaces/DroneStateArray  (containment_pkg)
     /planned_path               nav_msgs/Path                     (RflySim / MAVROS)
     /planned_path_set           swarm_interfaces/TaskAssignment   (debug echo back)
-    /grid_map_nav               nav_msgs/OccupancyGrid            (self-published default grid)
+    /planner_grid_map_nav       nav_msgs/OccupancyGrid            (planner visualization grid)
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ except ImportError:  # pragma: no cover
 
 from .astar import astar as _astar
 from .dstar_lite import DStarLite as _DStarLite
+from .lidar_grid import GridGeometry
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +94,10 @@ class PlannerNode(Node):
         # Topics
         self.declare_parameter("task_topic", "/task_assignment")
         self.declare_parameter("grid_topic", "/grid_map")
+        self.declare_parameter("occupancy_grid_topic", "")
+        self.declare_parameter("occupancy_threshold", 50)
+        self.declare_parameter("occupancy_unknown_is_obstacle", True)
+        self.declare_parameter("planner_grid_output_topic", "/planner_grid_map_nav")
         self.declare_parameter("target_track_world_topic", "/target_track_world")
         self.declare_parameter("drone_states_topic", "/drone_states")
         self.declare_parameter("planned_path_topic", "/planned_path")
@@ -141,6 +147,18 @@ class PlannerNode(Node):
 
         self.task_topic: str = str(self.get_parameter("task_topic").value)
         self.grid_topic: str = str(self.get_parameter("grid_topic").value)
+        self.occupancy_grid_topic: str = str(
+            self.get_parameter("occupancy_grid_topic").value
+        ).strip()
+        self.occupancy_threshold: int = int(
+            self.get_parameter("occupancy_threshold").value
+        )
+        self.occupancy_unknown_is_obstacle: bool = bool(
+            self.get_parameter("occupancy_unknown_is_obstacle").value
+        )
+        self.planner_grid_output_topic: str = str(
+            self.get_parameter("planner_grid_output_topic").value
+        )
         self.target_track_world_topic: str = str(self.get_parameter("target_track_world_topic").value)
         self.drone_states_topic: str = str(self.get_parameter("drone_states_topic").value)
         self.enclosure_targets_topic: str = str(
@@ -156,10 +174,25 @@ class PlannerNode(Node):
                 f"Unknown planner '{self.planner_name}', falling back to astar."
             )
             self.planner_name = "astar"
+        if self.occupancy_grid_topic and not _HAS_NAV_MSGS:
+            raise RuntimeError(
+                "occupancy_grid_topic requires nav_msgs/OccupancyGrid support"
+            )
 
         # ----------------- state -----------------------------------------
         self._grid: np.ndarray = np.zeros(
             (self.grid_size, self.grid_size), dtype=np.int8
+        )
+        # The legacy planner treats its cell numbers as world coordinates.
+        # origin=-0.5 keeps that behaviour while making cell-centre semantics
+        # explicit.  Direct OccupancyGrid input replaces this geometry.
+        self._grid_geometry = GridGeometry(
+            self.grid_size,
+            self.grid_size,
+            1.0,
+            -0.5,
+            -0.5,
+            "world",
         )
 
         obstacle_cells = list(self.get_parameter("obstacle_cells").value or [])
@@ -228,9 +261,19 @@ class PlannerNode(Node):
         self.sub_task = self.create_subscription(
             TaskAssignment, self.task_topic, self.on_task, qos
         )
-        self.sub_grid = self.create_subscription(
-            UInt8MultiArray, self.grid_topic, self.on_grid, qos
-        )
+        self.sub_grid = None
+        self.sub_occupancy = None
+        if self.occupancy_grid_topic:
+            self.sub_occupancy = self.create_subscription(
+                OccupancyGrid,
+                self.occupancy_grid_topic,
+                self.on_occupancy_grid,
+                qos,
+            )
+        else:
+            self.sub_grid = self.create_subscription(
+                UInt8MultiArray, self.grid_topic, self.on_grid, qos
+            )
         self.sub_target_world = self.create_subscription(
             TargetTrackArray, self.target_track_world_topic, self.on_target_world, qos
         )
@@ -258,7 +301,7 @@ class PlannerNode(Node):
         self._grid_timer = None
         if _HAS_NAV_MSGS:
             self._grid_pub = self.create_publisher(
-                OccupancyGrid, "/grid_map_nav", qos
+                OccupancyGrid, self.planner_grid_output_topic, qos
             )
             self._grid_timer = self.create_timer(1.0, self._publish_default_grid)
 
@@ -266,7 +309,8 @@ class PlannerNode(Node):
         self.get_logger().info(
             f"planner_node up: planner={self.planner_name}, platform={p_type_str}, "
             f"num_drones={self.num_drones}, grid={self.grid_size}x{self.grid_size}, "
-            f"tick={self.tick_period}s, in={self.task_topic}+{self.grid_topic}, "
+            f"tick={self.tick_period}s, in={self.task_topic}+"
+            f"{self.occupancy_grid_topic or self.grid_topic}, "
             f"out={self.drone_states_topic}+{self.planned_path_topic}"
         )
 
@@ -285,7 +329,7 @@ class PlannerNode(Node):
 
         x, y = x0, y0
         while True:
-            if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
+            if 0 <= x < self._grid.shape[1] and 0 <= y < self._grid.shape[0]:
                 if int(self._grid[y, x]) != 0:
                     return False
             else:
@@ -390,15 +434,15 @@ class PlannerNode(Node):
         try:
             msg = OccupancyGrid()
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = "world"
-            msg.info.width = 40
-            msg.info.height = 40
-            msg.info.resolution = 0.5
-            msg.info.origin.position.x = 0.0
-            msg.info.origin.position.y = 0.0
+            msg.header.frame_id = self._grid_geometry.frame_id
+            msg.info.width = self._grid_geometry.width
+            msg.info.height = self._grid_geometry.height
+            msg.info.resolution = self._grid_geometry.resolution
+            msg.info.origin.position.x = self._grid_geometry.origin_x
+            msg.info.origin.position.y = self._grid_geometry.origin_y
             msg.info.origin.position.z = 0.0
             msg.info.origin.orientation.w = 1.0
-            msg.data = [0] * (40 * 40)
+            msg.data = np.where(self._grid != 0, 100, 0).astype(np.int8).reshape(-1).tolist()
             self._grid_pub.publish(msg)
         except Exception as exc:  # pragma: no cover
             self.get_logger().debug(f"_publish_default_grid failed: {exc}")
@@ -409,7 +453,9 @@ class PlannerNode(Node):
         side = max(1, int(np.ceil(np.sqrt(self.num_drones))))
         spacing = self.grid_size / max(side + 1, 1)
         row, col = divmod(idx, side)
-        return (col * spacing + spacing, row * spacing + spacing)
+        cell_x = min(self.grid_size - 1, int(round(col * spacing + spacing)))
+        cell_y = min(self.grid_size - 1, int(round(row * spacing + spacing)))
+        return self._cell_to_world((cell_x, cell_y))
 
     def _apply_obstacle_spec(self, spec) -> None:
         try:
@@ -439,8 +485,8 @@ class PlannerNode(Node):
 
     def _ensure_drone(self, did: int) -> None:
         if did not in self._drone_xy:
-            mid = float(self.grid_size) / 2.0
-            self._drone_xy[did] = (mid, mid)
+            mid = self.grid_size // 2
+            self._drone_xy[did] = self._cell_to_world((mid, mid))
             self._drone_path[did] = []
             if did not in self._drone_order:
                 self._drone_order.append(did)
@@ -601,11 +647,16 @@ class PlannerNode(Node):
             if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(radius)):
                 continue
             rr = max(1.0, radius)
-            for ry in range(int(round(y - rr)), int(round(y + rr)) + 1):
-                for rx in range(int(round(x - rr)), int(round(x + rr)) + 1):
+            min_x = int(math.floor((x - rr - self._grid_geometry.origin_x) / self._grid_geometry.resolution))
+            max_x = int(math.floor((x + rr - self._grid_geometry.origin_x) / self._grid_geometry.resolution))
+            min_y = int(math.floor((y - rr - self._grid_geometry.origin_y) / self._grid_geometry.resolution))
+            max_y = int(math.floor((y + rr - self._grid_geometry.origin_y) / self._grid_geometry.resolution))
+            for ry in range(min_y, max_y + 1):
+                for rx in range(min_x, max_x + 1):
                     if not (0 <= rx < s and 0 <= ry < s):
                         continue
-                    if (rx - x) ** 2 + (ry - y) ** 2 <= rr * rr:
+                    cell_x, cell_y = self._cell_to_world((rx, ry))
+                    if (cell_x - x) ** 2 + (cell_y - y) ** 2 <= rr * rr:
                         if self._grid[ry, rx] == 0:
                             self._grid[ry, rx] = 1
                             blocked += 1
@@ -613,11 +664,9 @@ class PlannerNode(Node):
 
     def _world_to_cell(self, xy: Tuple[float, float]) -> Tuple[int, int]:
         s = self.grid_size
-        x = max(0, min(s - 1, int(round(xy[0]))))
-        y = max(0, min(s - 1, int(round(xy[1]))))
+        x, y = self._grid_geometry.clamp_world_to_cell(float(xy[0]), float(xy[1]))
         if int(self._grid[y, x]) != 0:
             for r in range(1, s):
-                found = False
                 for dy in range(-r, r + 1):
                     for dx in range(-r, r + 1):
                         nx, ny = x + dx, y + dy
@@ -627,9 +676,10 @@ class PlannerNode(Node):
                             and int(self._grid[ny, nx]) == 0
                         ):
                             return (nx, ny)
-                if found:
-                    break
         return (x, y)
+
+    def _cell_to_world(self, cell: Tuple[int, int]) -> Tuple[float, float]:
+        return self._grid_geometry.cell_to_world(int(cell[0]), int(cell[1]))
 
     # ----------------------------------------------------------------
     # Callbacks
@@ -669,6 +719,7 @@ class PlannerNode(Node):
         }
 
     def on_grid(self, msg: UInt8MultiArray) -> None:
+        """Consume the legacy, geometry-less UInt8MultiArray grid feed."""
         info = msg.layout.dim if msg.layout is not None else []
         if len(info) < 2:
             self.get_logger().warn("grid_map: missing layout dims, ignored")
@@ -681,32 +732,99 @@ class PlannerNode(Node):
                 f"grid_map data too small ({flat.size} < {h * w}); ignored"
             )
             return
-        new_grid = flat[: h * w].reshape(h, w).astype(np.int8)
+        if h != w:
+            self.get_logger().warn(
+                f"grid_map must be square for the current planner ({w}x{h}), ignored"
+            )
+            return
+        new_grid = np.where(flat[: h * w].reshape(h, w) != 0, 1, 0).astype(np.int8)
+        geometry = GridGeometry(h, h, 1.0, -0.5, -0.5, "world")
+        self._replace_grid(new_grid, geometry, "legacy grid_map")
 
-        edits: List[Tuple[Tuple[int, int], int]] = []
-        old_h, old_w = self._grid.shape
+    def on_occupancy_grid(self, msg: OccupancyGrid) -> None:
+        """Consume a direct map without discarding frame, origin or resolution."""
+        try:
+            width = int(msg.info.width)
+            height = int(msg.info.height)
+            resolution = float(msg.info.resolution)
+            frame_id = str(msg.header.frame_id).strip()
+            origin = msg.info.origin
+            orientation = origin.orientation
+            is_unrotated = (
+                abs(float(orientation.x)) < 1e-6
+                and abs(float(orientation.y)) < 1e-6
+                and abs(float(orientation.z)) < 1e-6
+                and abs(abs(float(orientation.w)) - 1.0) < 1e-6
+            )
+            if width != height:
+                self.get_logger().warn(
+                    f"OccupancyGrid must be square for the current planner ({width}x{height}), ignored"
+                )
+                return
+            if not is_unrotated:
+                self.get_logger().warn(
+                    "rotated OccupancyGrid origins are not supported by the current planner, ignored"
+                )
+                return
+            geometry = GridGeometry(
+                width,
+                height,
+                resolution,
+                float(origin.position.x),
+                float(origin.position.y),
+                frame_id,
+            )
+            raw = np.asarray(msg.data, dtype=np.int16).reshape(-1)
+            if raw.size < width * height:
+                self.get_logger().warn(
+                    f"OccupancyGrid data too small ({raw.size} < {width * height}), ignored"
+                )
+                return
+            occupancy = raw[: width * height].reshape(height, width)
+            blocked = occupancy >= self.occupancy_threshold
+            if self.occupancy_unknown_is_obstacle:
+                blocked |= occupancy < 0
+            new_grid = blocked.astype(np.int8)
+        except (AttributeError, TypeError, ValueError) as exc:
+            self.get_logger().warn(f"invalid OccupancyGrid ignored: {exc}")
+            return
+        self._replace_grid(new_grid, geometry, "OccupancyGrid")
 
-        if h != old_h or w != old_w:
-            self._grid = new_grid
-            self.grid_size = h
-            for did, (x, y) in list(self._drone_xy.items()):
-                nx = max(0.0, min(float(w - 1), x))
-                ny = max(0.0, min(float(h - 1), y))
-                self._drone_xy[did] = (nx, ny)
-            self._dstar.clear()
-            self._drone_path = {d: [] for d in self._drone_path}
-            for did, target in self._drone_target.items():
-                self._plan_for_drone(did, target)
-            n_blocked = int((self._grid != 0).sum())
-            self.get_logger().info(
-                f"metric grid.obstacles={n_blocked}, "
-                f"grid.changed_cells={h * w}, "
-                f"grid.size={w}x{h} (resize)"
+    def _replace_grid(
+        self,
+        new_grid: np.ndarray,
+        geometry: GridGeometry,
+        source: str,
+    ) -> None:
+        """Install a square occupancy grid and repair active paths as needed."""
+        if new_grid.shape != (geometry.height, geometry.width):
+            self.get_logger().warn(
+                f"{source}: grid shape {new_grid.shape} disagrees with geometry, ignored"
             )
             return
 
-        for cy in range(h):
-            for cx in range(w):
+        old_h, old_w = self._grid.shape
+        geometry_changed = geometry != self._grid_geometry
+        resized = new_grid.shape != self._grid.shape
+        if geometry_changed or resized:
+            self._grid = new_grid
+            self._grid_geometry = geometry
+            self.grid_size = geometry.width
+            self._dstar.clear()
+            self._drone_path = {drone_id: [] for drone_id in self._drone_path}
+            for drone_id, target in self._drone_target.items():
+                self._plan_for_drone(drone_id, target)
+            self.get_logger().info(
+                f"metric grid.obstacles={int((self._grid != 0).sum())}, "
+                f"grid.changed_cells={geometry.width * geometry.height}, "
+                f"grid.size={geometry.width}x{geometry.height} "
+                f"grid.resolution={geometry.resolution:.3f}, source={source} (geometry change)"
+            )
+            return
+
+        edits: List[Tuple[Tuple[int, int], int]] = []
+        for cy in range(old_h):
+            for cx in range(old_w):
                 new_state = int(new_grid[cy, cx])
                 old_state = int(self._grid[cy, cx])
                 if new_state != old_state:
@@ -720,7 +838,8 @@ class PlannerNode(Node):
         self.get_logger().info(
             f"metric grid.obstacles={n_blocked}, "
             f"grid.changed_cells={len(edits)}, "
-            f"grid.size={w}x{h}"
+            f"grid.size={old_w}x{old_h} "
+            f"grid.resolution={geometry.resolution:.3f}, source={source}"
         )
 
     def on_rfly_pose(self, msg: DroneStateArray) -> None:
@@ -779,8 +898,9 @@ class PlannerNode(Node):
             path = self._drone_path.get(did, [])
             if len(path) >= 2:
                 nx, ny = path[1]
-                vx = float(nx - x)
-                vy = float(ny - y)
+                next_x, next_y = self._cell_to_world((nx, ny))
+                vx = float(next_x - x)
+                vy = float(next_y - y)
                 mag = (vx * vx + vy * vy) ** 0.5
                 speed = min(self.sim_tick_speed, self.sim_tick_speed + self.max_speed_diff)
                 if mag > 0:
@@ -834,7 +954,7 @@ class PlannerNode(Node):
                 path.pop(0)
 
             head = path[0]
-            self._drone_xy[did] = (float(head[0]), float(head[1]))
+            self._drone_xy[did] = self._cell_to_world(head)
 
         # 发布 /drone_states
         self._publish_drone_states()
@@ -864,7 +984,7 @@ class PlannerNode(Node):
             return None
         stamped = NavPath()
         stamped.header.stamp = self.get_clock().now().to_msg()
-        stamped.header.frame_id = "world"
+        stamped.header.frame_id = self._grid_geometry.frame_id
         for did, path in paths.items():
             if not path:
                 continue
@@ -872,8 +992,9 @@ class PlannerNode(Node):
                 ps = PoseStamped()
                 ps.header.stamp = stamped.header.stamp
                 ps.header.frame_id = f"drone_{int(did)}"
-                ps.pose.position.x = float(cell[0])
-                ps.pose.position.y = float(cell[1])
+                world_x, world_y = self._cell_to_world(cell)
+                ps.pose.position.x = world_x
+                ps.pose.position.y = world_y
                 ps.pose.position.z = 0.0 if self.platform_type == 1 else self.drone_z_default
                 ps.pose.orientation.w = 1.0
                 stamped.poses.append(ps)

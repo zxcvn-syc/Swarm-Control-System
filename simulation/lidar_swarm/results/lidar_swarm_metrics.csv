@@ -1,0 +1,2 @@
+RngSeed,PlatformCount,UavCount,UgvCount,TrueTargetCount,TotalMeasurements,GhostMeasurements,LockedTrackCount,RejectedGhostTrackCount,FalseLockCount,ClassificationAccuracy,MeanLockLatencySec
+20260828,6,3,3,2,1299,363,2,358,0,1,1
