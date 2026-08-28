@@ -1,0 +1,5 @@
+﻿scene,gt_targets,gt_instances,matched_instances,missed_instances,tracking_success_rate_percent,miss_rate_percent,id_switches
+park,3,90,75,15,83.33,16.67,0
+security,2,90,68,22,75.56,24.44,14
+border,1,30,14,16,46.67,53.33,0
+overall,6,210,157,53,74.76,25.24,14
