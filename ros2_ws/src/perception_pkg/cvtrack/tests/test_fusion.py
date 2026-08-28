@@ -109,6 +109,19 @@ def test_track_fusion_temporal_smoothing():
     assert before < after < 10.0
 
 
+def test_track_fusion_invalidates_cache_when_clock_does_not_advance():
+    """Distinct updates must not share a fused-state cache entry."""
+    fusion = TrackFusion(max_distance_px=100.0, iou_threshold=0.0)
+    fusion._clock = lambda: 1.0
+    fusion.update("cam0", [_track(1, 0.0, 0.0)])
+    fusion.update("cam1", [_track(2, 0.0, 0.0)])
+    assert fusion.fused_tracks()[0].pos[0] == pytest.approx(0.0)
+
+    fusion.update("cam0", [_track(1, 10.0, 0.0)])
+    fusion.update("cam1", [_track(2, 10.0, 0.0)])
+    assert fusion.fused_tracks()[0].pos[0] > 0.0
+
+
 def test_track_fusion_cross_sensor_association():
     """Associated local tracks are linked in the trajectory graph."""
     graph = TrajectoryGraph()

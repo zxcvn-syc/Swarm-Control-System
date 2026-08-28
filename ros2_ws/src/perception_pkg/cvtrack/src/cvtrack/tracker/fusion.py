@@ -342,6 +342,7 @@ class _Observation:
     source: str
     track: Track
     updated_at: float
+    revision: int
 
     @property
     def key(self) -> tuple[str, int]:
@@ -401,6 +402,7 @@ class TrackFusion:
         self._groups: dict[int, set[tuple[str, int]]] = {}
         self._states: dict[int, _FusedState] = {}
         self._next_global_id = 1
+        self._next_observation_revision = 1
         self._clock: Callable[[], float] = time.monotonic
         self._lock = threading.RLock()
 
@@ -450,7 +452,17 @@ class TrackFusion:
                     self._key_to_global[key] = global_id
                     self._groups.setdefault(global_id, set()).add(key)
                     self._link_group(key, global_id)
-                self._observations[key] = _Observation(source, track, now)
+                # Clock resolution is not a reliable cache invalidator: rapid
+                # updates can share one monotonic timestamp on some platforms.
+                # Keep expiry time separately and use a per-update revision for
+                # the fused-state signature below.
+                self._observations[key] = _Observation(
+                    source,
+                    track,
+                    now,
+                    self._next_observation_revision,
+                )
+                self._next_observation_revision += 1
 
     def fused_tracks(self) -> list[Track]:
         now = self._clock()
@@ -492,6 +504,7 @@ class TrackFusion:
                 self._groups.clear()
                 self._states.clear()
                 self._next_global_id = 1
+                self._next_observation_revision = 1
                 self._source_order.clear()
                 self.graph = TrajectoryGraph()
 
@@ -566,7 +579,7 @@ class TrackFusion:
     ) -> Track:
         observations = self._inlier_observations(observations)
         signature = tuple(sorted(
-            (obs.source, int(obs.track.track_id), obs.updated_at)
+            (obs.source, int(obs.track.track_id), obs.revision)
             for obs in observations
         ))
         previous = self._states.get(global_id)

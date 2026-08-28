@@ -46,3 +46,6 @@ videos/generate_test_video.py
 # Local public datasets and extracted demo inputs
 /data/
 /datasets/
+
+# Non-destructive outputs from the frozen perception/tracking delivery
+/ros2_ws/src/perception_pkg/cvtrack/eval/uav_detection_delivery/04_code/outputs/
