@@ -51,6 +51,7 @@ planning_pkg/
 |--------------------|-------------------------------------------|-------------------------|------|
 | `/task_assignment` | `swarm_interfaces/TaskAssignment`         | `scheduler_pkg`         | 收到后立刻给该 drone 重新规划 |
 | `/grid_map`        | `std_msgs/UInt8MultiArray`                | 其它模块 / RflySim      | 行主序的栅格，layout 见下 |
+| `/lidar_occupancy` | `nav_msgs/OccupancyGrid`                  | `lidar_grid_node`       | 可选直连 LiDAR 栅格；保留 `frame_id`、`origin`、`resolution` |
 | `/drone_pose_external` | `swarm_interfaces/DroneStateArray`     | 可选：RflySim / MAVROS  | 用真实位姿覆盖模拟推进 |
 
 `/grid_map` 的 `UInt8MultiArray` 约定：
@@ -87,6 +88,10 @@ msg.data    = (H * W,) bytes, row-major # grid[y, x]
 | `sim_tick_speed` | float | 1.0 | 每个 tick 无人机沿路径走几个格子 |
 | `task_topic` | string | `/task_assignment` | 订阅话题名（可覆盖） |
 | `grid_topic` | string | `/grid_map` | 订阅话题名 |
+| `occupancy_grid_topic` | string | `""` | 直接订阅 `OccupancyGrid`；设置后不订阅 legacy `/grid_map` |
+| `occupancy_threshold` | int | 50 | 大于等于该值的 OccupancyGrid 单元视为障碍 |
+| `occupancy_unknown_is_obstacle` | bool | true | 是否把 `-1` unknown 作为障碍（LiDAR 本地地图建议保持 true） |
+| `planner_grid_output_topic` | string | `/planner_grid_map_nav` | 规划器当前栅格的可视化输出 |
 | `drone_states_topic` | string | `/drone_states` | 发布话题名 |
 | `planned_path_topic` | string | `/planned_path` | 发布话题名 |
 | `rfly_pose_topic` | string | `/drone_pose_external` | 可选 RflySim 位姿反馈 |
@@ -157,7 +162,7 @@ class DStarLite:
 * 收到 `TaskAssignment` 后立刻为该 `drone_id` 重新规划；
 * 主定时器每 `tick_period` 秒推进无人机一个或多个格子
   （`sim_tick_speed`），并发布新的 `DroneStateArray`；
-* `/grid_map` 更新时对比前后 grid，把差异 cell 提交给所有 D* Lite 实例
+* `/grid_map` 或直接 `OccupancyGrid` 更新时对比前后 grid，把差异 cell 提交给所有 D* Lite 实例
   的 `update_obstacles`；A\* 模式下直接清空所有路径并在下一次 tick 重新规划。
 
 ---
@@ -249,6 +254,10 @@ ros2 run planning_pkg planner_node \
 ros2 launch planning_pkg planning.launch.py \
     planner:=dstar_lite grid_size:=120
 
+# 单个固定朝向的二维 LiDAR（UGV / 固定地面站首选）+ planner
+ros2 launch planning_pkg lidar_planning.launch.py \
+    scan_topic:=/ugv0/scan pose_topic:=/drone_pose_external sensor_id:=100
+
 # 三节点联调（tracker + scheduler + planner + enclosure）
 ros2 launch /path/to/Swarm-Control-System/ros2_ws/launch/three_links.launch.py
 ```
@@ -256,6 +265,14 @@ ros2 launch /path/to/Swarm-Control-System/ros2_ws/launch/three_links.launch.py
 `colcon build --packages-select planning_pkg` 是验收标准之一。
 `python3 -m py_compile planning_pkg/*.py` 和 `python3 -m planning_pkg`
 是降级验证（在没有 ROS2 colcon 工具链的环境下用）。
+
+### 7.1 LiDAR 接入边界
+
+`lidar_grid_node` 发布的是**瞬时二维水平面** `LaserScan` 栅格，而不是 SLAM。有限回波写为占据单元、无回波射线写为自由单元、未扫描区域保留为 unknown；规划器默认把 unknown 当作障碍。节点要求近期的 `/drone_pose_external` 位姿，过期或缺失时丢弃扫描。
+
+当前 `DroneState` 消息没有 yaw，因此 `sensor_yaw_rad` 是配置的世界系固定方向。首期部署仅适合固定航向 UGV 或固定地面 LiDAR；安装到会转向的 UGV 或 UAV 前，必须先扩展状态接口或提供 TF/yaw，不能把该配置当作三维机载避障。
+
+对于旧 `/grid_map` 消费者，`grid_map_node` 仍发布 `UInt8MultiArray`；同时新增 `/grid_map_occupancy` 无损输出。LiDAR 路径应让 planner 直接订阅 `/lidar_occupancy`，避免回落到没有几何元数据的旧接口。
 
 ---
 

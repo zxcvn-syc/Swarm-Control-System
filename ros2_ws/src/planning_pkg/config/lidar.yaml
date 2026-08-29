@@ -1,0 +1,28 @@
+lidar_grid_node:
+  ros__parameters:
+    # One horizontal-plane LiDAR.  ``sensor_id`` must match DroneState.drone_id.
+    scan_topic: /scan
+    pose_topic: /drone_pose_external
+    occupancy_topic: /lidar_occupancy
+    sensor_id: 100
+
+    # DroneState currently has no yaw.  This is a world-frame yaw and is only
+    # valid for a fixed-heading UGV/fixed sensor deployment.
+    sensor_yaw_rad: 0.0
+    pose_stale_sec: 0.5
+
+    map_frame: world
+    resolution: 0.25
+    width: 200
+    height: 200
+    origin_x: -25.0
+    origin_y: -25.0
+    inflation_radius: 0.5
+    max_range: 30.0
+
+planner_node:
+  ros__parameters:
+    occupancy_grid_topic: /lidar_occupancy
+    occupancy_unknown_is_obstacle: true
+    occupancy_threshold: 50
+    planner_grid_output_topic: /planner_grid_map_nav

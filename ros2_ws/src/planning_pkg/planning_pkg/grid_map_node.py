@@ -5,7 +5,7 @@ Publishes to ``/grid_map`` (``std_msgs/UInt8MultiArray``) so that
 
 Pipeline
 --------
-1. Subscribe to ``/grid_map_nav`` (``nav_msgs/OccupancyGrid``) — the
+1. Subscribe to ``/planner_grid_map_nav`` (``nav_msgs/OccupancyGrid``) — the
    grid published by ``planner_node`` itself.
 2. Subscribe to ``/grid_obstacles`` (``std_msgs/UInt8MultiArray`` with a
    2-D layout, ``1`` = obstacle) — an externally injected obstacle
@@ -13,10 +13,11 @@ Pipeline
    can drop new obstacles without rebuilding the whole pipeline.
 3. Every 1 Hz, convert the latest ``OccupancyGrid`` into a flat
    ``UInt8MultiArray`` where each cell value is 0 (free) / 100 (occupied)
-   / -1 (unknown), then OR in the obstacle mask and publish on
-   ``/grid_map``.
+   legacy obstacle mask and publish on ``/grid_map``.  It also publishes the
+   same map on ``/grid_map_occupancy`` without dropping frame, origin or
+   resolution metadata.
 
-If ``/grid_map_nav`` has never arrived, the node publishes a default
+If ``/planner_grid_map_nav`` has never arrived, the node publishes a default
 40×40 all-free ``UInt8MultiArray`` so the rest of the pipeline is never
 blocked waiting for grid data.
 """
@@ -54,6 +55,10 @@ class GridMapNode(Node):
     def __init__(self) -> None:
         super().__init__("grid_map_node")
 
+        self.declare_parameter("input_occupancy_topic", "/planner_grid_map_nav")
+        self.declare_parameter("legacy_grid_topic", "/grid_map")
+        self.declare_parameter("occupancy_grid_topic", "/grid_map_occupancy")
+
         qos = QoSProfile(depth=10, reliability=QoSReliabilityPolicy.RELIABLE)
 
         # Internal obstacle mask: kept as a list-of-tuples so that the
@@ -69,7 +74,7 @@ class GridMapNode(Node):
         if _HAS_NAV_MSGS:
             self.sub_grid_nav = self.create_subscription(
                 OccupancyGrid,
-                "/grid_map_nav",
+                str(self.get_parameter("input_occupancy_topic").value),
                 self._on_grid_nav,
                 qos,
             )
@@ -88,14 +93,23 @@ class GridMapNode(Node):
         )
 
         self.pub_grid = self.create_publisher(
-            UInt8MultiArray, "/grid_map", qos
+            UInt8MultiArray, str(self.get_parameter("legacy_grid_topic").value), qos
         )
+        self.pub_occupancy = self.create_publisher(
+            OccupancyGrid,
+            str(self.get_parameter("occupancy_grid_topic").value),
+            qos,
+        ) if _HAS_NAV_MSGS else None
 
         self._timer = self.create_timer(1.0, self._publish_grid)
 
         self.get_logger().info(
-            "grid_map_node up: subscribes /grid_map_nav + /grid_obstacles, "
-            "publishes /grid_map (UInt8MultiArray)"
+            "grid_map_node up: bridges %s + /grid_obstacles to %s and %s"
+            % (
+                self.get_parameter("input_occupancy_topic").value,
+                self.get_parameter("legacy_grid_topic").value,
+                self.get_parameter("occupancy_grid_topic").value,
+            )
         )
 
     # ------------------------------------------------------------------
@@ -160,30 +174,39 @@ class GridMapNode(Node):
             MultiArrayDimension(label="width", size=_DEFAULT_SIZE, stride=_DEFAULT_SIZE),
         ]
 
+        frame_id = "world"
+        resolution = 1.0
+        origin_x = -0.5
+        origin_y = -0.5
+        occupancy_data: List[int]
         if self._latest_grid is not None:
             grid: OccupancyGrid = self._latest_grid
             h = int(grid.info.height)
             w = int(grid.info.width)
-            flat = list(grid.data)
+            occupancy_data = list(grid.data)
+            frame_id = str(grid.header.frame_id) or frame_id
+            resolution = float(grid.info.resolution)
+            origin_x = float(grid.info.origin.position.x)
+            origin_y = float(grid.info.origin.position.y)
 
             msg.layout.dim[0].size = h
             msg.layout.dim[0].stride = h * w
             msg.layout.dim[1].size = w
             msg.layout.dim[1].stride = w
 
-            if len(flat) < h * w:
+            if len(occupancy_data) < h * w:
                 self.get_logger().warn(
-                    f"OccupancyGrid data truncated ({len(flat)} < {h * w})"
+                    f"OccupancyGrid data truncated ({len(occupancy_data)} < {h * w})"
                 )
-                flat = flat + [0] * (h * w - len(flat))
+                occupancy_data = occupancy_data + [-1] * (h * w - len(occupancy_data))
 
-            msg.data = flat[: h * w]
+            occupancy_data = occupancy_data[: h * w]
         else:
             msg.layout.dim[0].size = _DEFAULT_SIZE
             msg.layout.dim[0].stride = _DEFAULT_SIZE * _DEFAULT_SIZE
             msg.layout.dim[1].size = _DEFAULT_SIZE
             msg.layout.dim[1].stride = _DEFAULT_SIZE
-            msg.data = list(_DEFAULT_DATA)
+            occupancy_data = list(_DEFAULT_DATA)
 
         # OR-in the externally injected obstacle mask (only when shapes
         # agree; otherwise the mask targets a different world frame and
@@ -197,10 +220,27 @@ class GridMapNode(Node):
         ):
             for cx, cy in self._obstacle_cells:
                 idx = cy * w_pub + cx
-                if 0 <= idx < len(msg.data):
-                    msg.data[idx] = 1
+                if 0 <= idx < len(occupancy_data):
+                    occupancy_data[idx] = 100
+
+        # UInt8MultiArray cannot represent OccupancyGrid's ``-1`` unknown
+        # value.  The legacy feed therefore conservatively encodes unknown as
+        # blocked; consumers needing map geometry use /grid_map_occupancy.
+        msg.data = [100 if int(value) != 0 else 0 for value in occupancy_data]
 
         self.pub_grid.publish(msg)
+        if self.pub_occupancy is not None:
+            occupancy_msg = OccupancyGrid()
+            occupancy_msg.header.stamp = self.get_clock().now().to_msg()
+            occupancy_msg.header.frame_id = frame_id
+            occupancy_msg.info.width = w_pub
+            occupancy_msg.info.height = h_pub
+            occupancy_msg.info.resolution = resolution
+            occupancy_msg.info.origin.position.x = origin_x
+            occupancy_msg.info.origin.position.y = origin_y
+            occupancy_msg.info.origin.orientation.w = 1.0
+            occupancy_msg.data = occupancy_data
+            self.pub_occupancy.publish(occupancy_msg)
 
         # Observable metric: how many cells in the published payload
         # are blocked, and how many were just toggled by /grid_obstacles.

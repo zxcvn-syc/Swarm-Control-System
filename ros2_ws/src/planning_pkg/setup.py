@@ -10,7 +10,7 @@ world_file = repo_root / "simulation" / "worlds" / "swarm_field.world"
 data_files = [
     ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
     ("share/" + package_name, ["package.xml"]),
-    ("share/" + package_name + "/config", ["config/planning.yaml"]),
+    ("share/" + package_name + "/config", ["config/planning.yaml", "config/lidar.yaml"]),
     (
         "share/" + package_name + "/launch",
         [
@@ -18,6 +18,7 @@ data_files = [
             "launch/px4_sitl.launch.py",
             "launch/sitl_test.launch.py",
             "launch/replan_eval.launch.py",
+            "launch/lidar_planning.launch.py",
         ],
     ),
     (
@@ -50,6 +51,7 @@ setup(
         "console_scripts": [
             "planner_node = planning_pkg.planner_node:main",
             "grid_map_node = planning_pkg.grid_map_node:main",
+            "lidar_grid_node = planning_pkg.lidar_grid_node:main",
             "ugv_state_pub = planning_pkg.ugv_state_publisher:main",
             "px4_offboard_bridge = planning_pkg.px4_offboard_bridge:main",
             "sitl_pose_bridge = planning_pkg.sitl_pose_bridge:main",
