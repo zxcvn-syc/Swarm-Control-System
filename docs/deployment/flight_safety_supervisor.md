@@ -84,6 +84,10 @@ ros2 run planning_pkg flight_safety_console reset-fault --operator-id safety_pil
 该控制台不提供 PX4 模式、解锁、返航或降落控制。`--ground-confirmed` 是一个
 可审计的操作员联锁输入，不代表软件已经感知或验证了实际物理环境。
 
+需要实时视频、目标锁定和封控状态的本机浏览器操作台时，请使用
+[飞行安全图形操作台](flight_safety_dashboard.md)。它仍只控制本节描述的安全门，
+不会增加任何 PX4 飞行控制能力。
+
 `swarm_interfaces/srv/SafetyControl` 服务位于 `/flight_safety/control`，
 支持 `ENABLE_MANUAL`、`ENABLE_AUTO`、`DISABLE`、`EMERGENCY_HOLD` 和
 `RESET_FAULT`。

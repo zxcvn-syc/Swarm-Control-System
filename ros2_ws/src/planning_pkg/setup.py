@@ -21,6 +21,15 @@ data_files = [
             "launch/flight_safety.launch.py",
             "launch/flight_safety_sitl.launch.py",
             "launch/supervised_containment.launch.py",
+            "launch/flight_safety_dashboard.launch.py",
+        ],
+    ),
+    (
+        "share/" + package_name + "/web",
+        [
+            "web/flight_safety_dashboard.html",
+            "web/flight_safety_dashboard.css",
+            "web/flight_safety_dashboard.js",
         ],
     ),
     (
@@ -57,6 +66,7 @@ setup(
             "px4_offboard_bridge = planning_pkg.px4_offboard_bridge:main",
             "flight_safety_supervisor = planning_pkg.flight_safety_supervisor:main",
             "flight_safety_console = planning_pkg.flight_safety_console:main",
+            "flight_safety_dashboard = planning_pkg.flight_safety_dashboard:main",
             "sitl_pose_bridge = planning_pkg.sitl_pose_bridge:main",
             "rflysim_follower = planning_pkg.rflysim_follower:main",
             "dstar_benchmark = planning_pkg.dstar_benchmark_node:main",
