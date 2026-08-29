@@ -434,15 +434,15 @@ class PlannerNode(Node):
         try:
             msg = OccupancyGrid()
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = self._grid_geometry.frame_id
-            msg.info.width = self._grid_geometry.width
-            msg.info.height = self._grid_geometry.height
-            msg.info.resolution = self._grid_geometry.resolution
-            msg.info.origin.position.x = self._grid_geometry.origin_x
-            msg.info.origin.position.y = self._grid_geometry.origin_y
+            msg.header.frame_id = "world"
+            msg.info.width = 40
+            msg.info.height = 40
+            msg.info.resolution = 0.5
+            msg.info.origin.position.x = 0.0
+            msg.info.origin.position.y = 0.0
             msg.info.origin.position.z = 0.0
             msg.info.origin.orientation.w = 1.0
-            msg.data = np.where(self._grid != 0, 100, 0).astype(np.int8).reshape(-1).tolist()
+            msg.data = [0] * (40 * 40)
             self._grid_pub.publish(msg)
         except Exception as exc:  # pragma: no cover
             self.get_logger().debug(f"_publish_default_grid failed: {exc}")

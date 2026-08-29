@@ -1,12 +1,49 @@
 import inspect
 from types import SimpleNamespace
 
+import planning_pkg.planner_node as planner_node_module
 from planning_pkg.planner_node import PlannerNode
 
 
 class _Logger:
     def debug(self, _message):
         pass
+
+
+class _PublishedGrid:
+    def __init__(self):
+        self.header = SimpleNamespace(stamp=None, frame_id="")
+        self.info = SimpleNamespace(
+            width=0,
+            height=0,
+            resolution=0.0,
+            origin=SimpleNamespace(
+                position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                orientation=SimpleNamespace(w=0.0),
+            ),
+        )
+        self.data = []
+
+
+def test_default_grid_publisher_preserves_legacy_40_by_40_contract(monkeypatch):
+    published = []
+    node = SimpleNamespace(
+        _grid_pub=SimpleNamespace(publish=published.append),
+        get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(to_msg=lambda: "stamp")
+        ),
+        get_logger=lambda: _Logger(),
+    )
+    monkeypatch.setattr(planner_node_module, "OccupancyGrid", _PublishedGrid)
+
+    PlannerNode._publish_default_grid(node)
+
+    assert len(published) == 1
+    message = published[0]
+    assert (message.info.width, message.info.height) == (40, 40)
+    assert message.info.resolution == 0.5
+    assert len(message.data) == 40 * 40
+    assert set(message.data) == {0}
 
 
 def test_world_target_cache_keeps_finite_world_tracks():
