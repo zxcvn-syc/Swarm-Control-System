@@ -43,6 +43,7 @@ CAMERA_FORWARD_BIAS_RATIO = 0.0
 CAMERA_RIGHT_BIAS_RATIO = 0.0
 SCENE_EXTENT = (0.0, 220.0, 0.0, 220.0)
 SCENE_OBJECT_IDS = (TARGET_ID, *GROUND_IDS, *MOVING_OBSTACLE_IDS, 501, 502, 503, 104, 9000, 9001)
+DEFAULT_WEATHER_PROFILES = (("CLEAR", 0), ("RAIN", 5), ("STORM", 6), ("FOG", 7))
 
 
 @dataclass
@@ -251,6 +252,12 @@ class RflyVision:
         self._vision = VisionCaptureApi()
         if not self._vision.jsonLoad(jsonPath=str(config_path)):
             raise RuntimeError(f"cannot load Rfly vision configuration: {config_path}")
+        self.camera_uav_ids = tuple(int(sensor.TargetCopter) for sensor in self._vision.VisSensor)
+        if not self.camera_uav_ids or len(set(self.camera_uav_ids)) != len(self.camera_uav_ids):
+            raise RuntimeError("Rfly vision configuration must bind each camera to one distinct UAV")
+        unknown_uavs = set(self.camera_uav_ids).difference(UAV_IDS)
+        if unknown_uavs:
+            raise RuntimeError(f"Rfly vision configuration contains unsupported UAV IDs: {sorted(unknown_uavs)}")
         self._vision.sendReqToUE4(0)
         self._vision.startImgCap()
         self._last_timestamps = [-1.0] * len(self._vision.Img)
@@ -279,6 +286,9 @@ class RflyVision:
         except AttributeError:
             pass
         time.sleep(0.3)
+
+    def camera_index_for_uav(self, uav_id: int) -> int:
+        return self.camera_uav_ids.index(uav_id)
 
 
 class AsyncVideoWriter:
@@ -314,7 +324,16 @@ class AsyncVideoWriter:
 
 
 class RflyScene:
-    def __init__(self, sdk_root: Path, window_id: int, weather_interval: float, map_name: str, weather_enabled: bool, with_obstacles: bool) -> None:
+    def __init__(
+        self,
+        sdk_root: Path,
+        window_id: int,
+        weather_interval: float,
+        map_name: str,
+        weather_enabled: bool,
+        with_obstacles: bool,
+        weather_profiles: tuple[tuple[str, int], ...],
+    ) -> None:
         for component in (sdk_root, sdk_root / "ue", sdk_root / "ctrl", sdk_root / "comm", sdk_root / "swarm"):
             component_string = str(component)
             if component_string not in sys.path:
@@ -327,6 +346,7 @@ class RflyScene:
         self.map_name = map_name
         self.weather_enabled = weather_enabled
         self.with_obstacles = with_obstacles
+        self.weather_profiles = weather_profiles
         self.weather_index = -1
         self._last_god_view_update = -1.0
         self._last_scene_update = -1.0
@@ -366,14 +386,13 @@ class RflyScene:
     def set_weather(self, elapsed: float) -> tuple[str, int]:
         if not self.weather_enabled:
             return "CLEAR", 0
-        profiles = (("CLEAR", 0), ("RAIN", 5), ("STORM", 6), ("FOG", 10))
-        index = int(elapsed // self.weather_interval) % len(profiles)
+        index = int(elapsed // self.weather_interval) % len(self.weather_profiles)
         if index != self.weather_index:
             self.weather_index = index
-            weather_name, weather_type = profiles[index]
+            weather_name, weather_type = self.weather_profiles[index]
             self._ue.sendUE4ExtAct(WEATHER_CONTROLLER_ID, [weather_type] + [0.0] * 15, windowID=self.window_id)
             print(f"[scene] weather={weather_name}")
-        return profiles[index]
+        return self.weather_profiles[index]
 
     def push(
         self,
@@ -431,8 +450,8 @@ class MissionController:
     def __init__(self) -> None:
         self.uavs = {
             1: SmoothUav(PlanarState(22.0, 45.5, -0.24, altitude=54.0), maximum_speed=11.5, maximum_acceleration=3.8),
-            2: SmoothUav(PlanarState(18.0, 92.0, -0.75, altitude=42.0), maximum_speed=11.5, maximum_acceleration=3.8),
-            3: SmoothUav(PlanarState(-19.0, 54.0, -0.75, altitude=42.0), maximum_speed=11.5, maximum_acceleration=3.8),
+            2: SmoothUav(PlanarState(19.0, 62.0, -0.75, altitude=42.0), maximum_speed=11.5, maximum_acceleration=3.8),
+            3: SmoothUav(PlanarState(48.0, 52.0, -0.75, altitude=42.0), maximum_speed=11.5, maximum_acceleration=3.8),
         }
         self.ground_vehicles = {
             101: GuidedGroundVehicle(PlanarState(184.0, 18.0)),
@@ -443,6 +462,7 @@ class MissionController:
         self.active_uav_id = 1
         self.mode = "SEARCH"
         self.last_transition = "bootstrap"
+        self.handoff_events: list[str] = []
         self._last_active_change = 0.0
         self._search_phase = 0.0
         self._started_at: float | None = None
@@ -450,8 +470,7 @@ class MissionController:
         self._last_acquisition_hit: float | None = None
         self.target_released = False
 
-    def observe(self, camera_index: int, detection: Detection | None, frame: np.ndarray, timestamp: float) -> None:
-        uav_id = UAV_IDS[camera_index]
+    def observe(self, uav_id: int, detection: Detection | None, frame: np.ndarray, timestamp: float) -> None:
         if detection is not None:
             self.tracks[uav_id].update(detection, frame.shape, self.uavs[uav_id].state, timestamp)
             if not self.target_released:
@@ -477,6 +496,7 @@ class MissionController:
         new_active_id, estimate = candidates[0]
         if new_active_id != self.active_uav_id:
             self.last_transition = f"handoff U{self.active_uav_id}->U{new_active_id}"
+            self.handoff_events.append(self.last_transition)
             self.active_uav_id = new_active_id
             self._last_active_change = timestamp
             print(f"[mission] {self.last_transition}")
@@ -619,6 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=Path("output") / "rfly_native")
     parser.add_argument("--duration", type=float, default=96.0)
     parser.add_argument("--weather-interval", type=float, default=24.0)
+    parser.add_argument("--weather-profiles", default=",".join(f"{name}:{weather_type}" for name, weather_type in DEFAULT_WEATHER_PROFILES))
     parser.add_argument("--map-name", default="Grasslands")
     parser.add_argument("--weather", action="store_true")
     parser.add_argument("--window-id", type=int, default=0)
@@ -627,6 +648,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-obstacles", action="store_true")
     parser.add_argument("--no-record", action="store_true")
     return parser
+
+
+def parse_weather_profiles(raw_profiles: str) -> tuple[tuple[str, int], ...]:
+    profiles: list[tuple[str, int]] = []
+    for raw_profile in raw_profiles.split(","):
+        name, separator, type_text = raw_profile.partition(":")
+        if not separator or not name.strip():
+            raise ValueError(f"invalid weather profile: {raw_profile!r}; expected NAME:TYPE")
+        weather_type = int(type_text)
+        if weather_type < 0 or weather_type > 10:
+            raise ValueError(f"weather type must be in [0, 10], got {weather_type}")
+        profiles.append((name.strip().upper(), weather_type))
+    if not profiles:
+        raise ValueError("at least one weather profile is required")
+    return tuple(profiles)
 
 
 def resolve_local_weights(requested: Path | None) -> str | None:
@@ -653,7 +689,7 @@ def wait_for_first_frame(vision: RflyVision, timeout: float) -> tuple[int, np.nd
         for camera_index in range(len(vision._last_timestamps)):
             frame = vision.read(camera_index)
             if frame is not None:
-                print(f"[vision] camera U{UAV_IDS[camera_index]} active: {frame.shape[1]}x{frame.shape[0]}")
+                print(f"[vision] camera U{vision.camera_uav_ids[camera_index]} active: {frame.shape[1]}x{frame.shape[0]}")
                 return camera_index, frame
         time.sleep(0.03)
     raise RuntimeError("Rfly did not provide an RGB frame within the timeout")
@@ -665,6 +701,8 @@ def main() -> int:
         raise ValueError("duration must exceed one second")
     if not arguments.rfly_sdk.exists():
         raise FileNotFoundError(f"Rfly SDK does not exist: {arguments.rfly_sdk}")
+    arguments.vision_config = arguments.vision_config.resolve()
+    weather_profiles = parse_weather_profiles(arguments.weather_profiles) if arguments.weather else (("CLEAR", 0),)
     arguments.output.mkdir(parents=True, exist_ok=True)
     target_route, obstacle_route_one, obstacle_route_two = route_set()
     target_vehicle = RouteVehicle(target_route, initial_distance=0.0, cruise_speed=5.2, speed_variation=1.6, phase=0.6)
@@ -673,7 +711,15 @@ def main() -> int:
         MOVING_OBSTACLE_IDS[1]: RouteVehicle(obstacle_route_two, 120.0, 4.4, 0.7, phase=4.1),
     }
     vision: RflyVision | None = None
-    scene = RflyScene(arguments.rfly_sdk, arguments.window_id, arguments.weather_interval, arguments.map_name, arguments.weather, not arguments.no_obstacles)
+    scene = RflyScene(
+        arguments.rfly_sdk,
+        arguments.window_id,
+        arguments.weather_interval,
+        arguments.map_name,
+        arguments.weather,
+        not arguments.no_obstacles,
+        weather_profiles,
+    )
     scene.bootstrap()
     mission = MissionController()
     initial_weather_name, initial_weather_type = scene.set_weather(0.0)
@@ -687,7 +733,7 @@ def main() -> int:
         raise
     detector = VehicleDetector(resolve_local_weights(arguments.weights), not arguments.no_yolo)
     initial_detection = detector.detect(first_frame)
-    mission.observe(first_camera_index, initial_detection, first_frame, time.monotonic())
+    mission.observe(vision.camera_uav_ids[first_camera_index], initial_detection, first_frame, time.monotonic())
     raw_writer: AsyncVideoWriter | None = None
     dashboard_writer: AsyncVideoWriter | None = None
     if not arguments.no_record:
@@ -703,6 +749,14 @@ def main() -> int:
     latest_detections: dict[int, Detection | None] = {first_camera_index: initial_detection}
     frame_count = 0
     rgb_frame_count = 1
+    camera_frame_counts = {uav_id: 0 for uav_id in vision.camera_uav_ids}
+    camera_detection_counts = {uav_id: 0 for uav_id in vision.camera_uav_ids}
+    weather_frame_counts = {name: 0 for name, _ in weather_profiles}
+    weather_detection_counts = {name: 0 for name, _ in weather_profiles}
+    weather_luminance_sums = {name: 0.0 for name, _ in weather_profiles}
+    camera_frame_counts[vision.camera_uav_ids[first_camera_index]] += 1
+    if initial_detection is not None:
+        camera_detection_counts[vision.camera_uav_ids[first_camera_index]] += 1
     active_rgb_frame_count = 1
     detection_count = 0
     active_detection_count = 0
@@ -737,21 +791,24 @@ def main() -> int:
                     frame = vision.read(camera_index)
                     if frame is None:
                         continue
+                    uav_id = vision.camera_uav_ids[camera_index]
                     rgb_frame_count += 1
+                    camera_frame_counts[uav_id] += 1
                     detection = detector.detect(frame)
-                    mission.observe(camera_index, detection, frame, now)
+                    mission.observe(uav_id, detection, frame, now)
                     latest_frames[camera_index] = frame
                     latest_detections[camera_index] = detection
                     if detection is not None:
                         detection_count += 1
-                    if camera_index == UAV_IDS.index(mission.active_uav_id):
+                        camera_detection_counts[uav_id] += 1
+                    if uav_id == mission.active_uav_id:
                         active_frame_is_new = True
                         active_rgb_frame_count += 1
                         if detection is not None:
                             active_detection_count += 1
                 estimate = mission.step(now, delta_time, weather_type)
                 active_history.append(mission.active_uav_id)
-                active_index = UAV_IDS.index(mission.active_uav_id)
+                active_index = vision.camera_index_for_uav(mission.active_uav_id)
                 active_frame = latest_frames.get(active_index, first_frame)
                 active_detection = latest_detections.get(active_index)
                 scene.push(target_state, mission.uavs, mission.ground_vehicles, moving_obstacles, elapsed, mission.uavs[mission.active_uav_id].state)
@@ -765,6 +822,11 @@ def main() -> int:
                     maximum_detection_gap = max(maximum_detection_gap, current_detection_gap)
                 elif active_frame_is_new:
                     current_detection_gap = 0
+                if active_frame_is_new:
+                    weather_frame_counts[weather_name] += 1
+                    weather_luminance_sums[weather_name] += float(np.mean(active_frame))
+                    if active_detection is not None:
+                        weather_detection_counts[weather_name] += 1
                 if raw_writer is not None:
                     raw_writer.write(active_frame)
                 if dashboard_writer is not None:
@@ -782,6 +844,7 @@ def main() -> int:
                     "detector": None if active_detection is None else active_detection.source,
                     "detection_box": None if active_detection is None else asdict(active_detection),
                     "frame_change_score": round(change_score, 4),
+                    "rgb_luminance": round(float(np.mean(active_frame)), 2),
                     "estimate": None if estimate is None else asdict(estimate),
                     "uavs": {str(uav_id): asdict(uav.state) for uav_id, uav in mission.uavs.items()},
                     "ground_vehicles": {str(vehicle_id): asdict(vehicle.state) for vehicle_id, vehicle in mission.ground_vehicles.items()},
@@ -802,6 +865,8 @@ def main() -> int:
     average_frame_change = 0.0 if not frame_change_scores else float(np.mean(frame_change_scores))
     frozen_frame_ratio = 0.0 if not frame_change_scores else sum(score < 0.18 for score in frame_change_scores) / len(frame_change_scores)
     achieved_fps = 0.0 if arguments.duration <= 0.0 else frame_count / arguments.duration
+    all_requested_cameras_active = all(count > 0 for count in camera_frame_counts.values())
+    multi_camera_handoff_verified = len(camera_frame_counts) > 1 and bool(mission.handoff_events)
     validation = {
         "target_released_after_rgb_lock": mission.target_released,
         "detection_coverage": round(detection_coverage, 3),
@@ -814,6 +879,7 @@ def main() -> int:
         "dashboard_recording_dropped_frames": 0 if dashboard_writer is None else dashboard_writer.dropped_frames,
         "average_frame_change": round(average_frame_change, 4),
         "frozen_frame_ratio": round(frozen_frame_ratio, 3),
+        "requested_camera_streams_active": all_requested_cameras_active,
     }
     validation["accepted"] = bool(
         validation["target_released_after_rgb_lock"]
@@ -824,6 +890,7 @@ def main() -> int:
         and validation["dashboard_recording_dropped_frames"] == 0
         and frozen_frame_ratio < 0.85
         and target_motion_elapsed >= max(2.0, arguments.duration * 0.55)
+        and all_requested_cameras_active
     )
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -831,7 +898,20 @@ def main() -> int:
         "control_frames": frame_count,
         "rgb_detections": detection_count,
         "active_uavs_seen": sorted(set(active_history)),
-        "weather_cycle": ["CLEAR", "RAIN", "STORM", "FOG"] if arguments.weather else ["CLEAR"],
+        "camera_frames": {f"U{uav_id}": count for uav_id, count in camera_frame_counts.items()},
+        "camera_detections": {f"U{uav_id}": count for uav_id, count in camera_detection_counts.items()},
+        "handoff_events": mission.handoff_events,
+        "all_requested_cameras_active": all_requested_cameras_active,
+        "multi_camera_handoff_verified": multi_camera_handoff_verified,
+        "weather_rgb_calibration": {
+            name: {
+                "active_rgb_frames": weather_frame_counts[name],
+                "detection_coverage": round(weather_detection_counts[name] / weather_frame_counts[name], 3) if weather_frame_counts[name] else 0.0,
+                "mean_luminance": round(weather_luminance_sums[name] / weather_frame_counts[name], 2) if weather_frame_counts[name] else 0.0,
+            }
+            for name, _ in weather_profiles
+        },
+        "weather_cycle": [name for name, _ in weather_profiles] if arguments.weather else ["CLEAR"],
         "obstacles_enabled": scene.with_obstacles,
         "target_identity": "The target is the only blue native Rfly vehicle in the scene. White ground vehicles and non-blue obstacles are excluded from RGB association.",
         "perception_boundary": "All control and interception inputs originate from VisionCaptureApi RGB detections. Target pose is recorded only for post-run validation and never enters the controller.",

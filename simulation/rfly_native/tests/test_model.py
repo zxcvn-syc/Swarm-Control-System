@@ -1,7 +1,7 @@
 import numpy as np
 
 from simulation.rfly_native.model import ClosedSplineRoute, GuidedGroundVehicle, PlanarState, RouteVehicle, SmoothUav, magnitude, wrap_angle
-from simulation.rfly_native.rfly_native_demo import Detection, VehicleDetector, VisualTrack
+from simulation.rfly_native.rfly_native_demo import Detection, VehicleDetector, VisualTrack, parse_weather_profiles
 
 
 def test_closed_route_wraps_without_discontinuity() -> None:
@@ -85,3 +85,7 @@ def test_visual_track_coasts_through_short_occlusion() -> None:
     track.update(Detection(306, 90, 334, 122, 0.9, "blue-rgb"), (360, 640, 3), uav, 0.0)
     assert track.fresh(2.4) is not None
     assert track.fresh(2.6) is None
+
+
+def test_weather_profile_parser_uses_supported_udsky_enum_range() -> None:
+    assert parse_weather_profiles("clear:0,fog:7") == (("CLEAR", 0), ("FOG", 7))
