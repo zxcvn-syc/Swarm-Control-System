@@ -59,16 +59,36 @@ Mock 结果与真实结果在报告与数据中均明确区分。
 
 ```bash
 cd 04_code
-python tracking_success_eval.py \
-  --gt-dir ../03_tracking_gt \
-  --track-dir ../02_tracking \
-  --output /tmp/tracking_success_result.csv
+python tracking_success_eval.py
 ```
 
-脚本已参数化：不传参数时默认使用原作者本机路径（D:\UAV_detection），行为不变。
+默认读取冻结的 `03_tracking_gt/` 和 `02_tracking/`，结果写入
+`04_code/outputs/evaluation/`，因此不会覆盖定案 CSV。该命令应复现
+`157/210`、`74.76%`、ID Switch `1`。
 
-其余脚本（`generate_gt_aligned_detections.py`、`run_tracker_eval.py`、Mock 系列）
-保持交付原样，路径常量为原作者本机绝对路径，仓库内复现需自行调整。
+如需从冻结检测结果重新生成 Tracker 输出，请使用独立的实验目录：
+
+```bash
+cd 04_code
+python run_tracker_eval.py --association legacy
+python tracking_success_eval.py \
+  --track-dir outputs/tracker \
+  --output outputs/evaluation/legacy_reproduction.csv
+```
+
+`legacy` 保留原交付的贪心 IoU 关联逻辑，适合检查输入 CSV 与定案流程的一致性；
+`motion` 使用恒速预测和 Hungarian 关联，仅是实验模式，必须单独评估和报告。它不能
+恢复没有检测框的帧，因此不应被描述为解决了 border 或 security 的召回瓶颈。
+
+`generate_gt_aligned_detections.py` 需要显式提供外部权重文件；其默认输出同样位于
+`04_code/outputs/detections/`：
+
+```bash
+cd 04_code
+python generate_gt_aligned_detections.py \
+  --model-path /path/to/best.pt \
+  --video-dir /path/to/videos
+```
 
 ## 六、遗留事项
 
@@ -76,3 +96,4 @@ python tracking_success_eval.py \
 - border 场景检测仅 16/30 帧有输出，若需提升该场景指标，优先提升前端检测召回；
 - 原报告（docx）中 security 分析结论与 ID Switch=14 的表述基于原始 GT，
   引用时以本文件第四节数字为准。
+- `04_code/outputs/` 下的任何新结果均为实验产物，不替代本文和定案页的冻结证据。

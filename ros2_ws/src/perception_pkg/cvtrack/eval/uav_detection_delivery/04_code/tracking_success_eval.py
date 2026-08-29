@@ -1,15 +1,21 @@
 import argparse
 import csv
 import os
+import sys
 from collections import defaultdict
+from pathlib import Path
+from typing import Sequence
 
 
-# 默认值保持原作者本机路径不变；仓库内使用时可通过命令行参数覆盖：
-#   python tracking_success_eval.py \
-#     --gt-dir ../03_tracking_gt --track-dir ../02_tracking \
-#     --output ../02_tracking/tracking_success_result_corrected.csv
-GT_DIR = r"D:\UAV_detection\tracking_gt"
-TRACK_DIR = r"D:\UAV_detection\real_tracker"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+# Frozen evidence is read by default, but output is always written under the
+# code directory so a normal invocation cannot overwrite the delivery CSVs.
+DELIVERY_DIR = Path(__file__).resolve().parent.parent
+GT_DIR = DELIVERY_DIR / "03_tracking_gt"
+TRACK_DIR = DELIVERY_DIR / "02_tracking"
 
 SCENES = [
     "park",
@@ -19,13 +25,10 @@ SCENES = [
 
 IOU_THRESHOLD = 0.30
 
-OUTPUT_FILE = os.path.join(
-    TRACK_DIR,
-    "tracking_success_result_fixed.csv"
-)
+OUTPUT_FILE = DELIVERY_DIR / "04_code" / "outputs" / "evaluation" / "tracking_success_result.csv"
 
 
-def parse_args():
+def parse_args(argv: Sequence[str] | None = None):
 
     parser = argparse.ArgumentParser(
         description="真实 YOLO + Tracker 跟踪成功率评估"
@@ -33,24 +36,34 @@ def parse_args():
 
     parser.add_argument(
         "--gt-dir",
+        type=Path,
         default=GT_DIR,
         help="Tracking GT 目录（含 tracking_gt_<scene>.csv）"
     )
 
     parser.add_argument(
         "--track-dir",
+        type=Path,
         default=TRACK_DIR,
         help="Tracker 输出目录（含 tracking_eval_<scene>.csv）"
     )
 
     parser.add_argument(
         "--output",
-        default=None,
-        help="结果输出 CSV 路径（默认写入 track-dir 下 "
-             "tracking_success_result_fixed.csv）"
+        type=Path,
+        default=OUTPUT_FILE,
+        help="结果输出 CSV 路径（默认写入 04_code/outputs/evaluation）"
     )
 
-    return parser.parse_args()
+    parser.add_argument(
+        "--scenes",
+        nargs="+",
+        choices=SCENES,
+        default=SCENES,
+        help="要评估的场景（默认全部）"
+    )
+
+    return parser.parse_args(argv)
 
 
 # ============================================================
@@ -613,21 +626,14 @@ def evaluate_scene(scene, gt_dir, track_dir):
 # 主程序
 # ============================================================
 
-def main():
+def main(argv: Sequence[str] | None = None):
 
-    args = parse_args()
+    args = parse_args(argv)
 
     gt_dir = args.gt_dir
     track_dir = args.track_dir
 
     output_file = args.output
-
-    if output_file is None:
-
-        output_file = os.path.join(
-            track_dir,
-            "tracking_success_result_fixed.csv"
-        )
 
     print("=" * 70)
     print(
@@ -647,7 +653,7 @@ def main():
     results = []
 
 
-    for scene in SCENES:
+    for scene in args.scenes:
 
         result = evaluate_scene(
             scene,
@@ -819,6 +825,11 @@ def main():
         "id_switches"
     ]
 
+
+    Path(output_file).parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     with open(
         output_file,
