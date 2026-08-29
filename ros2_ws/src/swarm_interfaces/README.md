@@ -16,6 +16,9 @@ ROS2 接口包，集中定义异构无人集群封控系统各模块共用的消
 | `TargetTrack`         | 单个目标的实时轨迹（ID + 像素坐标 + 速度）  | `uint32 target_id`、`float64 x/y`、`float64 vx/vy` |
 | `TargetTrackArray`    | 单帧所有确认目标的轨迹打包                  | `std_msgs/Header header`、`TargetTrack[] tracks`、`uint32 frame_idx` |
 | `TaskAssignment`      | 任务分配结果                                | `uint32 drone_id`、`uint32 target_id`、`string task_type` |
+| `EnclosureCommandArray` | 三层 Voronoi 封控目标与心跳 | `Header`、单调 `sequence`、`EnclosureCommand[]` |
+| `FlightSafetyStatus` | 封控安全门实时状态 | 锁定/激活状态、目标锁定、链路新鲜度、会话/请求号、故障码 |
+| `SafetyControl` | 封控安全门服务 | 手动/自动启用、停用、紧急保持、人工确认复位 |
 
 > `TargetTrackArray` 在 V2 引入：原 `TargetTrack` 单目标字段不变，仅
 > 增加数组容器和 `Header`，便于下游订阅者按帧消费。

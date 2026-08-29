@@ -27,10 +27,16 @@ set(SWARM_INTERFACES_MSG_FILES
   "msg/DroneStateArray.msg"
   "msg/EnclosureCommand.msg"
   "msg/EnclosureCommandArray.msg"
+  "msg/FlightSafetyStatus.msg"
+)
+
+set(SWARM_INTERFACES_SRV_FILES
+  "srv/SafetyControl.srv"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${SWARM_INTERFACES_MSG_FILES}
+  ${SWARM_INTERFACES_SRV_FILES}
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs
 )
 

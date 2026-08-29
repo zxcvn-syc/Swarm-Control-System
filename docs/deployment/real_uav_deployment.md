@@ -43,6 +43,8 @@
 
 `auto_arm` 默认为 `false`，真机阶段必须保持为 `false`。只允许在封闭场地、经人工检查后手动解锁与切换模式；自动解锁仅保留给隔离 SITL。`three_links.launch.py` 仍默认 `enable_control_bridges:=false`，因此回放和桌面验证不会连接飞控控制面。
 
+`flight_safety_supervisor` 是封控指令的软件安全门：默认锁定、仅在人工确认后允许手动或自动封控，并在状态、目标、指令或 MAVROS 链路异常时关闭上层指令通路、请求当前位置保持。它**不**调用 ARM、解锁、模式切换、RTL 或降落服务；PX4 参数、RC 和物理急停仍是飞行安全的最终边界。完整接口、验收和 SITL 流程见 [飞控安全监督器](flight_safety_supervisor.md)。
+
 ## 分阶段验收
 
 1. 台架只读：启动 MAVROS、确认 heartbeat、姿态、相机图像和 `CameraInfo`；不启动控制 bridge。

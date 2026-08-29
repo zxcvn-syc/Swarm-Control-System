@@ -1,0 +1,23 @@
+# Operator commands accepted by the flight-safety supervisor. request_id must
+# strictly increase for each supervisor session and expires_at limits replay.
+uint8 COMMAND_ENABLE_MANUAL=1
+uint8 COMMAND_ENABLE_AUTO=2
+uint8 COMMAND_DISABLE=3
+uint8 COMMAND_EMERGENCY_HOLD=4
+uint8 COMMAND_RESET_FAULT=5
+uint8 command
+# Read the current session_id from /flight_safety/status. A new supervisor
+# process uses a new session and rejects controls replayed from an old one.
+uint64 session_id
+uint64 request_id
+builtin_interfaces/Time expires_at
+string operator_id
+# RESET_FAULT requires a human to explicitly confirm the aircraft is safe.
+# This is an audit/interlock input, not a replacement for a physical sensor.
+bool ground_confirmed
+---
+bool accepted
+uint8 state
+uint8 activation_mode
+uint64 accepted_request_id
+string reason

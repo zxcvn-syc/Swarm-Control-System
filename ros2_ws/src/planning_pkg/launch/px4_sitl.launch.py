@@ -9,6 +9,7 @@ from typing import List
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, Shutdown, TimerAction
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def _world_path() -> str:
@@ -30,6 +31,12 @@ def _world_path() -> str:
 def _resolve_actions(context, *args, **kwargs):
     px4_root = os.environ.get("PX4_SITL_ROOT", "").strip()
     num_uav = int(LaunchConfiguration("num_uav").perform(context))
+    safety_enabled = LaunchConfiguration("enable_flight_safety").perform(context).lower() in {
+        "1", "true", "yes", "on"
+    }
+    auto_arm = LaunchConfiguration("auto_arm").perform(context).lower() in {
+        "1", "true", "yes", "on"
+    }
     headless = LaunchConfiguration("headless").perform(context).lower() in {
         "1", "true", "yes", "on"
     }
@@ -122,21 +129,27 @@ def _resolve_actions(context, *args, **kwargs):
         TimerAction(
             period=5.0,
             actions=[
-                ExecuteProcess(
-                    cmd=[
-                        "ros2", "run", "planning_pkg", "px4_offboard_bridge", "--ros-args",
-                        "-p", "path_topic:=/planned_path",
-                        "-p", "setpoint_topic:=/uav0/mavros/setpoint_raw/local",
-                        "-p", "state_topic:=/uav0/mavros/state",
-                        "-p", "arm_service:=/uav0/mavros/cmd/arming",
-                        "-p", "mode_service:=/uav0/mavros/set_mode",
-                        "-p", "enable_setpoint_streaming:=true",
-                        "-p", "drone_id:=0",
-                        "-p", "auto_arm:=true",
-                    ],
+                Node(
+                    package="planning_pkg",
+                    executable="px4_offboard_bridge",
                     name="px4_offboard_bridge_uav0",
                     output="screen",
                     env=env,
+                    parameters=[
+                        {
+                            "path_topic": "/planned_path",
+                            "setpoint_topic": "/uav0/mavros/setpoint_raw/local",
+                            "state_topic": "/uav0/mavros/state",
+                            "local_pose_topic": "/uav0/mavros/local_position/pose",
+                            "arm_service": "/uav0/mavros/cmd/arming",
+                            "mode_service": "/uav0/mavros/set_mode",
+                            "enable_setpoint_streaming": True,
+                            "drone_id": 0,
+                            "auto_arm": auto_arm,
+                            "safety_hold_enabled": safety_enabled,
+                            "initial_safety_hold": safety_enabled,
+                        }
+                    ],
                 )
             ],
         ),
@@ -146,6 +159,10 @@ def _resolve_actions(context, *args, **kwargs):
 def generate_launch_description() -> LaunchDescription:
     args: List[DeclareLaunchArgument] = [
         DeclareLaunchArgument("num_uav", default_value="1"),
+        DeclareLaunchArgument("enable_flight_safety", default_value="false"),
+        # Keep the legacy SITL profile unchanged; supervised SITL explicitly
+        # overrides this to false so containment activation never arms PX4.
+        DeclareLaunchArgument("auto_arm", default_value="true"),
         DeclareLaunchArgument(
             "headless",
             default_value=EnvironmentVariable("GAZEBO_HEADLESS", default_value="false"),

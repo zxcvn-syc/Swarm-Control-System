@@ -18,6 +18,9 @@ data_files = [
             "launch/px4_sitl.launch.py",
             "launch/sitl_test.launch.py",
             "launch/replan_eval.launch.py",
+            "launch/flight_safety.launch.py",
+            "launch/flight_safety_sitl.launch.py",
+            "launch/supervised_containment.launch.py",
         ],
     ),
     (
@@ -52,6 +55,8 @@ setup(
             "grid_map_node = planning_pkg.grid_map_node:main",
             "ugv_state_pub = planning_pkg.ugv_state_publisher:main",
             "px4_offboard_bridge = planning_pkg.px4_offboard_bridge:main",
+            "flight_safety_supervisor = planning_pkg.flight_safety_supervisor:main",
+            "flight_safety_console = planning_pkg.flight_safety_console:main",
             "sitl_pose_bridge = planning_pkg.sitl_pose_bridge:main",
             "rflysim_follower = planning_pkg.rflysim_follower:main",
             "dstar_benchmark = planning_pkg.dstar_benchmark_node:main",
