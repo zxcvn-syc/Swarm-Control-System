@@ -24,6 +24,7 @@ source "$CONFIG_PATH"
 : "${DETECTOR_DEVICE:=cpu}"
 : "${DETECTOR_IMGSZ:=480}"
 : "${DETECTOR_CONFIDENCE:=0.25}"
+: "${DETECTOR_CLASSES:=}"
 : "${DETECTOR_WEIGHTS:=$WORKSPACE_DIR/src/perception_pkg/best.pt}"
 [[ "$BRIDGE_TOKEN" != "REPLACE_WITH_A_RANDOM_SHARED_TOKEN" ]] || {
     printf 'Set a random BRIDGE_TOKEN before starting the observation console.\n' >&2
@@ -127,6 +128,10 @@ if [[ "$ENABLE_PERCEPTION" == "true" ]]; then
         printf 'perception_pkg is not available in the sourced ROS overlay.\n' >&2
         exit 2
     }
+    DETECTOR_CLASS_ARGS=()
+    if [[ -n "$DETECTOR_CLASSES" ]]; then
+        DETECTOR_CLASS_ARGS=(-p "detector.classes:=$DETECTOR_CLASSES")
+    fi
     ros2 run perception_pkg tracker_node --ros-args \
         -p input_mode:=topic \
         -p image_topic:="${IMAGE_TOPIC:-/camera/image}" \
@@ -137,6 +142,7 @@ if [[ "$ENABLE_PERCEPTION" == "true" ]]; then
         -p detector.device:="$DETECTOR_DEVICE" \
         -p detector.imgsz:="$DETECTOR_IMGSZ" \
         -p detector.conf:="$DETECTOR_CONFIDENCE" \
+        "${DETECTOR_CLASS_ARGS[@]}" \
         -p tracker.kind:=deepsort_cascade \
         -p tracker.stationary_prune:=false \
         >"$SESSION_DIR/perception-tracker.log" 2>&1 &

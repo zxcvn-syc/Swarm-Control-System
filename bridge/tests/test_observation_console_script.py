@@ -21,6 +21,9 @@ def test_observation_console_starts_and_cleans_up_real_perception() -> None:
 
     assert ': "${ENABLE_PERCEPTION:=true}"' in script
     assert "ros2 run perception_pkg tracker_node" in script
+    assert ': "${DETECTOR_CLASSES:=}"' in script
+    assert 'DETECTOR_CLASS_ARGS=(-p "detector.classes:=$DETECTOR_CLASSES")' in script
+    assert '"${DETECTOR_CLASS_ARGS[@]}"' in script
     assert 'kill -INT "$TRACKER_PID"' in script
     assert '-p perception_topic:="$PERCEPTION_TOPIC"' in script
     assert "-p enable_pilot_commands:=false" in script
