@@ -11,6 +11,11 @@ float64 vy                    # Velocity Y (pixels/sec)
 float32 confidence             # Detection confidence (0.0-1.0)
 uint8 cls                     # Object class (COCO style)
 bool is_confirmed             # Track confirmation status
+string label                  # Detector-provided class label
+float32 bbox_x1               # Detection box left edge in source pixels
+float32 bbox_y1               # Detection box top edge in source pixels
+float32 bbox_x2               # Detection box right edge in source pixels
+float32 bbox_y2               # Detection box bottom edge in source pixels
 float32 speed                 # Current speed magnitude
 uint8 motion_mode             # 0=unknown, 1=stationary, 2=slow, 3=fast
 

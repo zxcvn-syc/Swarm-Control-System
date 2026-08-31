@@ -6,6 +6,7 @@
 |------|------|
 | `three_links_demo.sh` | 一键 build + source + launch 4 个节点（无录屏） |
 | `record_three_links.sh` | 启动 + 录屏（支持 `pseudo` / `ros2bag` / `ffmpeg` 三种模式） |
+| `real_uav_session.sh` | 真机插机后的单机 MAVROS 与安全操作台会话；默认只读，控制必须显式开启 |
 
 ### 用法
 
@@ -27,3 +28,6 @@
 ```
 
 详细说明见 `docs/integration/three_link_integration.md`。
+
+真机连接配置与使用见 `docs/deployment/real_uav_connection.md`。该脚本不自动解锁、切换
+Offboard 或启动路径控制 bridge。

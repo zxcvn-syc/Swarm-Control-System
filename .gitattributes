@@ -1,2 +1,6 @@
 # Preserve simulator-generated evidence logs exactly as captured.
 docs/evidence/px4_offboard_sitl_20260827/launch.log -whitespace
+
+# Deployment scripts and sourced environment files must retain Unix line endings.
+*.sh text eol=lf
+*.env text eol=lf

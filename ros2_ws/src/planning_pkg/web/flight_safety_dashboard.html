@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <link rel="icon" href="data:,">
+    <title>飞行安全操作台</title>
+    <link rel="stylesheet" href="/flight_safety_dashboard.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <h1>飞行安全操作台</h1>
+        </div>
+        <div class="header-status" aria-live="polite">
+          <span class="connection-dot" id="status-dot"></span>
+          <span id="status-connection">等待安全状态</span>
+          <time id="local-time"></time>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="封控操作台">
+        <section class="monitor-column" aria-labelledby="video-heading">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">实时监控</p>
+              <h2 id="video-heading">现场视频</h2>
+            </div>
+            <div class="stream-meta" id="video-meta">等待视频流</div>
+          </div>
+
+          <div class="video-frame" id="video-frame">
+            <img id="video-stream" src="/stream.mjpg" alt="封控现场实时视频流">
+            <div class="detection-layer" id="detection-layer" aria-hidden="true"></div>
+            <div class="video-empty" id="video-empty" aria-live="polite">
+              <span class="empty-reticle" aria-hidden="true"></span>
+              <strong>未收到视频流</strong>
+              <span>请确认压缩图像话题与相机链路</span>
+            </div>
+            <div class="video-overlay" id="video-overlay" hidden>
+              <span id="overlay-target">未锁定目标</span>
+              <span id="overlay-frame">实时帧</span>
+            </div>
+          </div>
+
+          <section class="event-section" aria-labelledby="event-heading">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-label">运行记录</p>
+                <h2 id="event-heading">本次会话事件</h2>
+              </div>
+              <button class="text-button" type="button" id="clear-events">清空</button>
+            </div>
+            <ol class="event-log" id="event-log" aria-live="polite">
+              <li class="event-empty">尚未收到安全状态或操作结果。</li>
+            </ol>
+          </section>
+        </section>
+
+        <aside class="command-rail" aria-label="封控状态与控制">
+          <section class="state-panel" aria-labelledby="state-heading">
+            <p class="section-label">封控状态</p>
+            <h2 id="state-heading" class="state-name">等待安全状态</h2>
+            <p class="state-reason" id="state-reason">监督器尚未发布状态。</p>
+          </section>
+
+          <dl class="status-list" aria-label="安全链路状态">
+            <div>
+              <dt>目标锁定</dt>
+              <dd id="target-lock">未知</dd>
+            </div>
+            <div>
+              <dt>感知链路</dt>
+              <dd id="perception-state">未知</dd>
+            </div>
+            <div>
+              <dt>当前检测</dt>
+              <dd id="perception-count">未知</dd>
+            </div>
+            <div>
+              <dt>封控模式</dt>
+              <dd id="activation-mode">未知</dd>
+            </div>
+            <div>
+              <dt>保持请求</dt>
+              <dd id="hold-state">未知</dd>
+            </div>
+            <div>
+              <dt>MAVROS</dt>
+              <dd id="mavros-state">未知</dd>
+            </div>
+            <div>
+              <dt>平台状态</dt>
+              <dd id="platform-state">未知</dd>
+            </div>
+            <div>
+              <dt>封控指令</dt>
+              <dd id="command-state">未知</dd>
+            </div>
+          </dl>
+
+          <section class="pilot-status" aria-labelledby="pilot-status-heading">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-label">飞手接口</p>
+                <h2 id="pilot-status-heading">PX4 状态</h2>
+              </div>
+              <span class="pilot-readonly" id="pilot-availability">人工控制未启用</span>
+            </div>
+            <dl class="status-list compact-status" aria-label="PX4 飞行器状态">
+              <div>
+                <dt>飞控链路</dt>
+                <dd id="pilot-fcu-state">未知</dd>
+              </div>
+              <div>
+                <dt>解锁状态</dt>
+                <dd id="pilot-arm-state">未知</dd>
+              </div>
+              <div>
+                <dt>飞行模式</dt>
+                <dd id="pilot-mode-state">未知</dd>
+              </div>
+            </dl>
+          </section>
+
+          <form class="control-form" id="control-form">
+            <div class="field-group">
+              <label for="operator-id">操作员编号</label>
+              <input id="operator-id" name="operator-id" maxlength="64" autocomplete="username" placeholder="例如 safety_pilot">
+            </div>
+            <div class="field-group">
+              <label for="operator-token">控制令牌</label>
+              <input id="operator-token" name="operator-token" type="password" autocomplete="off" placeholder="仅保存在当前页面内存中">
+            </div>
+
+            <fieldset class="mode-select">
+              <legend>启用方式</legend>
+              <div class="segmented-control">
+                <label><input type="radio" name="activation-mode" value="manual" checked><span>手动</span></label>
+                <label><input type="radio" name="activation-mode" value="auto"><span>自动</span></label>
+              </div>
+            </fieldset>
+
+            <button class="command-button primary" type="submit" id="enable-button">开启手动封控</button>
+            <button class="command-button neutral" type="button" data-command="disable">停止封控</button>
+            <button class="command-button emergency" type="button" data-command="emergency_hold">紧急保持</button>
+            <label class="confirm-row" for="ground-confirmed">
+              <input id="ground-confirmed" type="checkbox">
+              <span>已确认飞行器及现场处于地面安全状态</span>
+            </label>
+            <button class="command-button reset" type="button" data-command="reset_fault" id="reset-button" disabled>地面确认后复位</button>
+            <p class="control-message" id="control-message" role="status">只控制封控安全门，不发送 PX4 解锁、模式或飞行指令。</p>
+          </form>
+
+          <section class="pilot-control" aria-labelledby="pilot-control-heading">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-label">飞手命令</p>
+                <h2 id="pilot-control-heading">人工确认控制</h2>
+              </div>
+            </div>
+            <div class="pilot-actions" id="pilot-actions">
+              <button class="command-button neutral" type="button" data-pilot-action="position">切换 POSCTL</button>
+              <button class="command-button neutral" type="button" data-pilot-action="altitude">切换 ALTCTL</button>
+              <button class="command-button primary" type="button" data-pilot-action="arm">请求解锁</button>
+              <button class="command-button primary" type="button" data-pilot-action="offboard">请求 OFFBOARD</button>
+              <button class="command-button reset" type="button" data-pilot-action="disarm">地面确认后上锁</button>
+            </div>
+            <p class="control-message" id="pilot-control-message" role="status">未启用飞手命令。方向与姿态人工操控必须使用 RC。</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <dialog class="pilot-confirmation" id="pilot-confirmation" aria-labelledby="pilot-confirmation-title">
+      <form method="dialog" id="pilot-confirmation-form">
+        <p class="section-label">命令确认</p>
+        <h2 id="pilot-confirmation-title">确认飞手命令</h2>
+        <p id="pilot-confirmation-description"></p>
+        <label class="field-group" for="pilot-confirmation-input">
+          <span>输入确认短语</span>
+          <input id="pilot-confirmation-input" autocomplete="off" spellcheck="false" maxlength="16">
+        </label>
+        <div class="dialog-actions">
+          <button class="command-button neutral" type="button" id="pilot-confirmation-cancel">取消</button>
+          <button class="command-button primary" type="submit" id="pilot-confirmation-submit">发送请求</button>
+        </div>
+      </form>
+    </dialog>
+    <noscript>此操作台需要浏览器启用 JavaScript 才能获取实时状态。</noscript>
+    <script src="/flight_safety_dashboard.js" defer></script>
+  </body>
+</html>

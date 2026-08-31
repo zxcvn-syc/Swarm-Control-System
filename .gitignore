@@ -16,6 +16,9 @@ htmlcov/
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+ros2_ws/build-*/
+ros2_ws/install-*/
+ros2_ws/log-*/
 ros2_ws/.colcon_install_layout/
 
 # IDE / editor
@@ -34,10 +37,14 @@ env/
 .env
 .env.local
 *.local.yaml
+bridge/config/*.env
+!bridge/config/*.template.env
+bridge/runtime/
 
 # Build & test artifacts
 output/
 *.tar.gz
+dashboard-smoke/*.log
 
 # Generated test videos
 videos/*.mp4

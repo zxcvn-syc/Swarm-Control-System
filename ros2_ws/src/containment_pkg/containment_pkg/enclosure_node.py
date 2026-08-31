@@ -47,6 +47,9 @@ class EnclosureNode(Node):
         self.declare_parameter("block_radius", 15.0)
         self.declare_parameter("min_dist", 5.0)
         self.declare_parameter("update_period", 1.0)
+        # When a safety supervisor consumes this topic it needs a fresh,
+        # sequenced heartbeat even while the optimal enclosure plan is static.
+        self.declare_parameter("publish_heartbeat", False)
         self.declare_parameter("pose_topic", "/uav1/current_pose")
         self.declare_parameter("pose_drone_id", 1)
         self.declare_parameter("target_track_topic", "/target_track_world")
@@ -58,6 +61,7 @@ class EnclosureNode(Node):
         self._dirty = False
         self._last_update_time = None
         self._update_count = 0
+        self._command_sequence = 0
 
         target_track_topic = str(
             self.get_parameter("target_track_topic").value
@@ -157,11 +161,13 @@ class EnclosureNode(Node):
         return list(merged.values())
 
     def tick(self):
-        """Recalculate at most once per timer period when state changed."""
-        if not self._dirty or not self._targets:
+        """Publish a changed plan, or an optional safety heartbeat."""
+        if not self._targets:
             return False
         drones = self._merged_drones()
         if not drones:
+            return False
+        if not self._dirty and not bool(self.get_parameter("publish_heartbeat").value):
             return False
         self._recalculate(drones)
         return True
@@ -238,6 +244,10 @@ class EnclosureNode(Node):
         self.get_logger().debug(f"Voronoi update completed in {elapsed_ms:.3f} ms")
 
         command_msg = EnclosureCommandArray()
+        command_msg.header.stamp = self.get_clock().now().to_msg()
+        command_msg.header.frame_id = "world"
+        self._command_sequence += 1
+        command_msg.sequence = self._command_sequence
         command_msg.num_drones = len(plan)
         command_msg.commands = []
         for state, layer, point, radius in plan:

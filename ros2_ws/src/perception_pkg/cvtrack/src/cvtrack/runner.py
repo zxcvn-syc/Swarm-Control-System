@@ -739,6 +739,19 @@ class CvtrackRunner:
         except Exception:
             score = 0.0
 
+        try:
+            bbox_x1 = float(t.box.x1)
+            bbox_y1 = float(t.box.y1)
+            bbox_x2 = float(t.box.x2)
+            bbox_y2 = float(t.box.y2)
+            if not all(math.isfinite(value) for value in (
+                bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+            )):
+                raise ValueError("non-finite track bounding box")
+        except (AttributeError, TypeError, ValueError):
+            bbox_x1 = bbox_x2 = pos_x
+            bbox_y1 = bbox_y2 = pos_y
+
         return TrackedTarget(
             target_id=int(t.track_id),
             x=pos_x,
@@ -755,6 +768,10 @@ class CvtrackRunner:
             pred_x=pred_x,
             pred_y=pred_y,
             pred_conf=pred_conf,
+            bbox_x1=bbox_x1,
+            bbox_y1=bbox_y1,
+            bbox_x2=bbox_x2,
+            bbox_y2=bbox_y2,
         )
 
 
@@ -790,6 +807,10 @@ class TrackedTarget:
     pred_x: List[float] = field(default_factory=lambda: [0.0] * 5)
     pred_y: List[float] = field(default_factory=lambda: [0.0] * 5)
     pred_conf: List[float] = field(default_factory=lambda: [1.0] * 5)
+    bbox_x1: float = 0.0
+    bbox_y1: float = 0.0
+    bbox_x2: float = 0.0
+    bbox_y2: float = 0.0
 
 
 # ---------------------------------------------------------------------------
