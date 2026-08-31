@@ -1,0 +1,17 @@
+# Copy to /etc/swarm-control/real_uav_operator_checklist.yaml immediately
+# before the field session. The preflight checker treats every false or missing
+# item as NO_GO. This record does not replace the pilot's legal authority.
+flight_director: REPLACE_WITH_NAME
+safety_pilot: REPLACE_WITH_NAME
+recorded_at: REPLACE_WITH_ISO8601_TIMESTAMP
+checks:
+  airspace_authorized: false
+  weather_acceptable: false
+  physical_emergency_stop_tested: false
+  rc_link_and_failsafe_verified: false
+  px4_failsafes_reviewed: false
+  battery_and_propellers_inspected: false
+  observer_briefed: false
+  flight_area_secured: false
+  operator_has_manual_control: false
+  safety_gate_locked_at_start: false

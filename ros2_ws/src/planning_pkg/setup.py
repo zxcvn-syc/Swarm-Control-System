@@ -10,7 +10,14 @@ world_file = repo_root / "simulation" / "worlds" / "swarm_field.world"
 data_files = [
     ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
     ("share/" + package_name, ["package.xml"]),
-    ("share/" + package_name + "/config", ["config/planning.yaml"]),
+    (
+        "share/" + package_name + "/config",
+        [
+            "config/planning.yaml",
+            "config/real_uav_calibration.template.yaml",
+            "config/real_uav_operator_checklist.template.yaml",
+        ],
+    ),
     (
         "share/" + package_name + "/launch",
         [
@@ -22,6 +29,7 @@ data_files = [
             "launch/flight_safety_sitl.launch.py",
             "launch/supervised_containment.launch.py",
             "launch/flight_safety_dashboard.launch.py",
+            "launch/real_uav_operator_console.launch.py",
         ],
     ),
     (
@@ -67,6 +75,7 @@ setup(
             "flight_safety_supervisor = planning_pkg.flight_safety_supervisor:main",
             "flight_safety_console = planning_pkg.flight_safety_console:main",
             "flight_safety_dashboard = planning_pkg.flight_safety_dashboard:main",
+            "real_uav_preflight = planning_pkg.real_uav_preflight:main",
             "sitl_pose_bridge = planning_pkg.sitl_pose_bridge:main",
             "rflysim_follower = planning_pkg.rflysim_follower:main",
             "dstar_benchmark = planning_pkg.dstar_benchmark_node:main",

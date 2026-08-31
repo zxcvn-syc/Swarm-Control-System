@@ -4,10 +4,13 @@
 它在一个页面中显示真实相机视频、目标锁定、封控状态、保持状态和关键链路
 新鲜度，并且只代理已有的 `/flight_safety/control` 封控安全门服务。
 
-它**不是遥控器替代品**：不会发布 MAVROS 位置/速度设定点，也没有 PX4 解锁、
-模式切换、返航或降落功能。真机的姿态和飞行应急处置仍必须由 RC、PX4
-失效保护和已批准的物理流程负责。完整的安全门状态机与 SITL 流程见
-[飞行安全监督器](flight_safety_supervisor.md)。
+它默认**不是遥控器替代品**：不会发布 MAVROS 位置/速度设定点，也不会在默认
+配置下调用任何 PX4 服务。仅当显式开启 `enable_pilot_commands`、配置 token 和
+可写审计日志后，才会暴露受确认的解锁/上锁、`POSCTL`、`ALTCTL` 和受安全门
+约束的 `OFFBOARD` 请求；仍不提供返航、降落、起飞、位置/速度手控或参数修改。
+真机姿态和飞行应急处置必须由 RC、PX4 失效保护和已批准的物理流程负责。完整的
+飞手接口与启动顺序见[真机飞手操作台与接口手册](real_uav_operator_interface.md)，
+完整安全门状态机见[飞行安全监督器](flight_safety_supervisor.md)。
 
 ## 前置条件
 
@@ -26,7 +29,7 @@
 ## 构建与启动
 
 ```bash
-cd ~/Swarm-Control-System/ros2_ws
+cd ~/Swarm-Control-System-operator-console/ros2_ws
 colcon build --packages-select swarm_interfaces containment_pkg planning_pkg
 source install/setup.bash
 
@@ -39,13 +42,14 @@ ros2 launch planning_pkg flight_safety_dashboard.launch.py
 
 ### 开启本机控制
 
-网页控制默认关闭。必须在启动时配置一个非空、专用于本次操作的
-`operator_token`；浏览器中的“控制令牌”会随每次同源请求发送，但前端不会将它
-写入 `localStorage`、Cookie 或事件日志。
+网页控制默认关闭。必须在启动时配置一个非空、专用于本次操作的 token；默认从
+环境变量 `FLIGHT_SAFETY_TOKEN` 读取，避免把凭据写进 launch 命令行。浏览器中的
+“控制令牌”会随每次同源请求发送，但前端不会将它写入 `localStorage`、Cookie 或
+事件日志。
 
 ```bash
-ros2 launch planning_pkg flight_safety_dashboard.launch.py \
-  operator_token:='replace-with-a-unique-local-token'
+export FLIGHT_SAFETY_TOKEN="$(openssl rand -hex 32)"
+ros2 launch planning_pkg flight_safety_dashboard.launch.py
 ```
 
 操作员还必须填写可审计的“操作员编号”。服务端从最新安全状态读取会话 ID 和
@@ -62,7 +66,8 @@ ros2 launch planning_pkg flight_safety_dashboard.launch.py \
 默认 `127.0.0.1` 只允许本机浏览器访问。需要在受控测试网远程查看时可以设置
 监听地址，例如 `bind_address:=192.168.88.135`，但此时网页控制仍保持关闭。
 
-远程控制需要同时满足以下条件：配置 `operator_token`，并显式设置
+远程控制需要同时满足以下条件：配置 `FLIGHT_SAFETY_TOKEN`（或受控的
+`operator_token` 参数），并显式设置
 `allow_remote_control:=true`。仅在隔离网络、身份认证、访问控制和实机安全审查
 都已完成后才允许这样做。令牌不能代替 DDS/SROS2 身份认证，也不应通过聊天、
 Git、截图或共享命令历史传播。
@@ -70,7 +75,6 @@ Git、截图或共享命令历史传播。
 ```bash
 ros2 launch planning_pkg flight_safety_dashboard.launch.py \
   bind_address:=192.168.88.135 \
-  operator_token:='replace-with-a-unique-local-token' \
   allow_remote_control:=true
 ```
 
@@ -87,13 +91,14 @@ ros2 launch planning_pkg flight_safety_dashboard.launch.py \
 | `status_topic` | `/flight_safety/status` | 监督器状态话题。 |
 | `control_service` | `/flight_safety/control` | 安全门控制服务。 |
 | `video_topic` | `/camera/image/compressed` | JPEG `CompressedImage` 视频源。 |
-| `operator_token` | 空 | 非空后才可能开启网页控制。 |
+| `operator_token` | 空 | 覆盖环境变量的直接 token；不建议在命令行使用。 |
+| `operator_token_env` | `FLIGHT_SAFETY_TOKEN` | 从环境读取控制 token 的变量名。 |
 | `allow_remote_control` | `false` | 非回环监听时必须显式为真才能控制。 |
 | `status_stale_timeout` | `3.0` | 状态超过该秒数时拒绝控制。 |
 
 ## 快速验收
 
-1. 不传 `operator_token` 启动页面，确认能看到安全状态和视频状态，但所有控制
+1. 不设置 `FLIGHT_SAFETY_TOKEN` 启动页面，确认能看到安全状态和视频状态，但所有控制
    按钮禁用；向 `/api/control` 请求会得到 `403`。
 2. 配置令牌后，在本机打开页面，确认锁定目标、MAVROS、平台状态和封控指令会
    随 `/flight_safety/status` 更新。

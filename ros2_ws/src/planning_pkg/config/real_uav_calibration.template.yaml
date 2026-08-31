@@ -1,0 +1,23 @@
+# Copy to /etc/swarm-control/real_uav_calibration.yaml on the companion computer.
+# Replace every placeholder with an actual calibration record. This template is
+# intentionally rejected by real_uav_preflight until it is completed.
+vehicle:
+  airframe: REPLACE_WITH_AIRFRAME
+  flight_controller_serial: REPLACE_WITH_PX4_SERIAL
+camera:
+  serial: REPLACE_WITH_CAMERA_SERIAL
+  frame_id: REPLACE_WITH_CAMERA_OPTICAL_FRAME
+intrinsics:
+  artifact: /etc/swarm-control/camera_intrinsics.yaml
+  calibrated_at: REPLACE_WITH_ISO8601_TIMESTAMP
+  reprojection_error_px: null
+extrinsics:
+  artifact: /etc/swarm-control/camera_to_body_transform.yaml
+  body_frame: base_link
+  camera_frame: REPLACE_WITH_CAMERA_OPTICAL_FRAME
+  verified_at: REPLACE_WITH_ISO8601_TIMESTAMP
+local_origin:
+  frame_id: map
+  verified_at: REPLACE_WITH_ISO8601_TIMESTAMP
+ground_reference:
+  verified_at: REPLACE_WITH_ISO8601_TIMESTAMP

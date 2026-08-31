@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-30T13:12:33.526584+00:00",
+  "stage": "bench",
+  "read_only": true,
+  "technical_gate": "NO_GO",
+  "flight_authority": "operator_and_px4_only",
+  "failed_checks": [
+    "mavros_state",
+    "mavros_connected",
+    "vehicle_disarmed",
+    "camera_image",
+    "camera_info",
+    "camera_info_valid",
+    "image_camera_info_match",
+    "local_pose",
+    "local_pose_valid",
+    "local_pose_frame",
+    "battery",
+    "battery_threshold"
+  ],
+  "checks": [
+    {
+      "name": "mavros_state",
+      "passed": false,
+      "detail": "no_messages;receive_stale",
+      "observation": {
+        "count": 0,
+        "receive_age_seconds": null,
+        "source_age_seconds": null,
+        "rate_hz": null,
+        "max_age_seconds": 1.0,
+        "frame_id": "",
+        "last_source_stamp_seconds": null
+      }
+    },
+    {
+      "name": "mavros_connected",
+      "passed": false,
+      "detail": "not_connected",
+      "observation": {}
+    },
+    {
+      "name": "vehicle_disarmed",
+      "passed": false,
+      "detail": "vehicle_armed_or_unknown",
+      "observation": {}
+    },
+    {
+      "name": "offboard_inactive",
+      "passed": true,
+      "detail": "offboard_inactive",
+      "observation": {}
+    },
+    {
+      "name": "camera_image",
+      "passed": false,
+      "detail": "no_messages;receive_stale;source_stamp_stale_or_missing;rate_below_minimum",
+      "observation": {
+        "count": 0,
+        "receive_age_seconds": null,
+        "source_age_seconds": null,
+        "rate_hz": null,
+        "max_age_seconds": 1.0,
+        "frame_id": "",
+        "last_source_stamp_seconds": null
+      }
+    },
+    {
+      "name": "camera_info",
+      "passed": false,
+      "detail": "no_messages;receive_stale;source_stamp_stale_or_missing",
+      "observation": {
+        "count": 0,
+        "receive_age_seconds": null,
+        "source_age_seconds": null,
+        "rate_hz": null,
+        "max_age_seconds": 1.0,
+        "frame_id": "",
+        "last_source_stamp_seconds": null
+      }
+    },
+    {
+      "name": "camera_info_valid",
+      "passed": false,
+      "detail": "camera_info_invalid",
+      "observation": {}
+    },
+    {
+      "name": "image_camera_info_match",
+      "passed": false,
+      "detail": "image_camera_info_mismatch",
+      "observation": {
+        "image_shape": null,
+        "camera_info_shape": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "name": "local_pose",
+      "passed": false,
+      "detail": "no_messages;receive_stale;source_stamp_stale_or_missing",
+      "observation": {
+        "count": 0,
+        "receive_age_seconds": null,
+        "source_age_seconds": null,
+        "rate_hz": null,
+        "max_age_seconds": 1.0,
+        "frame_id": "",
+        "last_source_stamp_seconds": null
+      }
+    },
+    {
+      "name": "local_pose_valid",
+      "passed": false,
+      "detail": "position_or_quaternion_invalid",
+      "observation": {
+        "quaternion_norm": null
+      }
+    },
+    {
+      "name": "local_pose_frame",
+      "passed": false,
+      "detail": "local_pose_frame_unexpected",
+      "observation": {
+        "expected": "map",
+        "observed": ""
+      }
+    },
+    {
+      "name": "battery",
+      "passed": false,
+      "detail": "no_messages;receive_stale;source_stamp_stale_or_missing",
+      "observation": {
+        "count": 0,
+        "receive_age_seconds": null,
+        "source_age_seconds": null,
+        "rate_hz": null,
+        "max_age_seconds": 1.0,
+        "frame_id": "",
+        "last_source_stamp_seconds": null
+      }
+    },
+    {
+      "name": "battery_threshold",
+      "passed": false,
+      "detail": "battery_percentage_missing_or_below_threshold",
+      "observation": {
+        "minimum": 0.7
+      }
+    }
+  ],
+  "interrupted": false
+}

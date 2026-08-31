@@ -16,6 +16,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html { background: var(--canvas); }
 
@@ -99,6 +100,11 @@ h1 { font-size: 18px; font-weight: 650; line-height: 1.2; }
 .status-list dd.good { color: var(--teal); }
 .status-list dd.warn { color: var(--amber); }
 .status-list dd.bad { color: var(--red); }
+.pilot-status { margin: 2px 0 20px; padding: 15px 0 2px; border-top: 1px solid var(--line); }
+.pilot-readonly { align-self: start; padding: 4px 6px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); font-size: 10px; }
+.pilot-readonly.good { border-color: var(--teal-dim); color: var(--teal); }
+.pilot-readonly.warn { border-color: #6a542d; color: var(--amber); }
+.compact-status { margin: 0; }
 
 .control-form { display: grid; gap: 11px; }
 .field-group { display: grid; gap: 5px; }
@@ -130,12 +136,27 @@ h1 { font-size: 18px; font-weight: 650; line-height: 1.2; }
 .control-message { min-height: 35px; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .control-message.error { color: #ffb9bd; }
 .control-message.success { color: #a0f0e7; }
+.pilot-control { display: grid; gap: 11px; margin-top: 21px; padding-top: 20px; border-top: 1px solid var(--line); }
+.pilot-control .section-heading { margin-bottom: 0; }
+.pilot-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pilot-actions .command-button { min-height: 42px; }
+.pilot-confirmation { width: min(420px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); background: var(--surface-raised); box-shadow: 0 18px 60px #000; }
+.pilot-confirmation::backdrop { background: rgba(0, 0, 0, 0.68); }
+.pilot-confirmation form { display: grid; gap: 13px; padding: 22px; }
+.pilot-confirmation h2 { margin: 0; font-size: 18px; }
+.pilot-confirmation p:not(.section-label) { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.pilot-confirmation .field-group { color: var(--muted); font-size: 11px; }
+.pilot-confirmation input { width: 100%; min-height: 38px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 4px; outline: none; color: var(--text); background: var(--surface); font-size: 13px; }
+.pilot-confirmation input:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(55, 212, 196, 0.15); }
+.dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dialog-actions .command-button { text-align: center; }
 
 @media (max-width: 1080px) {
   .workspace { grid-template-columns: 1fr; }
   .command-rail { border-top: 1px solid var(--line); border-left: 0; }
   .control-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-group, .mode-select, .confirm-row, .control-message { grid-column: 1 / -1; }
+  .pilot-control { max-width: 500px; }
 }
 
 @media (max-width: 620px) {
@@ -149,6 +170,7 @@ h1 { font-size: 18px; font-weight: 650; line-height: 1.2; }
   .status-list { grid-template-columns: 1fr 1fr; }
   .control-form { grid-template-columns: 1fr; }
   .field-group, .mode-select, .confirm-row, .control-message { grid-column: auto; }
+  .pilot-actions { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

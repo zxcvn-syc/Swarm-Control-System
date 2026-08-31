@@ -92,6 +92,30 @@
             </div>
           </dl>
 
+          <section class="pilot-status" aria-labelledby="pilot-status-heading">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-label">飞手接口</p>
+                <h2 id="pilot-status-heading">PX4 状态</h2>
+              </div>
+              <span class="pilot-readonly" id="pilot-availability">人工控制未启用</span>
+            </div>
+            <dl class="status-list compact-status" aria-label="PX4 飞行器状态">
+              <div>
+                <dt>飞控链路</dt>
+                <dd id="pilot-fcu-state">未知</dd>
+              </div>
+              <div>
+                <dt>解锁状态</dt>
+                <dd id="pilot-arm-state">未知</dd>
+              </div>
+              <div>
+                <dt>飞行模式</dt>
+                <dd id="pilot-mode-state">未知</dd>
+              </div>
+            </dl>
+          </section>
+
           <form class="control-form" id="control-form">
             <div class="field-group">
               <label for="operator-id">操作员编号</label>
@@ -120,9 +144,41 @@
             <button class="command-button reset" type="button" data-command="reset_fault" id="reset-button" disabled>地面确认后复位</button>
             <p class="control-message" id="control-message" role="status">只控制封控安全门，不发送 PX4 解锁、模式或飞行指令。</p>
           </form>
+
+          <section class="pilot-control" aria-labelledby="pilot-control-heading">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-label">飞手命令</p>
+                <h2 id="pilot-control-heading">人工确认控制</h2>
+              </div>
+            </div>
+            <div class="pilot-actions" id="pilot-actions">
+              <button class="command-button neutral" type="button" data-pilot-action="position">切换 POSCTL</button>
+              <button class="command-button neutral" type="button" data-pilot-action="altitude">切换 ALTCTL</button>
+              <button class="command-button primary" type="button" data-pilot-action="arm">请求解锁</button>
+              <button class="command-button primary" type="button" data-pilot-action="offboard">请求 OFFBOARD</button>
+              <button class="command-button reset" type="button" data-pilot-action="disarm">地面确认后上锁</button>
+            </div>
+            <p class="control-message" id="pilot-control-message" role="status">未启用飞手命令。方向与姿态人工操控必须使用 RC。</p>
+          </section>
         </aside>
       </section>
     </main>
+    <dialog class="pilot-confirmation" id="pilot-confirmation" aria-labelledby="pilot-confirmation-title">
+      <form method="dialog" id="pilot-confirmation-form">
+        <p class="section-label">命令确认</p>
+        <h2 id="pilot-confirmation-title">确认飞手命令</h2>
+        <p id="pilot-confirmation-description"></p>
+        <label class="field-group" for="pilot-confirmation-input">
+          <span>输入确认短语</span>
+          <input id="pilot-confirmation-input" autocomplete="off" spellcheck="false" maxlength="16">
+        </label>
+        <div class="dialog-actions">
+          <button class="command-button neutral" type="button" id="pilot-confirmation-cancel">取消</button>
+          <button class="command-button primary" type="submit" id="pilot-confirmation-submit">发送请求</button>
+        </div>
+      </form>
+    </dialog>
     <noscript>此操作台需要浏览器启用 JavaScript 才能获取实时状态。</noscript>
     <script src="/flight_safety_dashboard.js" defer></script>
   </body>
