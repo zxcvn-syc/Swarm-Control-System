@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import mimetypes
 import os
 import secrets
@@ -30,7 +31,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
-from swarm_interfaces.msg import FlightSafetyStatus
+from swarm_interfaces.msg import FlightSafetyStatus, TargetTrackArray
 from swarm_interfaces.srv import SafetyControl
 
 from .flight_safety_dashboard_state import (
@@ -77,6 +78,14 @@ def _set_stamp(stamp: Any, seconds: float) -> None:
         nanosec -= 1_000_000_000
     stamp.sec = sec
     stamp.nanosec = nanosec
+
+
+def _finite_float(value: Any, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if math.isfinite(numeric) else default
 
 
 class _DashboardHTTPServer(ThreadingHTTPServer):
@@ -224,6 +233,7 @@ class FlightSafetyDashboard(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         image_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+        perception_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(
             FlightSafetyStatus,
             self._str_param("status_topic"),
@@ -235,6 +245,12 @@ class FlightSafetyDashboard(Node):
             self._str_param("video_topic"),
             self.on_video,
             image_qos,
+        )
+        self.create_subscription(
+            TargetTrackArray,
+            self._str_param("perception_topic"),
+            self.on_perception,
+            perception_qos,
         )
         self.create_subscription(
             State,
@@ -299,6 +315,8 @@ class FlightSafetyDashboard(Node):
             "status_topic": "/flight_safety/status",
             "control_service": "/flight_safety/control",
             "video_topic": "/camera/image/compressed",
+            "perception_topic": "/target_track",
+            "perception_stale_timeout": 3.0,
             "operator_token": "",
             "operator_token_env": "FLIGHT_SAFETY_TOKEN",
             "allow_remote_control": False,
@@ -372,6 +390,38 @@ class FlightSafetyDashboard(Node):
         if not self.state.update_frame(bytes(message.data)):
             self.get_logger().warning("discarded invalid or oversized dashboard JPEG frame")
 
+    def on_perception(self, message: TargetTrackArray) -> None:
+        tracks = []
+        for track in list(message.tracks)[:100]:
+            tracks.append(
+                {
+                    "target_id": int(track.target_id),
+                    "label": str(getattr(track, "label", "")),
+                    "cls": int(track.cls),
+                    "confidence": max(
+                        0.0, min(1.0, _finite_float(track.confidence, 0.0))
+                    ),
+                    "confirmed": bool(track.is_confirmed),
+                    "x": _finite_float(track.x),
+                    "y": _finite_float(track.y),
+                    "vx": _finite_float(track.vx),
+                    "vy": _finite_float(track.vy),
+                    "bbox_x1": _finite_float(getattr(track, "bbox_x1", track.x)),
+                    "bbox_y1": _finite_float(getattr(track, "bbox_y1", track.y)),
+                    "bbox_x2": _finite_float(getattr(track, "bbox_x2", track.x)),
+                    "bbox_y2": _finite_float(getattr(track, "bbox_y2", track.y)),
+                    "motion_mode": int(track.motion_mode),
+                }
+            )
+        self.state.update_perception(
+            {
+                "frame_idx": int(message.frame_idx),
+                "image_width": int(getattr(message, "image_width", 0)),
+                "image_height": int(getattr(message, "image_height", 0)),
+                "tracks": tracks,
+            }
+        )
+
     def on_mavros_state(self, message: State) -> None:
         with self._mavros_lock:
             self._mavros_state = {
@@ -398,6 +448,10 @@ class FlightSafetyDashboard(Node):
             "offboard": "OFFBOARD",
         }
         payload["video_topic"] = self._str_param("video_topic")
+        payload["perception_topic"] = self._str_param("perception_topic")
+        payload["perception_stale_timeout"] = self._float_param(
+            "perception_stale_timeout"
+        )
         return payload
 
     def handle_control(self, body: dict[str, Any], *, token: str) -> tuple[int, dict[str, Any]]:

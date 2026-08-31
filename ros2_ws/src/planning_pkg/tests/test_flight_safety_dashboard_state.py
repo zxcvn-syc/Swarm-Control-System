@@ -17,6 +17,14 @@ def test_snapshot_starts_unavailable_without_video():
     assert not snapshot["available"]
     assert snapshot["status_age_seconds"] is None
     assert snapshot["video"] == {"available": False, "age_seconds": None, "sequence": 0}
+    assert snapshot["perception"] == {
+        "available": False,
+        "frame_idx": 0,
+        "image_width": 0,
+        "image_height": 0,
+        "tracks": [],
+        "age_seconds": None,
+    }
 
 
 def test_state_keeps_one_valid_jpeg_frame_and_notifies_waiter():
@@ -53,3 +61,32 @@ def test_status_snapshot_is_a_copy_of_the_latest_update():
     snapshot["state_name"] = "MUTATED"
 
     assert state.status_snapshot()["state_name"] == "LOCKED"
+
+
+def test_perception_snapshot_keeps_real_boxes_and_is_copy():
+    state = DashboardState(max_video_bytes=1024)
+    state.update_perception(
+        {
+            "frame_idx": 12,
+            "image_width": 1280,
+            "image_height": 720,
+            "tracks": [
+                {
+                    "target_id": 7,
+                    "label": "car",
+                    "confidence": 0.91,
+                    "bbox_x1": 100.0,
+                    "bbox_y1": 120.0,
+                    "bbox_x2": 260.0,
+                    "bbox_y2": 280.0,
+                }
+            ],
+        }
+    )
+
+    snapshot = state.status_snapshot()
+    assert snapshot["perception"]["available"]
+    assert snapshot["perception"]["image_width"] == 1280
+    assert snapshot["perception"]["tracks"][0]["target_id"] == 7
+    snapshot["perception"]["tracks"][0]["label"] = "mutated"
+    assert state.status_snapshot()["perception"]["tracks"][0]["label"] == "car"

@@ -1,8 +1,8 @@
 # perception_pkg
 
 ROS2 感知与跟踪模块：YOLOv8 目标检测 + DeepSORT / BoT-SORT 跟踪，把
-每帧的"目标实时 ID + 像素坐标 (X, Y)"打包成 `swarm_interfaces/TargetTrackArray`
-消息发布到 `/target_track`。
+每帧的目标 ID、像素中心、真实边界框、类别和置信度打包成
+`swarm_interfaces/TargetTrackArray` 消息发布到 `/target_track`。
 
 ---
 
@@ -18,11 +18,16 @@ ROS2 感知与跟踪模块：YOLOv8 目标检测 + DeepSORT / BoT-SORT 跟踪，
 | `confidence` | `float32` | 检测置信度 (0.0–1.0) |
 | `cls` | `uint8` | COCO 目标类别 |
 | `is_confirmed` | `bool` | 是否已确认（经 n_init 帧确认） |
+| `label` | `string` | 检测器返回的类别名称 |
+| `bbox_x1/y1/x2/y2` | `float32` | 源图像坐标系中的轴对齐真实检测框 |
 | `speed` | `float32` | 速度大小（标量） |
 | `motion_mode` | `uint8` | 运动模式：0=未知, 1=静止, 2=慢速, 3=快速 |
 | `pred_x[5]` | `float32[5]` | 未来5步预测 X 坐标（仅 adaptive tracker 有意义） |
 | `pred_y[5]` | `float32[5]` | 未来5步预测 Y 坐标 |
 | `pred_conf[5]` | `float32[5]` | 预测置信度 |
+
+`TargetTrackArray.image_width/image_height` 记录该帧的源图像尺寸，供操作台准确处理
+缩放与黑边；融合源尺寸不一致时保持为 0，避免伪造统一像素坐标系。
 
 ### QoS 与帧率
 
@@ -39,7 +44,7 @@ ROS2 感知与跟踪模块：YOLOv8 目标检测 + DeepSORT / BoT-SORT 跟踪，
 
 | 分歧点 | 差异描述 | 处理方案 |
 |--------|---------|---------|
-| `bbox` 包围盒 | `TargetTrack.msg` 未定义 bbox 字段 | bbox 信息保留在 `cvtrack.types.Box`，通过 `coord_transform_node` 的地面交点还原 |
+| `bbox` 包围盒 | 操作台需要真实像素框 | 从 `cvtrack.types.Box` 原样写入 `TargetTrack.bbox_*`，不使用固定框 |
 | `EnclosureTarget` | 封控组需 bbox + history_x/y | `tracker_node` 额外发布 `/enclosure_targets`（`EnclosureTargetArray`），`pred_x/y` 长度扩展至 10 步 |
 | 融合场景协方差 | 融合路径用置信度估算协方差 | 融合模式下协方差为近似值，单源路径无此问题 |
 

@@ -644,6 +644,15 @@ class MultiSourceAggregator:
             header.stamp = self._node.get_clock().now().to_msg()
         output.header = _copy_header(header, self._frame_id)
         output.frame_idx = self._frame_seq
+        sizes = {
+            (
+                int(getattr(message, 'image_width', 0)),
+                int(getattr(message, 'image_height', 0)),
+            )
+            for message in pending.values()
+        }
+        if len(sizes) == 1:
+            output.image_width, output.image_height = sizes.pop()
         self._frame_seq += 1
         output.tracks = [self._message_from_track(track) for track in fused_tracks]
         self._publisher.publish(output)
@@ -655,7 +664,14 @@ class MultiSourceAggregator:
         confidence = float(getattr(msg, 'confidence', 1.0))
         x = float(msg.x)
         y = float(msg.y)
-        half_size = 10.0
+        bbox_x1 = float(getattr(msg, 'bbox_x1', x))
+        bbox_y1 = float(getattr(msg, 'bbox_y1', y))
+        bbox_x2 = float(getattr(msg, 'bbox_x2', x))
+        bbox_y2 = float(getattr(msg, 'bbox_y2', y))
+        if bbox_x2 <= bbox_x1 or bbox_y2 <= bbox_y1:
+            half_size = 10.0
+            bbox_x1, bbox_y1 = x - half_size, y - half_size
+            bbox_x2, bbox_y2 = x + half_size, y + half_size
         mean = np.array(
             [x, y, float(msg.vx), float(msg.vy)], dtype=np.float64
         )
@@ -663,17 +679,17 @@ class MultiSourceAggregator:
         covariance = np.diag([variance, variance, variance, variance])
         track = Track(
             track_id=int(msg.target_id),
-            label=str(getattr(msg, 'cls', 0)),
+            label=str(getattr(msg, 'label', '') or getattr(msg, 'cls', 0)),
             mean=mean,
             cov=covariance,
             box=Box(
-                x - half_size,
-                y - half_size,
-                x + half_size,
-                y + half_size,
+                bbox_x1,
+                bbox_y1,
+                bbox_x2,
+                bbox_y2,
                 confidence,
                 int(getattr(msg, 'cls', 0)),
-                str(getattr(msg, 'cls', 0)),
+                str(getattr(msg, 'label', '') or getattr(msg, 'cls', 0)),
             ),
             confirmed=bool(getattr(msg, 'is_confirmed', True)),
         )
@@ -705,6 +721,11 @@ class MultiSourceAggregator:
         msg.confidence = float(track.box.score)
         msg.cls = int(track.box.cls)
         msg.is_confirmed = bool(track.confirmed)
+        msg.label = str(track.label)
+        msg.bbox_x1 = float(track.box.x1)
+        msg.bbox_y1 = float(track.box.y1)
+        msg.bbox_x2 = float(track.box.x2)
+        msg.bbox_y2 = float(track.box.y2)
         msg.speed = float(np.hypot(msg.vx, msg.vy))
         motion_modes = {'stationary': 1, 'slow': 2, 'fast': 3}
         msg.motion_mode = motion_modes.get(track.motion_mode, 0)
@@ -1098,6 +1119,9 @@ class TrackerNode(Node):
         msg = TargetTrackArray()
         msg.header = header
         msg.frame_idx = self._frame_seq
+        if getattr(frame, 'ndim', 0) >= 2:
+            msg.image_height = int(frame.shape[0])
+            msg.image_width = int(frame.shape[1])
         self._frame_seq += 1
         msg.tracks = [
             self._make_target_track(rec)
@@ -1142,6 +1166,11 @@ class TrackerNode(Node):
         msg.is_confirmed = _as_bool(
             getattr(rec, 'is_confirmed', getattr(rec, 'confirmed', True)), True,
         )
+        msg.label = str(getattr(rec, 'label', ''))
+        msg.bbox_x1 = _finite_float(getattr(rec, 'bbox_x1', msg.x), msg.x)
+        msg.bbox_y1 = _finite_float(getattr(rec, 'bbox_y1', msg.y), msg.y)
+        msg.bbox_x2 = _finite_float(getattr(rec, 'bbox_x2', msg.x), msg.x)
+        msg.bbox_y2 = _finite_float(getattr(rec, 'bbox_y2', msg.y), msg.y)
         msg.speed = max(0.0, _finite_float(getattr(rec, 'speed', 0.0)))
         msg.motion_mode = max(0, min(3, int(getattr(rec, 'motion_mode', 0))))
 

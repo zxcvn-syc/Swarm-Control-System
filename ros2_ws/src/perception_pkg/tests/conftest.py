@@ -28,13 +28,23 @@ def _make_swarm_stub() -> None:
     # sourced install/setup.bash), use it instead of the stub.
     try:
         import swarm_interfaces.msg as _real  # noqa: F401
-        if hasattr(_real, "DroneState"):
+        required_messages = (
+            "DroneState",
+            "DroneStateArray",
+            "EnclosureTarget",
+            "EnclosureTargetArray",
+            "TargetTrack",
+            "TargetTrackArray",
+            "TargetTrackDebug",
+        )
+        if all(hasattr(_real, name) for name in required_messages):
             return
     except ImportError:
         pass
 
-    if "swarm_interfaces" in sys.modules and "swarm_interfaces.msg" in sys.modules:
-        return
+    sys.modules.pop("swarm_interfaces.msg", None)
+    sys.modules.pop("swarm_interfaces", None)
+
     swarm = types.ModuleType("swarm_interfaces")
     swarm.__file__ = "<stub:swarm_interfaces>"
     msg = types.ModuleType("swarm_interfaces.msg")
@@ -44,11 +54,14 @@ def _make_swarm_stub() -> None:
         target_id: int = 0; x: float = 0.0; y: float = 0.0
         vx: float = 0.0; vy: float = 0.0; confidence: float = 1.0
         cls: int = 0; is_confirmed: bool = True; speed: float = 0.0
+        label: str = ""; bbox_x1: float = 0.0; bbox_y1: float = 0.0
+        bbox_x2: float = 0.0; bbox_y2: float = 0.0
         motion_mode: int = 0; pred_x: list = [0.0] * 5
         pred_y: list = [0.0] * 5; pred_conf: list = [0.0] * 5
 
     class _TTA:
         header: object = None; tracks: list = []; frame_idx: int = 0
+        image_width: int = 0; image_height: int = 0
 
     class _TTD:
         header: object = None; tracks: list = []; source_topic: str = ""

@@ -43,6 +43,14 @@ class DashboardState:
         self._frame: bytes | None = None
         self._frame_sequence = 0
         self._frame_updated_at: float | None = None
+        self._perception: dict[str, Any] = {
+            "available": False,
+            "frame_idx": 0,
+            "image_width": 0,
+            "image_height": 0,
+            "tracks": [],
+        }
+        self._perception_updated_at: float | None = None
 
     def update_status(self, status: dict[str, Any]) -> None:
         with self._lock:
@@ -67,6 +75,18 @@ class DashboardState:
             self._frame_changed.notify_all()
         return True
 
+    def update_perception(self, perception: dict[str, Any]) -> None:
+        with self._lock:
+            tracks = [dict(track) for track in perception.get("tracks", [])]
+            self._perception = {
+                "available": True,
+                "frame_idx": int(perception.get("frame_idx", 0)),
+                "image_width": max(0, int(perception.get("image_width", 0))),
+                "image_height": max(0, int(perception.get("image_height", 0))),
+                "tracks": tracks,
+            }
+            self._perception_updated_at = time.monotonic()
+
     def status_snapshot(self) -> dict[str, Any]:
         now = time.monotonic()
         with self._lock:
@@ -77,6 +97,12 @@ class DashboardState:
                 "age_seconds": self._age(self._frame_updated_at, now),
                 "sequence": self._frame_sequence,
             }
+            perception = dict(self._perception)
+            perception["tracks"] = [
+                dict(track) for track in self._perception.get("tracks", [])
+            ]
+            perception["age_seconds"] = self._age(self._perception_updated_at, now)
+            result["perception"] = perception
             return result
 
     def wait_for_frame(self, after_sequence: int, timeout: float) -> tuple[int, bytes | None]:

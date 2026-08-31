@@ -69,6 +69,19 @@ h1 { font-size: 18px; font-weight: 650; line-height: 1.2; }
 
 .video-frame { position: relative; display: grid; overflow: hidden; min-height: 400px; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: var(--radius); background: #0b1013; box-shadow: 0 8px 20px var(--shadow); }
 .video-frame img { z-index: 1; width: 100%; height: 100%; object-fit: contain; background: #0b1013; }
+.detection-layer { position: absolute; inset: 0; z-index: 3; overflow: hidden; pointer-events: none; }
+.detection-box { position: absolute; border: 2px solid #ffd166; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.detection-box.locked { border-color: var(--teal); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), 0 0 12px rgba(55, 212, 196, 0.34); }
+.detection-label { position: absolute; top: 0; left: 0; max-width: 100%; overflow: hidden; padding: 3px 5px; color: #10171a; background: #ffd166; font-size: 11px; font-weight: 750; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.detection-box.locked .detection-label { background: var(--teal); }
+.detection-center { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 1px solid currentColor; border-radius: 50%; color: #ffd166; transform: translate(-50%, -50%); }
+.detection-center::before, .detection-center::after { position: absolute; content: ""; background: currentColor; }
+.detection-center::before { top: 4px; left: -4px; width: 16px; height: 1px; }
+.detection-center::after { top: -4px; left: 4px; width: 1px; height: 16px; }
+.detection-box.locked .detection-center { color: var(--teal); }
+.detection-velocity { position: absolute; top: 50%; left: 50%; height: 2px; color: #ffd166; background: currentColor; transform-origin: left center; }
+.detection-velocity::after { position: absolute; top: -3px; right: -1px; width: 6px; height: 6px; content: ""; border-top: 2px solid currentColor; border-right: 2px solid currentColor; transform: rotate(45deg); }
+.detection-box.locked .detection-velocity { color: var(--teal); }
 .video-empty { position: absolute; inset: 0; display: grid; z-index: 2; align-content: center; justify-items: center; gap: 7px; color: var(--muted); text-align: center; background: #10171a; }
 .video-empty strong { color: var(--text); font-size: 15px; font-weight: 600; }
 .video-empty span:last-child { font-size: 12px; }
@@ -76,7 +89,7 @@ h1 { font-size: 18px; font-weight: 650; line-height: 1.2; }
 .empty-reticle::before, .empty-reticle::after { position: absolute; content: ""; background: var(--teal-dim); }
 .empty-reticle::before { top: 50%; left: 7px; right: 7px; height: 1px; }
 .empty-reticle::after { top: 7px; bottom: 7px; left: 50%; width: 1px; }
-.video-overlay { position: absolute; z-index: 3; left: 15px; right: 15px; bottom: 14px; justify-content: space-between; gap: 16px; color: #d7fbf7; font-size: 12px; text-shadow: 0 1px 2px #000; pointer-events: none; }
+.video-overlay { position: absolute; z-index: 4; left: 15px; right: 15px; bottom: 14px; justify-content: space-between; gap: 16px; color: #d7fbf7; font-size: 12px; text-shadow: 0 1px 2px #000; pointer-events: none; }
 .video-overlay span { padding: 4px 7px; border: 1px solid rgba(215, 251, 247, 0.34); border-radius: 3px; background: rgba(7, 16, 19, 0.72); }
 
 .event-section { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 20px; }
@@ -164,7 +177,7 @@ h1 { font-size: 18px; font-weight: 650; line-height: 1.2; }
   .header-status time { display: none; }
   h1 { font-size: 16px; }
   .monitor-column, .command-rail { padding: 19px 16px 22px; }
-  .video-frame { min-height: 235px; }
+  .video-frame { width: 100%; min-height: 0; }
   .video-overlay { left: 9px; right: 9px; bottom: 9px; }
   .video-overlay span { max-width: 58%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status-list { grid-template-columns: 1fr 1fr; }

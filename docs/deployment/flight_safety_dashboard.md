@@ -20,6 +20,9 @@
 3. 视频源发布 JPEG `sensor_msgs/CompressedImage`。默认订阅
    `/camera/image/compressed`；没有视频时页面会显示“未收到视频流”，不会伪造
    画面或缓存历史视频。
+4. 需要识别叠加时，构建并启动 `perception_pkg/tracker_node`，让它从与视频相同的
+   相机帧发布 `/target_track`。检测框必须来自模型实际输出，禁止用固定尺寸框或
+   模拟消息冒充真机识别结果。
 
 若相机当前只发布 `sensor_msgs/Image` 的 `/camera/image`，可在同一 ROS 2
 环境中使用 `image_transport` 建立压缩转发，或把 dashboard 的 `video_topic`
@@ -39,6 +42,41 @@ ros2 launch planning_pkg flight_safety_dashboard.launch.py
 
 打开本机浏览器访问 `http://127.0.0.1:8080`。顶部“安全状态”会显示状态消息
 的接收时效；状态超过 3 秒时，服务端拒绝控制请求，直到收到新的监督器状态。
+
+### 启动真实识别叠加
+
+以下命令以 `/camera/image` 为模型输入，使用项目权重发布真实像素框、类别、
+置信度、跟踪 ID 和速度方向。权重路径和设备必须按现场环境核对，不能依赖空路径
+触发的运动检测降级模式。
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run perception_pkg tracker_node --ros-args \
+  -p input_mode:=topic \
+  -p image_topic:=/camera/image \
+  -p track_topic:=/target_track \
+  -p publish_rate_hz:=5.0 \
+  -p detector.backend:=yolo \
+  -p detector.weights:="$PWD/src/perception_pkg/best.pt" \
+  -p detector.device:=cpu \
+  -p detector.imgsz:=480 \
+  -p detector.conf:=0.25 \
+  -p tracker.stationary_prune:=false
+```
+
+操作台对感知结果采用三种互斥状态：
+
+- **感知离线**：从未收到 `/target_track`，或者结果超过
+  `perception_stale_timeout`；检测框会立即隐藏。
+- **未检测到目标**：感知帧新鲜，但模型返回空数组。这是有效的零目标结果，
+  不是链路故障。
+- **检测到 N 个目标**：按相机原始图像尺寸将真实边界框映射到视频；标签同时显示
+  类别、跟踪 ID 和置信度，已由监督器锁定的 ID 使用锁定样式。
+
+若视频正常但持续为零目标，先确认相机确实对准人员或车辆，再检查权重类别、光照、
+目标尺寸与阈值。不要为了“出现检测框”向真机页面注入测试目标。
 
 ### 开启本机控制
 
@@ -91,6 +129,8 @@ ros2 launch planning_pkg flight_safety_dashboard.launch.py \
 | `status_topic` | `/flight_safety/status` | 监督器状态话题。 |
 | `control_service` | `/flight_safety/control` | 安全门控制服务。 |
 | `video_topic` | `/camera/image/compressed` | JPEG `CompressedImage` 视频源。 |
+| `perception_topic` | `/target_track` | 与当前视频同源的像素级真实跟踪结果。 |
+| `perception_stale_timeout` | `3.0` | 超过该秒数将感知标为过期并隐藏检测框。 |
 | `operator_token` | 空 | 覆盖环境变量的直接 token；不建议在命令行使用。 |
 | `operator_token_env` | `FLIGHT_SAFETY_TOKEN` | 从环境读取控制 token 的变量名。 |
 | `allow_remote_control` | `false` | 非回环监听时必须显式为真才能控制。 |
@@ -104,6 +144,10 @@ ros2 launch planning_pkg flight_safety_dashboard.launch.py \
    随 `/flight_safety/status` 更新。
 3. 断开 JPEG 话题，确认视频区显示离线，而不是上一次的历史帧；恢复话题后确认
    帧序号继续增长。
-4. 在 SITL 发出紧急保持，确认监督器进入 `EMERGENCY_HOLD`、保持请求为真，并
+4. 保持 `/target_track` 在线但让镜头对准无目标区域，确认页面显示“未检测到目标”；
+   再把已知人员或车辆放入画面，确认检测框、类别、ID 和置信度与目标同步移动。
+5. 停止 `tracker_node`，确认 3 秒后页面显示“感知结果已过期”并隐藏旧框，恢复节点
+   后重新出现新鲜结果。
+6. 在 SITL 发出紧急保持，确认监督器进入 `EMERGENCY_HOLD`、保持请求为真，并
    且没有任何 PX4 解锁或模式切换调用。
-5. 只有在飞行器已处于地面安全状态并由授权人员确认后，测试“地面确认后复位”。
+7. 只有在飞行器已处于地面安全状态并由授权人员确认后，测试“地面确认后复位”。

@@ -89,6 +89,7 @@
     connection: element("status-connection"),
     clock: element("local-time"),
     video: element("video-stream"),
+    detectionLayer: element("detection-layer"),
     videoEmpty: element("video-empty"),
     videoMeta: element("video-meta"),
     videoOverlay: element("video-overlay"),
@@ -97,6 +98,8 @@
     stateName: element("state-heading"),
     stateReason: element("state-reason"),
     targetLock: element("target-lock"),
+    perceptionState: element("perception-state"),
+    perceptionCount: element("perception-count"),
     activationMode: element("activation-mode"),
     holdState: element("hold-state"),
     mavrosState: element("mavros-state"),
@@ -126,6 +129,7 @@
   let latestStatus = null;
   let events = [];
   let previousStateKey = "";
+  let previousPerceptionKey = "";
   let commandPending = false;
   let pilotCommandPending = false;
   let pendingPilotAction = null;
@@ -204,6 +208,68 @@
     renderEvents();
   }
 
+  function perceptionSnapshot(status) {
+    const perception = status.perception || {};
+    const timeout = Number(status.perception_stale_timeout) || 3;
+    const age = Number(perception.age_seconds);
+    const available = Boolean(perception.available) && Number.isFinite(age);
+    return {
+      ...perception,
+      fresh: available && age <= timeout,
+      tracks: Array.isArray(perception.tracks) ? perception.tracks : [],
+    };
+  }
+
+  function renderDetections(status) {
+    ui.detectionLayer.replaceChildren();
+    const perception = perceptionSnapshot(status);
+    if (!perception.fresh || !ui.video.naturalWidth || !ui.video.naturalHeight) return;
+
+    const sourceWidth = Number(perception.image_width) || ui.video.naturalWidth;
+    const sourceHeight = Number(perception.image_height) || ui.video.naturalHeight;
+    const layerWidth = ui.detectionLayer.clientWidth;
+    const layerHeight = ui.detectionLayer.clientHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0 || layerWidth <= 0 || layerHeight <= 0) return;
+
+    const scale = Math.min(layerWidth / sourceWidth, layerHeight / sourceHeight);
+    const offsetX = (layerWidth - sourceWidth * scale) / 2;
+    const offsetY = (layerHeight - sourceHeight * scale) / 2;
+    const lockedId = Number(status.locked_target_id);
+
+    perception.tracks.forEach((track) => {
+      const x1 = Math.max(0, Math.min(sourceWidth, Number(track.bbox_x1)));
+      const y1 = Math.max(0, Math.min(sourceHeight, Number(track.bbox_y1)));
+      const x2 = Math.max(0, Math.min(sourceWidth, Number(track.bbox_x2)));
+      const y2 = Math.max(0, Math.min(sourceHeight, Number(track.bbox_y2)));
+      if (![x1, y1, x2, y2].every(Number.isFinite) || x2 <= x1 || y2 <= y1) return;
+
+      const box = document.createElement("div");
+      const locked = Boolean(status.target_locked) && Number(track.target_id) === lockedId;
+      box.className = `detection-box${locked ? " locked" : ""}`;
+      box.style.left = `${offsetX + x1 * scale}px`;
+      box.style.top = `${offsetY + y1 * scale}px`;
+      box.style.width = `${Math.max(2, (x2 - x1) * scale)}px`;
+      box.style.height = `${Math.max(2, (y2 - y1) * scale)}px`;
+
+      const label = document.createElement("span");
+      label.className = "detection-label";
+      const classLabel = String(track.label || `类别 ${track.cls}`);
+      const confidence = Math.round(Math.max(0, Math.min(1, Number(track.confidence) || 0)) * 100);
+      label.textContent = `${locked ? "锁定 · " : ""}${classLabel} #${track.target_id} · ${confidence}%`;
+
+      const center = document.createElement("span");
+      center.className = "detection-center";
+      const velocity = document.createElement("span");
+      velocity.className = "detection-velocity";
+      const vx = Number(track.vx) || 0;
+      const vy = Number(track.vy) || 0;
+      velocity.style.width = `${Math.min(70, Math.hypot(vx, vy) * scale * 0.35)}px`;
+      velocity.style.transform = `rotate(${Math.atan2(vy, vx)}rad)`;
+      box.append(label, center, velocity);
+      ui.detectionLayer.append(box);
+    });
+  }
+
   function renderStatus(status) {
     latestStatus = status;
     const available = Boolean(status.available);
@@ -225,6 +291,22 @@
 
     const targetText = status.target_locked ? `已锁定 #${status.locked_target_id}` : "未锁定";
     setStatusCell(ui.targetLock, targetText, status.target_locked ? "good" : "warn");
+    const perception = perceptionSnapshot(status);
+    if (!perception.available) {
+      setStatusCell(ui.perceptionState, "感知离线", "bad");
+      setStatusCell(ui.perceptionCount, "无识别数据", "bad");
+    } else if (!perception.fresh) {
+      setStatusCell(ui.perceptionState, `数据过期 ${ageText(perception.age_seconds)}`, "bad");
+      setStatusCell(ui.perceptionCount, "结果不可用", "bad");
+    } else {
+      setStatusCell(ui.perceptionState, `在线 ${ageText(perception.age_seconds)}`, "good");
+      const count = perception.tracks.length;
+      setStatusCell(
+        ui.perceptionCount,
+        count ? `检测到 ${count} 个目标` : "未检测到目标",
+        count ? "good" : "warn",
+      );
+    }
     setStatusCell(
       ui.activationMode,
       MODE_LABELS[status.activation_mode_name] || "未知",
@@ -256,16 +338,36 @@
 
     const video = status.video || {};
     const hasVideo = Boolean(video.available);
-    ui.videoMeta.textContent = hasVideo ? `视频帧 ${ageText(video.age_seconds)}` : "等待视频流";
+    ui.videoMeta.textContent = hasVideo
+      ? `视频 ${ageText(video.age_seconds)} · ${perception.fresh ? `感知帧 ${perception.frame_idx}` : "感知不可用"}`
+      : "等待视频流";
     ui.videoOverlay.hidden = !hasVideo;
-    ui.overlayTarget.textContent = status.target_locked ? `锁定目标 #${status.locked_target_id}` : "未锁定目标";
+    if (!perception.fresh) ui.overlayTarget.textContent = "感知离线";
+    else if (status.target_locked) ui.overlayTarget.textContent = `锁定目标 #${status.locked_target_id}`;
+    else if (perception.tracks.length) ui.overlayTarget.textContent = `识别 ${perception.tracks.length} 个目标`;
+    else ui.overlayTarget.textContent = "未检测到目标";
     ui.overlayFrame.textContent = hasVideo ? `帧 ${video.sequence || 0}` : "实时帧";
     ui.videoEmpty.hidden = hasVideo && !streamErrored;
+    renderDetections(status);
 
     const stateKey = `${available}:${state}:${status.reason}:${status.session_id || 0}`;
     if (available && stateKey !== previousStateKey) {
       addEvent(`${stateLabel}：${reasonText(status.reason)}`);
       previousStateKey = stateKey;
+    }
+    const perceptionIds = perception.tracks.map((track) => track.target_id).join(",");
+    const perceptionKey = `${perception.available}:${perception.fresh}:${perceptionIds}`;
+    if (perceptionKey !== previousPerceptionKey) {
+      if (!perception.available) addEvent("感知链路离线，未收到真实识别结果。");
+      else if (!perception.fresh) addEvent("感知结果已过期，检测框已隐藏。");
+      else if (perception.tracks.length) {
+        const labels = perception.tracks.slice(0, 3).map((track) => {
+          const label = track.label || `类别 ${track.cls}`;
+          return `${label} #${track.target_id} ${Math.round((Number(track.confidence) || 0) * 100)}%`;
+        });
+        addEvent(`识别到 ${perception.tracks.length} 个目标：${labels.join("，")}`);
+      } else addEvent("感知在线，当前帧未检测到目标。");
+      previousPerceptionKey = perceptionKey;
     }
     updateControlAvailability(status);
     updatePilotAvailability(status);
@@ -436,10 +538,14 @@
   ui.video.addEventListener("load", () => {
     streamErrored = false;
     if (latestStatus && latestStatus.video && latestStatus.video.available) ui.videoEmpty.hidden = true;
+    if (latestStatus) renderDetections(latestStatus);
   });
   ui.video.addEventListener("error", () => {
     streamErrored = true;
     ui.videoEmpty.hidden = false;
+  });
+  window.addEventListener("resize", () => {
+    if (latestStatus) renderDetections(latestStatus);
   });
   ui.form.addEventListener("submit", (event) => {
     event.preventDefault();

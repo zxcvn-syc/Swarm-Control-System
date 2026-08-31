@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
+    <link rel="icon" href="data:,">
     <title>飞行安全操作台</title>
     <link rel="stylesheet" href="/flight_safety_dashboard.css">
   </head>
@@ -33,6 +34,7 @@
 
           <div class="video-frame" id="video-frame">
             <img id="video-stream" src="/stream.mjpg" alt="封控现场实时视频流">
+            <div class="detection-layer" id="detection-layer" aria-hidden="true"></div>
             <div class="video-empty" id="video-empty" aria-live="polite">
               <span class="empty-reticle" aria-hidden="true"></span>
               <strong>未收到视频流</strong>
@@ -69,6 +71,14 @@
             <div>
               <dt>目标锁定</dt>
               <dd id="target-lock">未知</dd>
+            </div>
+            <div>
+              <dt>感知链路</dt>
+              <dd id="perception-state">未知</dd>
+            </div>
+            <div>
+              <dt>当前检测</dt>
+              <dd id="perception-count">未知</dd>
             </div>
             <div>
               <dt>封控模式</dt>

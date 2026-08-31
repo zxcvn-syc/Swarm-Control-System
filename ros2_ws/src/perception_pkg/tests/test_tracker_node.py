@@ -113,6 +113,7 @@ class FakeRecord:
         pred_x: List[float] | None = None,
         pred_y: List[float] | None = None,
         pred_conf: List[float] | None = None,
+        label: str = "car",
     ):
         self.target_id = target_id
         self.x = x
@@ -122,12 +123,17 @@ class FakeRecord:
         self.confidence = confidence
         self.cls = cls
         self.is_confirmed = is_confirmed
+        self.label = label
         self.speed = speed
         self.motion_mode = motion_mode
         self.pred_x = pred_x if pred_x is not None else [x + vx * i for i in range(1, 6)]
         self.pred_y = pred_y if pred_y is not None else [y + vy * i for i in range(1, 6)]
         self.pred_conf = pred_conf if pred_conf is not None else [0.9 ** i for i in range(5)]
         self.box = types.SimpleNamespace(x1=x - 20, y1=y - 20, x2=x + 20, y2=y + 20)
+        self.bbox_x1 = self.box.x1
+        self.bbox_y1 = self.box.y1
+        self.bbox_x2 = self.box.x2
+        self.bbox_y2 = self.box.y2
 
 
 def _build_mock_runner(records: List[FakeRecord]):
@@ -250,6 +256,11 @@ def test_make_target_track_maps_all_fields():
     assert msg.confidence == pytest.approx(0.92)
     assert msg.cls == 5
     assert msg.is_confirmed is True
+    assert msg.label == "car"
+    assert msg.bbox_x1 == pytest.approx(80.5)
+    assert msg.bbox_y1 == pytest.approx(180.5)
+    assert msg.bbox_x2 == pytest.approx(120.5)
+    assert msg.bbox_y2 == pytest.approx(220.5)
     assert msg.speed == pytest.approx(3.32)
     assert msg.motion_mode == 3
     np.testing.assert_allclose(msg.pred_x, [110.0, 120.0, 130.0, 140.0, 150.0])
@@ -339,6 +350,8 @@ def test_publish_tick_emits_correct_message_structure():
 
     assert hasattr(msg, "tracks")
     assert len(msg.tracks) == 2
+    assert msg.image_width == 640
+    assert msg.image_height == 480
     assert msg.tracks[0].target_id == 1
     assert msg.tracks[0].x == pytest.approx(100.0)
     assert msg.tracks[0].y == pytest.approx(200.0)
