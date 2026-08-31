@@ -18,6 +18,13 @@ source "$CONFIG_PATH"
 : "${BRIDGE_TOKEN:?BRIDGE_TOKEN is required}"
 : "${ROS_DOMAIN_ID:=71}"
 : "${DASHBOARD_PORT:=18080}"
+: "${ENABLE_PERCEPTION:=true}"
+: "${PERCEPTION_TOPIC:=/target_track}"
+: "${PERCEPTION_RATE_HZ:=5.0}"
+: "${DETECTOR_DEVICE:=cpu}"
+: "${DETECTOR_IMGSZ:=480}"
+: "${DETECTOR_CONFIDENCE:=0.25}"
+: "${DETECTOR_WEIGHTS:=$WORKSPACE_DIR/src/perception_pkg/best.pt}"
 [[ "$BRIDGE_TOKEN" != "REPLACE_WITH_A_RANDOM_SHARED_TOKEN" ]] || {
     printf 'Set a random BRIDGE_TOKEN before starting the observation console.\n' >&2
     exit 2
@@ -41,6 +48,9 @@ source "$CONFIG_PATH"
 
 source /opt/ros/humble/setup.bash
 source "$WORKSPACE_DIR/install/setup.bash"
+if [[ -r "$WORKSPACE_DIR/install-perception/setup.bash" ]]; then
+    source "$WORKSPACE_DIR/install-perception/setup.bash"
+fi
 export ROS_DOMAIN_ID
 
 if ss -ltn "sport = :$DASHBOARD_PORT" | grep -q LISTEN; then
@@ -53,8 +63,13 @@ mkdir -p "$SESSION_DIR"
 chmod 700 "$SESSION_DIR"
 RECEIVER_PID=""
 IMAGE_DECODER_PID=""
+TRACKER_PID=""
 
 cleanup() {
+    if [[ -n "$TRACKER_PID" ]]; then
+        kill -INT "$TRACKER_PID" 2>/dev/null || true
+        wait "$TRACKER_PID" 2>/dev/null || true
+    fi
     if [[ -n "$IMAGE_DECODER_PID" ]]; then
         kill -INT "$IMAGE_DECODER_PID" 2>/dev/null || true
         wait "$IMAGE_DECODER_PID" 2>/dev/null || true
@@ -103,8 +118,40 @@ if [[ "${USE_IMAGE_TRANSPORT_DECODER:-false}" == "true" ]]; then
     fi
 fi
 
+if [[ "$ENABLE_PERCEPTION" == "true" ]]; then
+    [[ -r "$DETECTOR_WEIGHTS" ]] || {
+        printf 'Detector weights are not readable: %s\n' "$DETECTOR_WEIGHTS" >&2
+        exit 2
+    }
+    ros2 pkg prefix perception_pkg >/dev/null 2>&1 || {
+        printf 'perception_pkg is not available in the sourced ROS overlay.\n' >&2
+        exit 2
+    }
+    ros2 run perception_pkg tracker_node --ros-args \
+        -p input_mode:=topic \
+        -p image_topic:="${IMAGE_TOPIC:-/camera/image}" \
+        -p track_topic:="$PERCEPTION_TOPIC" \
+        -p publish_rate_hz:="$PERCEPTION_RATE_HZ" \
+        -p detector.backend:=yolo \
+        -p detector.weights:="$DETECTOR_WEIGHTS" \
+        -p detector.device:="$DETECTOR_DEVICE" \
+        -p detector.imgsz:="$DETECTOR_IMGSZ" \
+        -p detector.conf:="$DETECTOR_CONFIDENCE" \
+        -p tracker.kind:=deepsort_cascade \
+        -p tracker.stationary_prune:=false \
+        >"$SESSION_DIR/perception-tracker.log" 2>&1 &
+    TRACKER_PID=$!
+    sleep 2
+    if ! kill -0 "$TRACKER_PID" 2>/dev/null; then
+        tail -n 80 "$SESSION_DIR/perception-tracker.log" >&2 || true
+        printf 'YOLO tracker stopped during startup.\n' >&2
+        exit 2
+    fi
+fi
+
 printf 'Read-only bridge monitor: http://127.0.0.1:%s\n' "$DASHBOARD_PORT"
 printf 'Session logs: %s\n' "$SESSION_DIR"
+printf 'Perception: %s (%s)\n' "$ENABLE_PERCEPTION" "$PERCEPTION_TOPIC"
 printf 'No MAVROS control services, setpoints, arming, or mode changes are exposed.\n'
 
 ros2 run planning_pkg flight_safety_dashboard --ros-args \
@@ -112,4 +159,5 @@ ros2 run planning_pkg flight_safety_dashboard --ros-args \
     -p port:="$DASHBOARD_PORT" \
     -p enable_pilot_commands:=false \
     -p video_topic:="${COMPRESSED_IMAGE_TOPIC:-/camera/image/compressed}" \
+    -p perception_topic:="$PERCEPTION_TOPIC" \
     -p mavros_state_topic:="${STATE_TOPIC:-/uav0/mavros/state}"
