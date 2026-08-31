@@ -1,2 +1,5 @@
 # Preserve simulator-generated evidence logs exactly as captured.
 docs/evidence/px4_offboard_sitl_20260827/launch.log -whitespace
+
+# Deployment scripts must remain executable by Linux shells when archived on Windows.
+*.sh text eol=lf
