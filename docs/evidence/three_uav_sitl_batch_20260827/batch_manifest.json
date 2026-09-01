@@ -1,0 +1,895 @@
+{
+  "created_at": "2026-08-27T05:26:03+00:00",
+  "runs": 20,
+  "duration_seconds": 60,
+  "startup_timeout_seconds": 60,
+  "retries": 0,
+  "world": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+  "px4_sitl_root": "/home/hhh/src/PX4-Autopilot",
+  "launcher": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+  "launcher_sha256": "78ae76a7fec5d43d33b7b5bab044a747edc06227ffe6623d2dcce9db06ee053d",
+  "source_revision": "825a072895c9f906bacfc041541d183519dd1769",
+  "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded",
+  "trials": [
+    {
+      "trial": 1,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:26:03+00:00",
+          "finished_at": "2026-08-27T05:27:13+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_01/attempt_01",
+            "--run-id",
+            "trial-01-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_01/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_01/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-01-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 69,
+            "started_epoch": 1787808363,
+            "ended_epoch": 1787808432,
+            "gzserver_pid": 13868,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 2,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:27:13+00:00",
+          "finished_at": "2026-08-27T05:28:24+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_02/attempt_01",
+            "--run-id",
+            "trial-02-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_02/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_02/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-02-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787808433,
+            "ended_epoch": 1787808503,
+            "gzserver_pid": 14992,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 3,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:28:24+00:00",
+          "finished_at": "2026-08-27T05:29:36+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_03/attempt_01",
+            "--run-id",
+            "trial-03-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_03/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_03/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-03-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 71,
+            "started_epoch": 1787808504,
+            "ended_epoch": 1787808575,
+            "gzserver_pid": 16050,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 4,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:29:36+00:00",
+          "finished_at": "2026-08-27T05:30:46+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_04/attempt_01",
+            "--run-id",
+            "trial-04-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_04/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_04/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-04-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 69,
+            "started_epoch": 1787808576,
+            "ended_epoch": 1787808645,
+            "gzserver_pid": 17170,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 5,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:30:46+00:00",
+          "finished_at": "2026-08-27T05:31:57+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_05/attempt_01",
+            "--run-id",
+            "trial-05-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_05/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_05/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-05-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787808646,
+            "ended_epoch": 1787808716,
+            "gzserver_pid": 18232,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 6,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:31:57+00:00",
+          "finished_at": "2026-08-27T05:33:08+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_06/attempt_01",
+            "--run-id",
+            "trial-06-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_06/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_06/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-06-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787808717,
+            "ended_epoch": 1787808787,
+            "gzserver_pid": 19393,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 7,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:33:08+00:00",
+          "finished_at": "2026-08-27T05:34:19+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_07/attempt_01",
+            "--run-id",
+            "trial-07-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_07/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_07/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-07-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 69,
+            "started_epoch": 1787808788,
+            "ended_epoch": 1787808857,
+            "gzserver_pid": 20503,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 8,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:34:19+00:00",
+          "finished_at": "2026-08-27T05:35:30+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_08/attempt_01",
+            "--run-id",
+            "trial-08-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_08/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_08/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-08-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787808859,
+            "ended_epoch": 1787808929,
+            "gzserver_pid": 21566,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 9,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:35:30+00:00",
+          "finished_at": "2026-08-27T05:36:41+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_09/attempt_01",
+            "--run-id",
+            "trial-09-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_09/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_09/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-09-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787808930,
+            "ended_epoch": 1787809000,
+            "gzserver_pid": 22686,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 10,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:36:41+00:00",
+          "finished_at": "2026-08-27T05:37:52+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_10/attempt_01",
+            "--run-id",
+            "trial-10-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_10/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_10/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-10-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809001,
+            "ended_epoch": 1787809071,
+            "gzserver_pid": 23756,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 11,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:37:52+00:00",
+          "finished_at": "2026-08-27T05:39:03+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_11/attempt_01",
+            "--run-id",
+            "trial-11-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_11/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_11/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-11-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809072,
+            "ended_epoch": 1787809142,
+            "gzserver_pid": 24875,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 12,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:39:03+00:00",
+          "finished_at": "2026-08-27T05:40:14+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_12/attempt_01",
+            "--run-id",
+            "trial-12-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_12/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_12/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-12-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809143,
+            "ended_epoch": 1787809213,
+            "gzserver_pid": 26136,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 13,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:40:14+00:00",
+          "finished_at": "2026-08-27T05:41:25+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_13/attempt_01",
+            "--run-id",
+            "trial-13-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_13/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_13/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-13-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809214,
+            "ended_epoch": 1787809284,
+            "gzserver_pid": 27244,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 14,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:41:25+00:00",
+          "finished_at": "2026-08-27T05:42:36+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_14/attempt_01",
+            "--run-id",
+            "trial-14-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_14/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_14/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-14-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809285,
+            "ended_epoch": 1787809355,
+            "gzserver_pid": 28353,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 15,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:42:36+00:00",
+          "finished_at": "2026-08-27T05:43:46+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_15/attempt_01",
+            "--run-id",
+            "trial-15-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_15/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_15/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-15-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 69,
+            "started_epoch": 1787809356,
+            "ended_epoch": 1787809425,
+            "gzserver_pid": 29412,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 16,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:43:46+00:00",
+          "finished_at": "2026-08-27T05:44:57+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_16/attempt_01",
+            "--run-id",
+            "trial-16-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_16/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_16/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-16-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809426,
+            "ended_epoch": 1787809496,
+            "gzserver_pid": 30518,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 17,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:44:57+00:00",
+          "finished_at": "2026-08-27T05:46:08+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_17/attempt_01",
+            "--run-id",
+            "trial-17-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_17/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_17/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-17-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809497,
+            "ended_epoch": 1787809567,
+            "gzserver_pid": 31626,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 18,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:46:08+00:00",
+          "finished_at": "2026-08-27T05:47:19+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_18/attempt_01",
+            "--run-id",
+            "trial-18-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_18/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_18/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-18-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809568,
+            "ended_epoch": 1787809638,
+            "gzserver_pid": 32732,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 19,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:47:19+00:00",
+          "finished_at": "2026-08-27T05:48:30+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_19/attempt_01",
+            "--run-id",
+            "trial-19-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_19/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_19/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-19-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809639,
+            "ended_epoch": 1787809709,
+            "gzserver_pid": 33860,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "trial": 20,
+      "attempts": [
+        {
+          "attempt": "attempt_01",
+          "started_at": "2026-08-27T05:48:30+00:00",
+          "finished_at": "2026-08-27T05:49:41+00:00",
+          "command": [
+            "bash",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/px4_sitl_3uav/start_3uav_sitl.sh",
+            "--px4-sitl-root",
+            "/home/hhh/src/PX4-Autopilot",
+            "--world",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/simulation/worlds/swarm_field.world",
+            "--duration",
+            "60",
+            "--startup-timeout",
+            "60",
+            "--output-dir",
+            "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_20/attempt_01",
+            "--run-id",
+            "trial-20-attempt-01"
+          ],
+          "return_code": 0,
+          "launcher_log": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_20/attempt_01/launcher.log",
+          "result_file": "/home/hhh/swarm-control-sitl-validation-20260827-825a072/docs/evidence/three_uav_sitl_current_825a072_20x60/trial_20/attempt_01/result.json",
+          "launcher_result": {
+            "run_id": "trial-20-attempt-01",
+            "status": "passed",
+            "failure_reason": null,
+            "startup_timeout_seconds": 60,
+            "stability_window_seconds": 60,
+            "actual_duration_seconds": 70,
+            "started_epoch": 1787809710,
+            "ended_epoch": 1787809780,
+            "gzserver_pid": 34965,
+            "px4_instance_count": 3,
+            "scope": "PX4/Gazebo SITL process stability only; MAVROS/arming/mode/setpoints excluded"
+          },
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ]
+}
