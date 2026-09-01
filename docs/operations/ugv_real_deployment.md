@@ -228,6 +228,11 @@ source $WS/install/setup.bash && ros2 run ugv_base_driver ugv_path_follower --ro
 真车完整启动顺序（都在 MentorPi 容器内）：
 
 ```bash
+# ⓪ 厂商底盘执行节点（详见第 11 节，不带它动车指令无人执行）
+export MACHINE_TYPE=MentorPi_Tank && ros2 run controller odom_publisher \
+    --ros-args --params-file /home/ubuntu/ros2_ws/src/driver/controller/config/calibrate_params.yaml \
+    -p base_frame_id:=base_footprint -p odom_frame_id:=odom -p pub_odom_topic:=true
+
 # ① 里程计中继：/odom -> /ugv_pose
 ros2 launch ugv_base_driver ugv_odom_relay.launch.py
 
@@ -253,10 +258,13 @@ ros2 topic hz /ugv_pose
 演示级对齐做法：
 
 1. 把小车摆在场地原点，**车头朝世界 +X 方向**；
-2. 重置里程计（`ros2 topic pub --once /set_odom ...` 按厂商定义，
-   或最粗暴：重启 MentorPi 容器）；
+2. 重置里程计。**注意（实测）**：`/set_odom`（Pose2D）只重置轮式原始
+   里程计，对 EKF 融合输出 `/odom` 无效。可靠的归零方式是
+   **重启 MentorPi 容器**（`docker restart MentorPi`），重启后 odom 从
+   当前位置为原点重新起算；
 3. 此后 odom 坐标 ≈ 世界坐标，`/ugv_pose` 可直接与 `/planned_path`
-   配对使用。
+   配对使用。若不归零，也可以现读当前 `/ugv_pose` 真实位姿，按该
+   位姿换算路径目标（联调脚本的做法）。
 
 长航程或多人场景请改用 TF（`odom -> world` 变换），中继节点无需改动。
 
@@ -268,3 +276,61 @@ ros2 topic hz /ugv_pose
 | `/odom` 频率 | 约 30 Hz（QoS: RELIABLE/VOLATILE） |
 | 数据源 | 轮式里程计 + MS200 激光雷达 `/odom_rf2o` 融合 |
 | 累计位置示例 | 上电后移动约 7 m，读数 x=6.65, y=2.43 |
+
+## 11. 厂商底盘执行节点 odom_publisher（动车必读）
+
+**2026-09-01 实测发现**：真正消费 `/cmd_vel` 的不是 `/ros_robot_controller`
+（它只收 `/ros_robot_controller/set_motor` 电机指令），而是厂商
+`controller` 包里的 **`odom_publisher`** 节点（源码
+`src/driver/controller/controller/odom_publisher_node.py`）。它一肩三挑：
+
+- 订阅 `/cmd_vel`（还同时收 `/controller/cmd_vel`、`/app/cmd_vel`）→
+  发布 `set_motor` 电机指令；
+- 发布轮式里程计 `/odom_raw`（实测约 56 Hz），供 EKF 融合；
+- 订阅 `/set_odom` 做里程计重置。
+
+### 11.1 为什么必须手动启动
+
+容器开机自启的 bringup 只拉起了 `ros_robot_controller`、`ekf_filter_node`
+等，**不含 odom_publisher**（原因未查，日志无记录）。它不在的直接后果：
+
+- `/cmd_vel` 订阅数为 0 —— 发指令车不动；
+- `/odom_raw` 无发布者 —— 轮式里程计不更新，`/odom` 停滞。
+
+### 11.2 启动命令（含必带的环境变量）
+
+```bash
+# 必须先 export，否则节点 KeyError 崩溃
+export MACHINE_TYPE=MentorPi_Tank
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/ros2_ws/install/setup.bash
+ros2 run controller odom_publisher --ros-args \
+    --params-file /home/ubuntu/ros2_ws/src/driver/controller/config/calibrate_params.yaml \
+    -p base_frame_id:=base_footprint -p odom_frame_id:=odom -p pub_odom_topic:=true
+```
+
+`MACHINE_TYPE` 定义在 `/home/ubuntu/shared/.typerc`，只有交互式 shell 才
+加载，`bash -c` / SSH 非交互执行必须手动 export。
+
+### 11.3 启动后自查
+
+```bash
+ros2 topic info /cmd_vel | grep Subscription   # 应 > 0
+ros2 topic hz /odom_raw                          # 应约 56 Hz
+```
+
+注意：odom_publisher 重启后轮式里程计从 0 重计，EKF 需要几秒重新收敛，
+**发路径前先现读一次 `/ugv_pose` 确认位姿稳定**。
+
+### 11.4 闭环实测记录（2026-09-01，台架空）
+
+启动链路 ⓪odom_publisher + ①ugv_odom_relay + ②ugv_path_follower 后，
+按当前真实位姿沿车头发 1.2 m 路径：
+
+- cmd_vel 输出 x≈0.37（执行中）；
+- 真实位姿实时前进（编码器计数，架空照样有效）；
+- 进入目标 0.25 m 容差后 cmd_vel 归零、位姿稳定——**到点自停**，
+  且路径仍在发布（非路径超时停车）。
+
+结论：真实里程计反馈 → 纯追踪 → `/cmd_vel` → 底盘执行 → 到点自停，
+车侧链路全通。落地测试前建议把 `max_linear_speed` 从 0.5 降到 0.3。
