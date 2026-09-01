@@ -289,10 +289,16 @@ ros2 topic hz /ugv_pose
 - 发布轮式里程计 `/odom_raw`（实测约 56 Hz），供 EKF 融合；
 - 订阅 `/set_odom` 做里程计重置。
 
-### 11.1 为什么必须手动启动
+### 11.1 为什么"没自启"（2026-09-01 晚已查明并更正）
 
-容器开机自启的 bringup 只拉起了 `ros_robot_controller`、`ekf_filter_node`
-等，**不含 odom_publisher**（原因未查，日志无记录）。它不在的直接后果：
+~~容器开机自启的 bringup 不含 odom_publisher~~ **更正**：
+`bringup.launch.py` 本身**包含** odom_publisher（9.1 晚重启整栈后实测它在进程列表里）。
+昨天看不到它，是因为当时执行过 `docker restart MentorPi` 清零里程计——
+容器入口只有 `tail -f /dev/null`，ROS 栈是主机侧脚本用 `docker exec` 拉起的
+（`/home/pi/mentorpi/start_node.sh`），**docker restart 之后整套栈都是空的**。
+完整机制与一键恢复脚本见第 12 节。
+
+它不在的直接后果：
 
 - `/cmd_vel` 订阅数为 0 —— 发指令车不动；
 - `/odom_raw` 无发布者 —— 轮式里程计不更新，`/odom` 停滞。
@@ -334,3 +340,51 @@ ros2 topic hz /odom_raw                          # 应约 56 Hz
 
 结论：真实里程计反馈 → 纯追踪 → `/cmd_vel` → 底盘执行 → 到点自停，
 车侧链路全通。落地测试前建议把 `max_linear_speed` 从 0.5 降到 0.3。
+
+## 12. 整栈启动机制与一键脚本（2026-09-01 晚实测补充）
+
+### 12.1 ROS 栈到底怎么起来的（重要）
+
+- 容器 `MentorPi` 入口 = `tail -f /dev/null`（restart=always）。
+  **容器自己不启动任何 ROS 节点。**
+- ROS 栈由**主机侧**开机流程经 `docker exec` 拉起：
+  `/home/pi/mentorpi/start_node.sh` → 先 `~/.stop_ros.sh` 杀残留，
+  再 `ros2 launch bringup bringup.launch.py`（zsh 加载 `.zshrc` → `.typerc`
+  → MACHINE_TYPE=MentorPi_Tank，所以它不需要手动 export）。
+- **推论：`docker restart MentorPi`（清零里程计的标准操作）会杀掉整套栈，
+  容器重启回来后是空壳，必须重新拉起整栈**——这就是 11.1 节昨天
+  "odom_publisher 不见了"的真正原因。
+- 整栈健康标准（UDP 探针实测）：/odom ≈ 30 Hz、/scan_raw ≈ 10 Hz、
+  imu_raw ≈ 47 Hz、/ros_robot_controller/battery 可读。
+
+### 12.2 车上一键脚本（主机 pi 用户家目录，已部署）
+
+```bash
+bash ~/scs_start.sh     # 明早开场仪式：docker restart(清零里程计) → 停残留
+                        # → 拉 bringup(35s) → 拉 ugv_odom_relay → 自动体检
+                        # 前提：车头朝正东摆好、电脑能 SSH 到车
+bash ~/scs_status.sh    # 随时体检：电池mV / /odom / /ugv_pose 频率 / 关键节点
+```
+
+### 12.3 FastDDS 共享内存污染坑（诊断必读）
+
+反复用 `timeout ros2 topic hz ...` 强杀 ros2cli 会泄漏 `/dev/shm` 段
+（fastrtps_* 文件，一晚积累到 177 个）。之后**新起的**进程（探针、测试脚本）
+可能收不到任何话题数据，表现为"节点全死了"，其实是探针瞎了。
+今晚实测：SHM 探针收 0 条，同一环境 UDP 探针 30 Hz。
+
+**规矩**：
+- 诊断/测试命令一律带 `export FASTDDS_BUILTIN_TRANSPORTS=UDPv4`（绕开共享内存）；
+- `ugv_odom_relay` 也用该环境变量启动（scs_start.sh 已带）；
+- 别用 timeout 强杀 ros2 命令当作常态操作。
+
+### 12.4 电池与网络备忘
+
+- 电池：`/ros_robot_controller/battery`（单位 mV），2S 满电约 8400，
+  低于 7200 停止测试。**整车开机静置也掉电**（实测 25 分钟掉约 0.18 V），
+  当天测完要么关机要么回充。
+- WiFi：车自带热点 HW-6793FDED / hiwonder（5G，车端固定 192.168.149.1）。
+  电脑侧已预存连接档案（手动模式，点一下即连）；连上后拔网线，
+  `_car_ssh.py` 自动从 192.168.2.100 切到 192.168.149.1。
+  若热点未给电脑分 DHCP 地址，手工配 192.168.149.50/24。
+- 车主机时钟与真实时间差约 2.5 小时（未做 NTP 对时），看日志时间戳时注意。
