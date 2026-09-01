@@ -52,6 +52,23 @@
       enabled: false                # OSNet ReID (deepsort_cascade only)
       weights: ""
 
+    # Locking never mutates /target_track.  It emits a one-track or empty
+    # /target_track_locked array; consumers must also require the status
+    # diagnostic's command_eligible=true.  Keep disabled until an operator
+    # selects a valid track ID and an OSNet-enabled tracker is verified.
+    lock:
+      enabled: false
+      selected_target_id: -1
+      track_topic: "/target_track_locked"
+      status_topic: "/target_lock_status"
+      acquire_frames: 3
+      reacquire_frames: 3
+      min_confidence: 0.35
+      max_mahalanobis: 9.21
+      missed_frames: 2
+      suspect_timeout_frames: 15
+      min_reid_similarity: 0.70
+
     # UAV state synchronization (P1-C)
     # tracker_node subscribes to this topic and overrides the
     # TargetTrackArray.header.stamp with DroneStateArray.header.stamp

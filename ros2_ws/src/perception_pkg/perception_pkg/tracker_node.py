@@ -118,6 +118,12 @@ from swarm_interfaces.msg import DroneStateArray
 
 import diagnostic_msgs.msg as diag_msgs
 
+from perception_pkg.target_lock import (
+    LockObservation,
+    TargetLockConfig,
+    TargetLockManager,
+)
+
 
 log = logging.getLogger(__name__)
 
@@ -395,6 +401,21 @@ def _declare_parameters(node: Node) -> None:
     node.declare_parameter('enclosure.topic', '/enclosure_targets')
     node.declare_parameter('enclosure.publish_rate_hz', 5.0)
     node.declare_parameter('enclosure.drone_positions', [])
+
+    # Target-lock guard.  It preserves the normal multi-target output and
+    # produces a separate, command-eligible track topic only after a human
+    # selected track has passed temporal, motion and appearance checks.
+    node.declare_parameter('lock.enabled', False)
+    node.declare_parameter('lock.selected_target_id', -1)
+    node.declare_parameter('lock.track_topic', '/target_track_locked')
+    node.declare_parameter('lock.status_topic', '/target_lock_status')
+    node.declare_parameter('lock.acquire_frames', 3)
+    node.declare_parameter('lock.reacquire_frames', 3)
+    node.declare_parameter('lock.min_confidence', 0.35)
+    node.declare_parameter('lock.max_mahalanobis', 9.21)
+    node.declare_parameter('lock.missed_frames', 2)
+    node.declare_parameter('lock.suspect_timeout_frames', 15)
+    node.declare_parameter('lock.min_reid_similarity', 0.70)
 
     # Debug / diagnostics topics
     node.declare_parameter('enable_debug_topics', True)
@@ -795,6 +816,47 @@ class TrackerNode(Node):
             frame_id=self._frame_id,
         )
 
+        self._lock_enabled = _as_bool(self.get_parameter('lock.enabled').value)
+        self._lock_manager: Optional[TargetLockManager] = None
+        self._lock_track_publisher: Optional[Any] = None
+        self._lock_status_publisher: Optional[Any] = None
+        self._lock_requested_target: Optional[int] = None
+        if self._lock_enabled:
+            if self._aggregator.enabled:
+                raise ValueError(
+                    'lock.enabled requires the local tracker input; '
+                    'multi-source fusion does not expose per-track ReID evidence'
+                )
+            lock_config = TargetLockConfig(
+                acquire_frames=max(1, int(self.get_parameter('lock.acquire_frames').value)),
+                reacquire_frames=max(1, int(self.get_parameter('lock.reacquire_frames').value)),
+                min_confidence=max(0.0, min(1.0, _finite_float(
+                    self.get_parameter('lock.min_confidence').value, 0.35,
+                ))),
+                max_mahalanobis=max(1e-6, _finite_float(
+                    self.get_parameter('lock.max_mahalanobis').value, 9.21,
+                )),
+                lock_missed_frames=max(0, int(self.get_parameter('lock.missed_frames').value)),
+                suspect_timeout_frames=max(1, int(
+                    self.get_parameter('lock.suspect_timeout_frames').value,
+                )),
+                min_reid_similarity=max(-1.0, min(1.0, _finite_float(
+                    self.get_parameter('lock.min_reid_similarity').value, 0.70,
+                ))),
+            )
+            self._lock_manager = TargetLockManager(lock_config)
+            lock_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            self._lock_track_publisher = self.create_publisher(
+                TargetTrackArray,
+                str(self.get_parameter('lock.track_topic').value),
+                lock_qos,
+            )
+            self._lock_status_publisher = self.create_publisher(
+                diag_msgs.DiagnosticArray,
+                str(self.get_parameter('lock.status_topic').value),
+                lock_qos,
+            )
+
         # --- Debug / diagnostics publishers --------------------------------
         self._enable_debug = _as_bool(
             self.get_parameter('enable_debug_topics').value,
@@ -1108,6 +1170,7 @@ class TrackerNode(Node):
             self._latest_records_frame_idx = msg.frame_idx
             self._latest_records_header = _copy_header(msg.header)
         self._aggregator.publish_local(msg)
+        self._publish_lock_result(records, msg.header, msg.frame_idx)
         self.get_logger().debug(
             f'published frame_idx={msg.frame_idx} n_tracks={len(msg.tracks)}'
         )
@@ -1153,6 +1216,84 @@ class TrackerNode(Node):
         )
 
         return msg
+
+    def _publish_lock_result(
+        self,
+        records: list[Any],
+        header: Header,
+        frame_idx: int,
+    ) -> None:
+        """Publish an empty or single-track lock topic without touching tracks."""
+        if (
+            getattr(self, '_lock_manager', None) is None
+            or getattr(self, '_lock_track_publisher', None) is None
+            or getattr(self, '_lock_status_publisher', None) is None
+        ):
+            return
+
+        requested = int(self.get_parameter('lock.selected_target_id').value)
+        selected = requested if requested >= 0 else None
+        if selected != self._lock_requested_target:
+            self._lock_manager.select_target(selected)
+            self._lock_requested_target = selected
+
+        stamp_s = float(header.stamp.sec) + float(header.stamp.nanosec) * 1e-9
+        if stamp_s <= 0.0:
+            stamp_s = self.get_clock().now().nanoseconds / 1e9
+        observations = [
+            LockObservation(
+                target_id=int(record.target_id),
+                x=_finite_float(getattr(record, 'x', 0.0)),
+                y=_finite_float(getattr(record, 'y', 0.0)),
+                vx=_finite_float(getattr(record, 'vx', 0.0)),
+                vy=_finite_float(getattr(record, 'vy', 0.0)),
+                confidence=max(0.0, min(1.0, _finite_float(
+                    getattr(record, 'confidence', 0.0),
+                ))),
+                confirmed=_as_bool(getattr(record, 'confirmed', False)),
+                measured=_as_bool(getattr(record, 'measured', False)),
+                covariance=tuple(getattr(record, 'covariance', (1.0, 0.0, 1.0))),
+                embedding=getattr(record, 'embedding', None),
+            )
+            for record in records
+        ]
+        decision = self._lock_manager.update(observations, stamp_s)
+
+        locked = TargetTrackArray()
+        locked.header = _copy_header(header)
+        locked.frame_idx = frame_idx
+        if decision.command_eligible and decision.selected_target_id is not None:
+            selected_record = next(
+                (record for record in records if int(record.target_id) == decision.selected_target_id),
+                None,
+            )
+            if selected_record is not None:
+                locked.tracks = [self._make_target_track(selected_record)]
+        _publish_if_active(self._lock_track_publisher, locked)
+
+        diagnostic = diag_msgs.DiagnosticArray()
+        diagnostic.header = _copy_header(header)
+        status = diag_msgs.DiagnosticStatus()
+        status.name = 'target_lock'
+        status.hardware_id = 'tracker_node'
+        status.level = (
+            diag_msgs.DiagnosticStatus.OK
+            if decision.command_eligible
+            else diag_msgs.DiagnosticStatus.WARN
+        )
+        status.message = decision.reason
+        status.values = [
+            diag_msgs.KeyValue(key='state', value=decision.state.value),
+            diag_msgs.KeyValue(
+                key='selected_target_id',
+                value='' if decision.selected_target_id is None else str(decision.selected_target_id),
+            ),
+            diag_msgs.KeyValue(
+                key='command_eligible', value=str(decision.command_eligible).lower(),
+            ),
+        ]
+        diagnostic.status = [status]
+        _publish_if_active(self._lock_status_publisher, diagnostic)
 
     def _publish_debug_track(self, msg: TargetTrackArray) -> None:
         """Publish enriched debug message for /target_track_debug."""

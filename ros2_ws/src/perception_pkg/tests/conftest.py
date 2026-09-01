@@ -252,6 +252,7 @@ class _PerceptionPkgFinder(importlib.abc.MetaPathFinder):
         src_map = {
             "tracker_node": str(_SRC_ROOT / 'tracker_node.py'),
             "coord_transform_node": str(_SRC_ROOT / 'coord_transform_node.py'),
+            "target_lock": str(_SRC_ROOT / 'target_lock.py'),
         }
         if sub not in src_map:
             return None
@@ -271,6 +272,16 @@ class _PerceptionPkgLoader(importlib.abc.Loader):
     def exec_module(self, module):
         _ensure_stubs()
         src_path = module.__spec__.origin
+        # Dataclasses in the ROS-free lock manager resolve postponed type
+        # annotations through ``sys.modules[__module__]``.  Execute this
+        # module in its final namespace rather than the temporary ``_src``
+        # namespace used by the legacy node shims below.
+        if module.__spec__.name == "perception_pkg.target_lock":
+            loader = importlib.machinery.SourceFileLoader(
+                module.__spec__.name, src_path,
+            )
+            loader.exec_module(module)
+            return
         loader = importlib.machinery.SourceFileLoader(
             module.__spec__.name + "_src", src_path,
         )

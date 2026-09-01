@@ -739,6 +739,33 @@ class CvtrackRunner:
         except Exception:
             score = 0.0
 
+        # Keep measurement provenance and uncertainty available to local
+        # consumers.  They intentionally stay out of the public ROS track
+        # message: a predicted track is useful for rendering, but must never
+        # be mistaken for a fresh detection by a command gate.
+        measured = bool(
+            int(getattr(t, "misses", 0)) == 0
+            and int(getattr(t, "state", 0)) == 0
+        )
+        covariance = (1.0, 0.0, 1.0)
+        try:
+            cov = np.asarray(t.cov, dtype=np.float64)
+            if cov.shape[0] >= 2 and cov.shape[1] >= 2:
+                xx, xy, yy = float(cov[0, 0]), float(cov[0, 1]), float(cov[1, 1])
+                if all(math.isfinite(value) for value in (xx, xy, yy)) and xx > 0.0 and yy > 0.0:
+                    covariance = (xx, xy, yy)
+        except (AttributeError, TypeError, ValueError, IndexError):
+            pass
+        embedding = None
+        try:
+            value = getattr(t, "embedding_mean", None)
+            if value is not None:
+                candidate = np.asarray(value, dtype=np.float64).reshape(-1)
+                if candidate.size and np.all(np.isfinite(candidate)):
+                    embedding = tuple(float(item) for item in candidate)
+        except (AttributeError, TypeError, ValueError):
+            pass
+
         return TrackedTarget(
             target_id=int(t.track_id),
             x=pos_x,
@@ -755,6 +782,9 @@ class CvtrackRunner:
             pred_x=pred_x,
             pred_y=pred_y,
             pred_conf=pred_conf,
+            measured=measured,
+            covariance=covariance,
+            embedding=embedding,
         )
 
 
@@ -790,6 +820,9 @@ class TrackedTarget:
     pred_x: List[float] = field(default_factory=lambda: [0.0] * 5)
     pred_y: List[float] = field(default_factory=lambda: [0.0] * 5)
     pred_conf: List[float] = field(default_factory=lambda: [1.0] * 5)
+    measured: bool = True
+    covariance: tuple[float, float, float] = (1.0, 0.0, 1.0)
+    embedding: Optional[tuple[float, ...]] = None
 
 
 # ---------------------------------------------------------------------------
