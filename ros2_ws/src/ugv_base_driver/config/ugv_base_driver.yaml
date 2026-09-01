@@ -1,0 +1,97 @@
+/**/ugv_base_driver:
+  ros__parameters:
+    serial_port: /dev/ttyUSB0
+    baudrate: 115200
+    wheel_base: 0.4
+    wheel_radius: 0.075
+    max_linear_speed: 0.6
+    max_angular_speed: 1.0
+    max_wheel_angular_speed: 18.0
+    max_linear_accel: 0.8
+    max_angular_accel: 1.5
+    left_wheel_sign: 1
+    right_wheel_sign: 1
+    swap_wheels: false
+    cmd_vel_topic: cmd_vel
+    enable_topic: enable
+    estop_topic: estop
+    status_topic: driver_status
+    watchdog_timeout: 0.5
+    watchdog_period: 0.1
+    stop_repeat_period: 0.5
+    status_period: 0.5
+    protocol: text
+
+/**/ugv_path_follower:
+  ros__parameters:
+    vehicle_id: 100
+    path_topic: /planned_path
+    odom_topic: odom
+    cmd_vel_topic: cmd_vel_nav
+    enable_topic: enable
+    estop_topic: estop
+    status_topic: path_status
+    vehicle_frame_prefix: drone_
+    accept_unlabeled_path: false
+    enforce_frame_match: true
+    path_resolution: 0.5
+    path_origin_x: 0.0
+    path_origin_y: 0.0
+    control_period: 0.05
+    status_period: 0.5
+    path_timeout: 2.0
+    odom_timeout: 0.5
+    lookahead_distance: 0.8
+    goal_tolerance: 0.25
+    max_linear_speed: 0.6
+    max_angular_speed: 1.0
+    min_linear_speed: 0.08
+    slowdown_radius: 1.5
+    rotate_in_place_angle: 0.8
+    heading_gain: 1.8
+    auto_disable_at_goal: true
+
+/**/ugv_obstacle_guard:
+  ros__parameters:
+    cmd_vel_input_topic: cmd_vel_nav
+    cmd_vel_output_topic: cmd_vel
+    scan_topic: scan
+    depth_topic: camera/depth/image_raw
+    enable_topic: enable
+    estop_topic: estop
+    status_topic: obstacle_status
+    require_lidar: true
+    require_depth: true
+    control_period: 0.05
+    status_period: 0.5
+    command_timeout: 0.25
+    sensor_timeout: 0.4
+    base_stop_distance: 0.6
+    slowdown_distance: 1.8
+    reaction_time: 0.2
+    max_deceleration: 1.0
+    lidar_forward_half_angle: 0.7
+    lidar_confirmation_count: 2
+    lidar_distance_offset: 0.0
+    depth_roi_x_min: 0.25
+    depth_roi_x_max: 0.75
+    depth_roi_y_min: 0.3
+    depth_roi_y_max: 0.8
+    depth_sample_stride: 4
+    depth_confirmation_count: 20
+    depth_range_min: 0.15
+    depth_range_max: 8.0
+    depth_distance_offset: 0.0
+    allow_reverse_without_rear_sensor: false
+    allow_rotation_when_blocked: false
+
+/**/ugv_odom_state_bridge:
+  ros__parameters:
+    vehicle_id: 100
+    odom_topic: odom
+    state_topic: /ground_vehicle_states
+    publish_period: 0.1
+    odom_timeout: 0.5
+    output_frame: world
+    enforce_frame_match: true
+    twist_in_body_frame: true
