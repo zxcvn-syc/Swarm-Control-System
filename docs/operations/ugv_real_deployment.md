@@ -111,10 +111,14 @@ ros2 topic pub --once /ugv_base_driver/enable std_msgs/msg/Bool "{data: false}"
 ## 8. 已知缺口（诚实声明）
 
 - [x] 路径跟随节点（`/planned_path` → `/cmd_vel`）：已实现
-      （`ugv_path_follower`，纯追踪算法，43 项单元测试本地通过）。
-- [ ] 里程计（`/odom`）未发布，当前车侧是开环速度控制；
-      如需反馈闭环需驱动板回传编码器数据。
+      （`ugv_path_follower`，纯追踪算法，单元测试通过；
+      2026-09-01 实车台架实测通过）。
+- [x] 位姿来源：厂商 MentorPi 容器自带 `ekf_filter_node` 在 `/odom`
+      发布 30 Hz 融合里程计（2026-09-01 实测确认），本包
+      `ugv_odom_relay`（第 10 节）转发到 `/ugv_pose` 即可闭环。
 - [ ] 串口协议默认值是通用文本格式，需工程师确认厂商协议后定稿。
+      （注：HiWonder 真机上自带 `/ros_robot_controller` 已订阅
+      `/cmd_vel` 直接驱动底盘，本包 base_driver 仅在自研底盘时使用。）
 
 ## 9. 路径跟随节点（ugv_path_follower）
 
@@ -127,16 +131,16 @@ ros2 topic pub --once /ugv_base_driver/enable std_msgs/msg/Bool "{data: false}"
 | 发布 | `cmd_vel_topic`（默认 `/cmd_vel`） | `geometry_msgs/Twist` | 给 ugv_base_driver |
 | 参数 | `target_frame_id`（默认 `""`） | str | planner 把所有平台的路径混在同一条消息里，靠每个点的 `frame_id=drone_<id>` 区分。**多车实验必须设**（如 `drone_4`），单机实验留空即可 |
 
-### 9.2 位姿从哪来（当前最大的现实缺口）
+### 9.2 位姿从哪来
 
-`ugv_base_driver` 是开环的，不发布 `/odom`，所以 `/ugv_pose` 需要
-外部喂。现阶段可选：
+真机（HiWonder MentorPi）底盘自带 EKF 融合里程计：`ekf_filter_node`
+在 `/odom` 上以约 30 Hz 发布 `nav_msgs/Odometry`（轮式里程计 +
+激光雷达 `/odom_rf2o` 融合，漂移比纯轮式小）。本包的
+`ugv_odom_relay` 节点（见第 10 节）把它转成 `PoseStamped` 发到
+`/ugv_pose`，即插即用，无需外购定位硬件。
 
-- **台架/桌面测试**：手写一个固定/匀速假位姿发布器（见 9.4）；
-- **真机联调**：任何外部定位（动捕、UWB、RTK）桥接成
-  `PoseStamped` 发到 `/ugv_pose`；
-- **后期**：驱动板回传编码器后，写轮式里程计节点发布 `/odom`，
-  再由 `odometry → PoseStamped` 的桥接节点转发。
+长航程/高精度需求时再考虑动捕、UWB、RTK 桥接成 `PoseStamped`
+发到 `/ugv_pose`（topic 可参数化替换）。
 
 ### 9.3 启动
 
@@ -151,27 +155,40 @@ ros2 launch ugv_base_driver ugv_path_follower.launch.py \
 - 到达终点（默认 0.25 m 容差）→ 零速并保持；
 - Ctrl+C 退出时发最后一帧零速。
 
-### 9.4 台架测试流程（不需要真位姿真路径）
+### 9.4 台架测试流程（2026-09-01 实车实测通过）
+
+**务必架空车轮。** 实测发现三个坑，命令必须按下面来：
+
+1. **路径不能 `--once` 单发**：DDS 发现需要约 1 秒，单发大概率
+   被丢，必须持续发布（`-r 2` + `timeout` 限时）。
+2. **路径点的 frame_id 逐点过滤**：`target_frame_id:=drone_4` 时，
+   **每个 pose 的** `header.frame_id` 都必须是 `drone_4`；标成
+   `map`/`world` 会被全部过滤并告警 `no usable waypoints`。
+3. **路径必须持续刷新**：`path_timeout=2s`，超过 2 秒没新路径
+   节点自动回零速（真实系统里 planner 持续重发，不受影响）。
 
 ```bash
 # 终端①：起跟随节点
-ros2 launch ugv_base_driver ugv_path_follower.launch.py
+ros2 launch ugv_base_driver ugv_path_follower.launch.py target_frame_id:=drone_4
 
-# 终端②：喂一个静止位姿（原点、朝 +X）
+# 终端②：喂一个静止位姿（原点、朝 +X），保持运行不要 Ctrl+C
 ros2 topic pub -r 10 /ugv_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: world}, pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}"
 
-# 终端③：喂一条 5 米直线路径（frame_id 留空=不过滤）
-ros2 topic pub --once /planned_path nav_msgs/msg/Path \
-  "{header: {frame_id: world}, poses: [
-     {header: {frame_id: ''}, pose: {position: {x: 1.0, y: 0.0}}},
-     {header: {frame_id: ''}, pose: {position: {x: 3.0, y: 0.0}}},
-     {header: {frame_id: ''}, pose: {position: {x: 5.0, y: 0.0}}}]}"
+# 终端③：持续喂一条前进路径，30 秒后自动停
+timeout 30 ros2 topic pub -r 2 /planned_path nav_msgs/msg/Path \
+  "{header: {frame_id: drone_4}, poses: [
+     {header: {frame_id: drone_4}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}},
+     {header: {frame_id: drone_4}, pose: {position: {x: 2.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}]}"
 ```
 
-预期：终端①日志打印 `new path: 3 waypoints, goal=(5.00, 0.00)`；
-`ros2 topic echo /cmd_vel` 应看到 `linear.x≈0.5`（或限速值）、
-`angular.z≈0`。停止喂位姿 0.5 s 后 cmd_vel 归零（看门狗生效）。
+预期（2026-09-01 实测输出）：
+
+- 终端①日志打印 `new path: 2 waypoints, goal=(2.00, 0.00)`；
+- `ros2 topic echo /cmd_vel` 看到 `linear.x=0.5`、`angular.z=0.0`，
+  轮子悬空前转；
+- 路径停止发布约 2 秒后 cmd_vel 自动归零（path_timeout 生效）；
+- 位姿停止 0.5 秒后同样归零（pose_timeout 生效）。
 
 ### 9.5 调参建议
 
@@ -205,3 +222,49 @@ source $WS/install/setup.bash && ros2 run ugv_base_driver ugv_path_follower --ro
 ```
 
 看到 `ugv_path_follower ready: ...` 即修复成功，Ctrl+C 退出。
+
+## 10. 里程计中继节点（ugv_odom_relay）
+
+真车完整启动顺序（都在 MentorPi 容器内）：
+
+```bash
+# ① 里程计中继：/odom -> /ugv_pose
+ros2 launch ugv_base_driver ugv_odom_relay.launch.py
+
+# ② 路径跟随：/planned_path -> /cmd_vel
+ros2 launch ugv_base_driver ugv_path_follower.launch.py target_frame_id:=drone_4
+
+# ③ 验证 /ugv_pose 有数据（约 30 Hz）
+ros2 topic hz /ugv_pose
+```
+
+### 10.1 接口与参数
+
+| 方向 | 话题/参数 | 类型/默认 | 说明 |
+|---|---|---|---|
+| 订阅 | `odom_topic`（默认 `/odom`） | `nav_msgs/Odometry` | 厂商 EKF 融合里程计 |
+| 发布 | `pose_topic`（默认 `/ugv_pose`） | `geometry_msgs/PoseStamped` | 供 ugv_path_follower 消费 |
+| 参数 | `frame_id`（默认 `""`） | str | 输出 frame_id；空 = 透传来源头 |
+| 参数 | `restamp`（默认 launch 里 `true`） | bool | 用本节点时钟重打时间戳，避免跨机时钟差导致 pose_timeout 误判 |
+
+### 10.2 坐标系对齐（开局仪式）
+
+`/odom` 从上电时刻起算，而无人机视觉的世界坐标是另一套原点。
+演示级对齐做法：
+
+1. 把小车摆在场地原点，**车头朝世界 +X 方向**；
+2. 重置里程计（`ros2 topic pub --once /set_odom ...` 按厂商定义，
+   或最粗暴：重启 MentorPi 容器）；
+3. 此后 odom 坐标 ≈ 世界坐标，`/ugv_pose` 可直接与 `/planned_path`
+   配对使用。
+
+长航程或多人场景请改用 TF（`odom -> world` 变换），中继节点无需改动。
+
+### 10.3 实测数据（2026-09-01，HiWonder MentorPi）
+
+| 项目 | 值 |
+|---|---|
+| `/odom` 发布节点 | `ekf_filter_node` |
+| `/odom` 频率 | 约 30 Hz（QoS: RELIABLE/VOLATILE） |
+| 数据源 | 轮式里程计 + MS200 激光雷达 `/odom_rf2o` 融合 |
+| 累计位置示例 | 上电后移动约 7 m，读数 x=6.65, y=2.43 |
