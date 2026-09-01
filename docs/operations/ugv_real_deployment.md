@@ -9,7 +9,10 @@
 本仓库提供的是"指令到串口"这一层：
 
 ```
-planner_node / enclosure_node / 手柄遥控
+planner_node（/planned_path，米）
+        │
+        ▼
+ugv_path_follower          ← 本包：路径点 → /cmd_vel（纯追踪算法）
         │  /cmd_vel (geometry_msgs/Twist)
         ▼
 ugv_base_driver            ← 本包
@@ -101,13 +104,80 @@ ros2 topic pub --once /ugv_base_driver/enable std_msgs/msg/Bool "{data: false}"
 - 无人机侧参照 `docs/deployment/real_uav_deployment.md`。
 - 实机网络使用专用 `ROS_DOMAIN_ID`（如 71），电脑/无人机/小车同网段同域。
 - 联调顺序：无人机感知出 `/target_track_world` → scheduler 出
-  `/task_assignment` → planner 出 `/planned_path` → 车侧需要一段
-  "路径跟随"逻辑（将路径点转为 `/cmd_vel`，建议纯追踪算法，
-  待实现，见下方 TODO）。
+  `/task_assignment` → planner 出 `/planned_path` →
+  `ugv_path_follower`（本包）把路径点转为 `/cmd_vel` →
+  `ugv_base_driver` 下发串口。用法见第 9 节。
 
 ## 8. 已知缺口（诚实声明）
 
-- [ ] 路径跟随节点（`/planned_path` → `/cmd_vel`）尚未实现。
+- [x] 路径跟随节点（`/planned_path` → `/cmd_vel`）：已实现
+      （`ugv_path_follower`，纯追踪算法，43 项单元测试本地通过）。
 - [ ] 里程计（`/odom`）未发布，当前车侧是开环速度控制；
       如需反馈闭环需驱动板回传编码器数据。
 - [ ] 串口协议默认值是通用文本格式，需工程师确认厂商协议后定稿。
+
+## 9. 路径跟随节点（ugv_path_follower）
+
+### 9.1 接口
+
+| 方向 | 话题/参数 | 类型 | 说明 |
+|---|---|---|---|
+| 订阅 | `path_topic`（默认 `/planned_path`） | `nav_msgs/Path` | planner_node 输出，米、world 系 |
+| 订阅 | `pose_topic`（默认 `/ugv_pose`） | `geometry_msgs/PoseStamped` | 小车当前位姿，**必须与路径同坐标系** |
+| 发布 | `cmd_vel_topic`（默认 `/cmd_vel`） | `geometry_msgs/Twist` | 给 ugv_base_driver |
+| 参数 | `target_frame_id`（默认 `""`） | str | planner 把所有平台的路径混在同一条消息里，靠每个点的 `frame_id=drone_<id>` 区分。**多车实验必须设**（如 `drone_4`），单机实验留空即可 |
+
+### 9.2 位姿从哪来（当前最大的现实缺口）
+
+`ugv_base_driver` 是开环的，不发布 `/odom`，所以 `/ugv_pose` 需要
+外部喂。现阶段可选：
+
+- **台架/桌面测试**：手写一个固定/匀速假位姿发布器（见 9.4）；
+- **真机联调**：任何外部定位（动捕、UWB、RTK）桥接成
+  `PoseStamped` 发到 `/ugv_pose`；
+- **后期**：驱动板回传编码器后，写轮式里程计节点发布 `/odom`，
+  再由 `odometry → PoseStamped` 的桥接节点转发。
+
+### 9.3 启动
+
+```bash
+ros2 launch ugv_base_driver ugv_path_follower.launch.py \
+    target_frame_id:=drone_4 max_linear_speed:=0.3
+```
+
+安全行为（与 base_driver 叠加）：
+
+- 位姿 0.5 s / 路径 2 s 没更新 → 自动发零速；
+- 到达终点（默认 0.25 m 容差）→ 零速并保持；
+- Ctrl+C 退出时发最后一帧零速。
+
+### 9.4 台架测试流程（不需要真位姿真路径）
+
+```bash
+# 终端①：起跟随节点
+ros2 launch ugv_base_driver ugv_path_follower.launch.py
+
+# 终端②：喂一个静止位姿（原点、朝 +X）
+ros2 topic pub -r 10 /ugv_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: world}, pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}"
+
+# 终端③：喂一条 5 米直线路径（frame_id 留空=不过滤）
+ros2 topic pub --once /planned_path nav_msgs/msg/Path \
+  "{header: {frame_id: world}, poses: [
+     {header: {frame_id: ''}, pose: {position: {x: 1.0, y: 0.0}}},
+     {header: {frame_id: ''}, pose: {position: {x: 3.0, y: 0.0}}},
+     {header: {frame_id: ''}, pose: {position: {x: 5.0, y: 0.0}}}]}"
+```
+
+预期：终端①日志打印 `new path: 3 waypoints, goal=(5.00, 0.00)`；
+`ros2 topic echo /cmd_vel` 应看到 `linear.x≈0.5`（或限速值）、
+`angular.z≈0`。停止喂位姿 0.5 s 后 cmd_vel 归零（看门狗生效）。
+
+### 9.5 调参建议
+
+| 现象 | 调整 |
+|---|---|
+| 过弯甩尾/切内角 | 增大 `lookahead_distance`（0.6 → 0.8/1.0） |
+| 弯道跟不上、走出路径 | 减小 `lookahead_distance` 或增大 `max_angular_speed` |
+| 终点停不稳、来回蹭 | 增大 `goal_tolerance`（0.25 → 0.4） |
+| 到终点冲过头 | 增大 `slowdown_radius`（1.0 → 1.5） |

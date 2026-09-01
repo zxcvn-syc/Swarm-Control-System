@@ -10,7 +10,8 @@ data_files = [
     ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
     ("share/" + package_name, ["package.xml"]),
     ("share/" + package_name + "/config", ["config/ugv_base_driver.yaml"]),
-    ("share/" + package_name + "/launch", ["launch/ugv_base_driver.launch.py"]),
+    ("share/" + package_name + "/launch", ["launch/ugv_base_driver.launch.py",
+                                            "launch/ugv_path_follower.launch.py"]),
 ]
 
 setup(
@@ -29,6 +30,7 @@ setup(
     entry_points={
         "console_scripts": [
             "ugv_base_driver = ugv_base_driver.base_driver_node:main",
+            "ugv_path_follower = ugv_base_driver.path_follower_node:main",
         ],
     },
 )
