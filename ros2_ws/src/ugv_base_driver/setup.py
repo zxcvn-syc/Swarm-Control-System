@@ -12,6 +12,8 @@ data_files = [
     ("share/" + package_name + "/config", ["config/ugv_base_driver.yaml"]),
     ("share/" + package_name + "/launch", ["launch/ugv_base_driver.launch.py",
                                             "launch/ugv_path_follower.launch.py"]),
+    ("lib/" + package_name, ["scripts/ugv_base_driver",
+                             "scripts/ugv_path_follower"]),
 ]
 
 setup(

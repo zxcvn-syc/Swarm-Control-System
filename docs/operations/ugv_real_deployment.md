@@ -181,3 +181,27 @@ ros2 topic pub --once /planned_path nav_msgs/msg/Path \
 | 弯道跟不上、走出路径 | 减小 `lookahead_distance` 或增大 `max_angular_speed` |
 | 终点停不稳、来回蹭 | 增大 `goal_tolerance`（0.25 → 0.4） |
 | 到终点冲过头 | 增大 `slowdown_radius`（1.0 → 1.5） |
+
+### 9.6 重编译后 ros2 run 找不到入口（No executable found）
+
+**现象**：`colcon build` 后 `ros2 run ugv_base_driver ugv_path_follower` 报
+`No executable found`。
+
+**原因**：部分环境（尤其容器内手动装的 colcon）把 `console_scripts`
+生成的入口装到 `install/<pkg>/bin/`，而 `ros2 run` 只搜
+`install/<pkg>/lib/<pkg>/`。包内 `setup.py` 已通过 `data_files` 把
+`scripts/` 下的入口同时安装到 `lib/<pkg>/`，标准 ROS2 环境不会遇到此问题；
+遇到时按下面命令修复（只改 install 产物，不碰源码）：
+
+```bash
+# 在容器内工作空间根目录执行
+WS=/home/ubuntu/ros2_ws
+mkdir -p $WS/install/ugv_base_driver/lib/ugv_base_driver
+for f in $WS/install/ugv_base_driver/bin/*; do
+  ln -sf "$f" "$WS/install/ugv_base_driver/lib/ugv_base_driver/$(basename "$f")"
+done
+# 验证
+source $WS/install/setup.bash && ros2 run ugv_base_driver ugv_path_follower --ros-args -p target_frame_id:=drone_4
+```
+
+看到 `ugv_path_follower ready: ...` 即修复成功，Ctrl+C 退出。
