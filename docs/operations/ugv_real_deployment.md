@@ -1,113 +1,211 @@
-# UGV 真机部署与调试手册（一机一车实验）
+# UGV 真机部署与调试手册（树莓派 5）
 
-适用范围：`ugv_base_driver` 包（`ros2_ws/src/ugv_base_driver`），2026-09-01 新增。
-用途：把 ROS2 的 `/cmd_vel` 速度指令转换成串口命令发给小车底盘驱动板，
-作为 Swarm-Control-System 规划/封控结果落地到实车的最后一段链路。
+适用包：`ros2_ws/src/ugv_base_driver`。
 
-## 1. 职责边界
+当前车辆硬件信息：树莓派 5 主板、二维激光雷达、深度相机、差速底盘。
+本包完成标准 ROS 2 消息到车辆串口的控制链，不包含未知型号设备的厂商驱动。
 
-本仓库提供的是"指令到串口"这一层：
+## 1. 已实现链路
 
+```text
+/planned_path (nav_msgs/Path)
+        |
+        v
+ugv_path_follower  <-- /ugv_100/odom
+        |  /ugv_100/cmd_vel_nav
+        v
+ugv_obstacle_guard <-- /ugv_100/scan
+        |            <-- /ugv_100/camera/depth/image_raw
+        |  /ugv_100/cmd_vel
+        v
+ugv_base_driver
+        |  厂商串口帧
+        v
+底盘驱动板
+
+/ugv_100/odom --> ugv_odom_state_bridge --> /ground_vehicle_states
 ```
-planner_node / enclosure_node / 手柄遥控
-        │  /cmd_vel (geometry_msgs/Twist)
-        ▼
-ugv_base_driver            ← 本包
-        │  串口文本命令（默认 "L<左轮rad/s> R<右轮rad/s>\n"）
-        ▼
-底盘驱动板（厂商提供，负责电机 PWM / 编码器闭环）
-```
 
-**驱动板固件协议由厂商/工程师定义。** 如果厂商协议不是默认文本格式，
-只需修改 `ugv_base_driver/command_protocol.py` 中新增一个编码函数，
-不要改节点和运动学。
+四个节点均采用失效停车策略：未使能、输入超时、传感器超时、急停、
+非法数值、串口写入失败或坐标系不一致时，不继续发送运动速度。
 
-## 2. 上车前信息核对清单（问工程师）
+## 2. 必须从硬件确认的信息
 
-| 项目 | 为什么需要 | 默认假设 |
+| 项目 | 当前代码接口 | 上车前必须确认 |
 |---|---|---|
-| 板载电脑型号与系统 | 决定安装命令 | Ubuntu 22.04 + ROS2 Humble |
-| 底盘驱动板型号/固件协议 | 决定串口命令格式 | 文本 `L<左> R<右>\n` |
-| 串口设备名与波特率 | 打开串口用 | `/dev/ttyUSB0` @ 115200 |
-| 轮距（两轮中心距） | 运动学换算 | 0.4 m |
-| 轮半径 | 运动学换算 | 0.075 m |
-| 最大线/角速度 | 安全限速 | 1.0 m/s / 1.0 rad/s |
+| 激光雷达 | `sensor_msgs/LaserScan` | 型号、驱动包、真实 topic、零度是否朝车头 |
+| 深度相机 | `sensor_msgs/Image` | 型号、驱动包、真实 depth topic、编码 |
+| 里程计 | `nav_msgs/Odometry` | 编码器、视觉里程计或 SLAM 的输出 topic 和 frame |
+| 底盘串口 | `text` / `text_rpm` 示例协议 | 厂商帧格式、波特率、校验、左右轮单位 |
+| 几何参数 | 轮距 0.4 m、轮半径 0.075 m | 实测轮距和有效滚动半径 |
 
-## 3. SSH 登录与代码上传
+深度门控支持 ROS 深度图常用的 `16UC1`（毫米）与 `32FC1`（米）。
+其他编码会被拒绝并停车。激光扫描按 ROS 约定以零弧度为前方；若雷达安装
+方向不同，应由静态 TF/驱动修正，不能靠错误扇区继续运行。
 
-Windows 电脑网线直连小车（详见 2026-09-01 对话记录），登录后：
+激光雷达和深度相机本身不等于里程计。路径跟随必须有稳定的 `/odom`，
+并且其 `header.frame_id` 与路径顶层 frame 一致。当前规划器发布 `world`，
+所以真车应提供已经变换到 `world` 的 odometry。
+
+## 3. 树莓派 5 软件基线
+
+为了与团队工作区一致，优先使用 64 位 Ubuntu 22.04 + ROS 2 Humble。
+若树莓派当前是 Ubuntu 24.04 + ROS 2 Jazzy，需要在该系统上重新构建整个
+工作区；本包只使用标准 ROS 2 API，但不能把未执行的 Jazzy 构建写成已验证。
 
 ```bash
-# 板载电脑上（示例用户名 ubuntu，按实际情况替换）
-sudo apt install -y python3-serial        # pyserial
-cd ~
-git clone https://github.com/zxcvn-syc/Swarm-Control-System.git
-# 或从电脑直接传：scp -r ros2_ws/src/ugv_base_driver ubuntu@<小车IP>:~/Swarm-Control-System/ros2_ws/src/
+sudo apt update
+sudo apt install -y python3-colcon-common-extensions python3-serial
 
 cd ~/Swarm-Control-System/ros2_ws
 source /opt/ros/humble/setup.bash
-colcon build --packages-select ugv_base_driver
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-up-to ugv_base_driver
 source install/setup.bash
 ```
 
-## 4. 安全机制（写进代码，不要绕过）
+若系统使用 Jazzy，将上面的 `humble` 换成 `jazzy`。
 
-1. **使能门控**：节点启动后处于 DISABLED 状态，不转发任何指令。
-   必须显式发布使能后 `/cmd_vel` 才会下发到串口：
-   ```bash
-   ros2 topic pub --once /ugv_base_driver/enable std_msgs/msg/Bool "{data: true}"
-   ```
-2. **看门狗**：0.5 秒内没有新的 `/cmd_vel`，自动向串口写零速命令。
-   上层节点崩溃/断链时车会自己停。
-3. **限速**：线/角速度超过 `max_linear_speed`/`max_angular_speed` 时
-   等比缩放（保持转弯弧线不突变）。
-4. **Ctrl+C 退出时自动发零速**再关闭串口。
+## 4. 先验证硬件 ROS topic
 
-## 5. 首次调试流程（务必架空车轮）
+先单独启动雷达、深度相机和里程计驱动，再执行：
 
 ```bash
-# ① 确认串口设备（插上驱动板后）
-ls /dev/ttyUSB* /dev/ttyACM*
-
-# ② 起节点（先按实际参数改 serial_port / 轮距 / 轮半径）
-ros2 launch ugv_base_driver ugv_base_driver.launch.py \
-    serial_port:=/dev/ttyUSB0 baudrate:=115200 protocol:=text
-
-# ③ 使能
-ros2 topic pub --once /ugv_base_driver/enable std_msgs/msg/Bool "{data: true}"
-
-# ④ 发一个低速直线指令（轮子架空！）
-ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}"
-
-# ⑤ 观察：日志应持续打印 "cmd v=+0.200 ..."；驱动板有反应即链路通
-#    停止：Ctrl+C 停掉 pub，0.5 秒后看门狗应打印 "STOP sent (cmd_vel timeout)"
-
-# ⑥ 断使能（安全锁）
-ros2 topic pub --once /ugv_base_driver/enable std_msgs/msg/Bool "{data: false}"
+ros2 topic list | sort
+ros2 topic type /scan
+ros2 topic type /camera/depth/image_raw
+ros2 topic type /odom
+ros2 topic hz /scan
+ros2 topic hz /camera/depth/image_raw
+ros2 topic hz /odom
+ros2 topic echo --once /scan
+ros2 topic echo --once /camera/depth/image_raw --field encoding
+ros2 topic echo --once /odom --field header
 ```
 
-## 6. 常见问题
+预期类型依次为：
 
-- **串口打不开**：`ls -l /dev/ttyUSB0` 看属主，非 dialout 组执行
-  `sudo usermod -aG dialout $USER` 后重新登录。
-- **驱动板不动但日志正常**：协议不匹配。抓厂商协议文档，
-  在 `command_protocol.py` 加对应编码函数并在参数里切换 `protocol`。
-- **方向反了**：单侧轮反转让轮速取反，或整体交换左右接线；
-  运动学符号遵循 REP-103（+x 前进，+z 角速度左转）。
-- **车一直发疯**：立即 `Ctrl+C`（退出发零速）并物理断电。
+```text
+sensor_msgs/msg/LaserScan
+sensor_msgs/msg/Image
+nav_msgs/msg/Odometry
+```
 
-## 7. 与无人机联调（一机一车）
+如果真实 topic 不同，不要改节点源码，启动时用 `scan_topic`、`depth_topic`、
+`odom_topic` 参数指向真实 topic。
 
-- 无人机侧参照 `docs/deployment/real_uav_deployment.md`。
-- 实机网络使用专用 `ROS_DOMAIN_ID`（如 71），电脑/无人机/小车同网段同域。
-- 联调顺序：无人机感知出 `/target_track_world` → scheduler 出
-  `/task_assignment` → planner 出 `/planned_path` → 车侧需要一段
-  "路径跟随"逻辑（将路径点转为 `/cmd_vel`，建议纯追踪算法，
-  待实现，见下方 TODO）。
+## 5. 架空车轮做串口测试
 
-## 8. 已知缺口（诚实声明）
+先不启动自动路径链，只启动底盘驱动：
 
-- [ ] 路径跟随节点（`/planned_path` → `/cmd_vel`）尚未实现。
-- [ ] 里程计（`/odom`）未发布，当前车侧是开环速度控制；
-      如需反馈闭环需驱动板回传编码器数据。
-- [ ] 串口协议默认值是通用文本格式，需工程师确认厂商协议后定稿。
+```bash
+ls -l /dev/ttyUSB* /dev/ttyACM*
+
+ros2 launch ugv_base_driver ugv_base_driver.launch.py \
+  vehicle_namespace:=ugv_100 \
+  serial_port:=/dev/ttyUSB0 \
+  baudrate:=115200 \
+  protocol:=text
+```
+
+新终端中使能并发送低速命令：
+
+```bash
+source ~/Swarm-Control-System/ros2_ws/install/setup.bash
+ros2 topic pub --once /ugv_100/enable std_msgs/msg/Bool "{data: true}"
+ros2 topic pub -r 10 /ugv_100/cmd_vel geometry_msgs/msg/Twist \
+  "{linear: {x: 0.10}, angular: {z: 0.0}}"
+```
+
+停止发布后 0.5 秒内看门狗必须停车。方向不对时修改
+`left_wheel_sign`、`right_wheel_sign` 或 `swap_wheels`，不要交换运动学公式。
+
+## 6. 启动完整自动链路
+
+确认传感器和里程计持续发布后：
+
+```bash
+ros2 launch ugv_base_driver ugv_vehicle.launch.py \
+  vehicle_namespace:=ugv_100 \
+  vehicle_id:=100 \
+  serial_port:=/dev/ttyUSB0 \
+  baudrate:=115200 \
+  protocol:=text \
+  scan_topic:=/scan \
+  depth_topic:=/camera/depth/image_raw \
+  odom_topic:=/odom_world \
+  output_frame:=world \
+  path_resolution:=0.5
+```
+
+绝对 topic（以 `/` 开头）不会自动加车辆命名空间；相对 topic 会解析到
+`/ugv_100/...`。按设备实际 topic 选择写法。
+
+当前 `planning_pkg` 的路径点是网格 cell 坐标，默认地图分辨率为
+0.5 m/cell，所以 `path_resolution:=0.5`。若规划端以后改为直接发布米制坐标，
+应改为 `1.0`，不能重复缩放。
+
+## 7. 启动前状态检查
+
+```bash
+ros2 topic echo /ugv_100/path_status
+ros2 topic echo /ugv_100/obstacle_status
+ros2 topic echo /ugv_100/driver_status
+ros2 topic echo /ground_vehicle_states
+```
+
+在未使能状态下，状态应显示 disabled。遮住深度相机、停止雷达驱动或停止
+里程计后，门控状态必须变成 missing/stale/no_valid_ranges，且车辆速度为零。
+
+默认同时要求雷达和深度相机在线。初次只验证雷达时可以临时启动：
+
+```bash
+ros2 launch ugv_base_driver ugv_vehicle.launch.py \
+  require_depth:=false require_lidar:=true \
+  serial_port:=/dev/ttyUSB0 odom_topic:=/odom_world
+```
+
+这只是分阶段调试参数。正式运行应恢复两路传感器，或在实验记录中明确说明
+关闭了哪一路安全输入。
+
+## 8. 统一使能、停车与复位
+
+四节点监听同一个使能和急停 topic：
+
+```bash
+ros2 topic pub --once /ugv_100/enable std_msgs/msg/Bool "{data: true}"
+
+ros2 topic pub --once /ugv_100/estop std_msgs/msg/Bool "{data: true}"
+
+ros2 topic pub --once /ugv_100/enable std_msgs/msg/Bool "{data: false}"
+ros2 service call /ugv_100/ugv_path_follower/reset_estop std_srvs/srv/Trigger "{}"
+ros2 service call /ugv_100/ugv_obstacle_guard/reset_fault std_srvs/srv/Trigger "{}"
+ros2 service call /ugv_100/ugv_base_driver/reset_fault std_srvs/srv/Trigger "{}"
+```
+
+急停是锁存的，向 `/estop` 发布 false 不会自动恢复。复位后仍保持 disabled，
+必须重新显式使能。
+
+## 9. 障碍门控参数
+
+关键参数位于 `config/ugv_base_driver.yaml`：
+
+- `base_stop_distance`：静止基础停车距离，默认 0.6 m。
+- `slowdown_distance`：开始线性减速的基础距离，默认 1.8 m。
+- `reaction_time`、`max_deceleration`：按当前前进速度增加制动距离。
+- `lidar_forward_half_angle`：雷达前向扇区半角，默认 0.7 rad。
+- `depth_roi_*`：深度图中央检测区域。
+- `depth_sample_stride`：深度采样步长，默认 4，适合树莓派 5 低负载运行。
+- `allow_reverse_without_rear_sensor`：默认 false；没有后向传感器时禁止倒车。
+- `allow_rotation_when_blocked`：默认 false；近障时连原地旋转也禁止。
+
+停车距离必须用现场低速制动测试标定，默认值不是车辆的实测制动性能。
+
+## 10. 尚需现场完成的硬件项
+
+- 厂商底盘协议尚未知；当前 `text`/`text_rpm` 只是可测试的协议插件。
+- 本包不生成编码器 odometry；必须接入底盘、视觉里程计或 SLAM 输出。
+- 雷达和深度相机型号未知，因此各自厂商驱动、USB 权限与 udev 规则未写死。
+- 尚未在这辆树莓派 5 实车上完成轮距、轮径、方向、制动距离和传感器外参标定。
+
+这些项不影响节点和接口完整性，但在确认前不能宣称真车闭环已经通过。

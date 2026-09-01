@@ -10,7 +10,10 @@ import pytest
 from ugv_base_driver.diff_kinematics import (
     body_twist_to_wheel_angular_speeds,
     clamp,
+    configure_wheel_directions,
     limit_body_twist,
+    limit_twist_rate,
+    limit_wheel_angular_speeds,
     wheel_speeds_from_twist,
     wheel_angular_speeds_to_rpms,
 )
@@ -89,6 +92,38 @@ def test_wheel_speeds_from_twist_applies_limits():
     left, right = wheel_speeds_from_twist(2.0, 0.0, WB, WR, 1.0, 1.0)
     assert left == pytest.approx(1.0 / WR)
     assert right == pytest.approx(1.0 / WR)
+
+
+def test_wheel_speed_limit_preserves_ratio():
+    left, right = limit_wheel_angular_speeds(20.0, 10.0, 8.0)
+    assert left == pytest.approx(8.0)
+    assert right == pytest.approx(4.0)
+
+
+def test_wheel_speed_limit_in_pipeline():
+    left, right = wheel_speeds_from_twist(
+        1.0, 1.0, WB, WR, 2.0, 2.0, max_wheel_angular_speed=10.0
+    )
+    assert max(abs(left), abs(right)) == pytest.approx(10.0)
+
+
+def test_twist_rate_limit():
+    linear, angular = limit_twist_rate(0.0, 0.0, 1.0, -2.0, 0.5, 1.0, 0.2)
+    assert linear == pytest.approx(0.1)
+    assert angular == pytest.approx(-0.2)
+
+
+def test_wheel_direction_configuration():
+    assert configure_wheel_directions(
+        2.0, 3.0, swap_wheels=True, left_sign=-1, right_sign=1
+    ) == pytest.approx((-3.0, 2.0))
+
+
+def test_non_finite_inputs_are_rejected():
+    with pytest.raises(ValueError):
+        limit_body_twist(float("nan"), 0.0, 1.0, 1.0)
+    with pytest.raises(ValueError):
+        body_twist_to_wheel_angular_speeds(0.0, float("inf"), WB, WR)
 
 
 def test_rad_s_to_rpm_conversion():
