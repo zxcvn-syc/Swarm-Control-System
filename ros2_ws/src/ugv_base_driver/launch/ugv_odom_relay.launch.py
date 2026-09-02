@@ -12,7 +12,7 @@ short-range field experiments.
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -46,10 +46,10 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[
                     {
-                        "odom_topic": LaunchArgument("odom_topic"),
-                        "pose_topic": LaunchArgument("pose_topic"),
-                        "frame_id": LaunchArgument("frame_id"),
-                        "restamp": LaunchArgument("restamp"),
+                        "odom_topic": LaunchConfiguration("odom_topic"),
+                        "pose_topic": LaunchConfiguration("pose_topic"),
+                        "frame_id": LaunchConfiguration("frame_id"),
+                        "restamp": LaunchConfiguration("restamp"),
                     },
                 ],
             ),

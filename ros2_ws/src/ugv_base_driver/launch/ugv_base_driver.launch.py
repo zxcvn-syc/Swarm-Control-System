@@ -2,7 +2,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -31,9 +31,9 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[
                     {
-                        "serial_port": LaunchArgument("serial_port"),
-                        "baudrate": LaunchArgument("baudrate"),
-                        "protocol": LaunchArgument("protocol"),
+                        "serial_port": LaunchConfiguration("serial_port"),
+                        "baudrate": LaunchConfiguration("baudrate"),
+                        "protocol": LaunchConfiguration("protocol"),
                     },
                     # geometry: change to match the actual vehicle
                     {"wheel_base": 0.4},

@@ -12,7 +12,7 @@ testing the follower's output with ``ros2 topic echo /cmd_vel``.
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -61,13 +61,13 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=[
                     {
-                        "path_topic": LaunchArgument("path_topic"),
-                        "pose_topic": LaunchArgument("pose_topic"),
-                        "cmd_vel_topic": LaunchArgument("cmd_vel_topic"),
-                        "target_frame_id": LaunchArgument("target_frame_id"),
-                        "max_linear_speed": LaunchArgument("max_linear_speed"),
-                        "max_angular_speed": LaunchArgument("max_angular_speed"),
-                        "lookahead_distance": LaunchArgument("lookahead_distance"),
+                        "path_topic": LaunchConfiguration("path_topic"),
+                        "pose_topic": LaunchConfiguration("pose_topic"),
+                        "cmd_vel_topic": LaunchConfiguration("cmd_vel_topic"),
+                        "target_frame_id": LaunchConfiguration("target_frame_id"),
+                        "max_linear_speed": LaunchConfiguration("max_linear_speed"),
+                        "max_angular_speed": LaunchConfiguration("max_angular_speed"),
+                        "lookahead_distance": LaunchConfiguration("lookahead_distance"),
                         "goal_tolerance": 0.25,
                         "slowdown_radius": 1.0,
                         "pose_timeout": 0.5,

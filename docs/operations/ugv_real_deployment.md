@@ -381,10 +381,52 @@ bash ~/scs_status.sh    # 随时体检：电池mV / /odom / /ugv_pose 频率 / �
 ### 12.4 电池与网络备忘
 
 - 电池：`/ros_robot_controller/battery`（单位 mV），2S 满电约 8400，
-  低于 7200 停止测试。**整车开机静置也掉电**（实测 25 分钟掉约 0.18 V），
-  当天测完要么关机要么回充。
-- WiFi：车自带热点 HW-6793FDED / hiwonder（5G，车端固定 192.168.149.1）。
-  电脑侧已预存连接档案（手动模式，点一下即连）；连上后拔网线，
-  `_car_ssh.py` 自动从 192.168.2.100 切到 192.168.149.1。
-  若热点未给电脑分 DHCP 地址，手工配 192.168.149.50/24。
+  **实测电机低压保护在 ~7300mV 就切力矩**（7200 拒跑线形同虚设），
+  拒跑阈值已提高到 7500（详见 13.2）。整车开机静置也掉电
+  （实测 25 分钟掉约 0.18 V），当天测完要么关机要么回充。
+- WiFi（2026-09-02 更新）：车 wlan0 已改 STA 连场地网 B616_OP5G
+  （DHCP 拿 192.168.1.163，开机自动连），`_car_ssh.py` 探测顺序为
+  192.168.2.100(网线) → 192.168.1.163(B616) → 192.168.149.1(热点备用，
+  配置保留，可 `nmcli connection up HW-6793FDED` 手动切回)。
 - 车主机时钟与真实时间差约 2.5 小时（未做 NTP 对时），看日志时间戳时注意。
+
+## 13. 四关自动测试与实测勘误（2026-09-02 晚）
+
+### 13.1 四关自动测试体系（已上车）
+
+主机安全壳 `~/scs_autotest.sh` + 容器驱动 `scs_autotest_driver.py`（本地副本
+`_scs_autotest/`），默认死脚本：
+- 四关：`straight`(1.5m 直线) / `turn`(L 形 0.8+右转 0.8) / `retarget`(正前 1.0m →
+  右侧 0.9m 动态换目标) / `estop`(2.5m 行进急停 + 3s 漂移 ≤0.05m 检测)
+- 安全设计：`--run` 前 5s 倒计时、电池 <7500mV 拒跑、follower 自动拉起；
+  驱动被杀后 follower 2s path_timeout 自动零速（实测有效）
+- 运行：`bash ~/scs_autotest.sh --run full`（单关 `--run straight` 等）
+
+### 13.2 实测勘误（重要）
+
+- **低压电机保护 ~7300mV 已切力矩**：第 2 关在 7315mV 时车完全静止、60s
+  超时 FAIL（不是算法/话题问题）。`BAT_MIN_MV` 已提到 **7500**；开跑前请
+  充到 **≥7700**（大电流下电压还会骤降）。
+- **厂商 odom 是"假里程计"**：odom_publisher 的轮式里程计 = cmd_vel 数值积分
+  （`delta = linear*dt*cos(yaw)`），不读编码器。**电机没转 odom 照样涨**——
+  "里程计到点"不能证明车真走了，判关必须结合物理位移/录像。
+- **follower 自拉起正确姿势**（scs_autotest.sh 已改）：
+  `docker exec -u ubuntu -w /home/ubuntu MentorPi /bin/bash -lc 'source
+  /opt/ros/humble/setup.bash && source /home/ubuntu/ros2_ws/install/setup.bash
+  && export FASTDDS_BUILTIN_TRANSPORTS=UDPv4 && nohup ros2 run
+  ugv_base_driver ugv_path_follower > /home/ubuntu/follower.log 2>&1 &'`
+  不要用 zsh；不要 `docker exec -d`（SSH 断开进程即消失）；日志别写 `/tmp`
+  （root 创建过同名文件 → ubuntu 重定向失败 → 命令静默不执行）。
+- **launch 文件 import 修复**：Humble 里不存在 `LaunchArgument`（launch.substitutions
+  和 launch.actions 都没有）；三个 launch 文件已改为标准
+  `from launch.substitutions import LaunchConfiguration` + `LaunchConfiguration("x")`
+  用法（车上 src 与 install 副本、仓库侧均已同步）。此前 `ros2 launch` 从未跑通，
+  只有 `ros2 run` 路径可用。
+
+### 13.3 电池充好后续跑流程
+
+1. `bash ~/scs_status.sh` 确认 battery ≥ 7500（建议 7700+）；
+2. 车头重新朝正东摆好 → 电脑连车（网线 .100 或 B616 .163）→
+   `bash ~/scs_start.sh`（docker restart 清零里程计 + 整栈 + relay + 体检）；
+3. `bash ~/scs_autotest.sh --run full` 或按关续跑；
+4. 每关录像，判定以物理位移为准（勿信 odom 数字）。
