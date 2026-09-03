@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Entry-point wrapper for ugv_odom_relay (see setup.py data_files note)."""
+import sys
+
+from ugv_base_driver.odom_relay_node import main
+
+if __name__ == "__main__":
+    sys.exit(main())

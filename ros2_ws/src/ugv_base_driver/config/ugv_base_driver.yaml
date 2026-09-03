@@ -1,0 +1,12 @@
+ugv_base_driver:
+  ros__parameters:
+    serial_port: /dev/ttyUSB0
+    baudrate: 115200
+    wheel_base: 0.4
+    wheel_radius: 0.075
+    max_linear_speed: 1.0
+    max_angular_speed: 1.0
+    cmd_vel_topic: /cmd_vel
+    watchdog_timeout: 0.5
+    watchdog_period: 0.1
+    protocol: text

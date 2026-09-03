@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ugv_base_driver</name>
+  <version>0.1.0</version>
+  <description>
+    Differential-drive UGV base driver: subscribes to /cmd_vel, converts
+    body twist to per-wheel speeds via differential kinematics, and writes
+    the motion command to a serial port. Includes a watchdog that commands
+    zero speed when /cmd_vel stops arriving. Serial protocol is
+    parameterized so the vendor-specific framing can be adapted without
+    touching kinematics or the ROS layer.
+  </description>
+
+  <maintainer email="swarm@example.com">Swarm Control System Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+
+  <exec_depend>python3-serial</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
