@@ -394,8 +394,9 @@ bash ~/scs_status.sh    # 随时体检：电池mV / /odom / /ugv_pose 频率 / �
 
 ### 13.1 四关自动测试体系（已上车）
 
-主机安全壳 `~/scs_autotest.sh` + 容器驱动 `scs_autotest_driver.py`（本地副本
-`_scs_autotest/`），默认死脚本：
+主机安全壳 `~/scs_autotest.sh` + 容器驱动 `scs_autotest_driver.py`（仓库源
+`docs/operations/scs_autotest/`；部署：scp 两文件到车 → 壳放 `/home/pi/`、
+驱动 `docker cp` 进容器 `/home/ubuntu/`），四关定义：
 - 四关：`straight`(1.5m 直线) / `turn`(L 形 0.8+右转 0.8) / `retarget`(正前 1.0m →
   右侧 0.9m 动态换目标) / `estop`(2.5m 行进急停 + 3s 漂移 ≤0.05m 检测)
 - 安全设计：`--run` 前 5s 倒计时、电池 <7500mV 拒跑、follower 自动拉起；
